@@ -20,12 +20,37 @@ When delegating to Mira, Soren, or Lux for anything beyond a simple file move, *
 
 ### Critical: Mandatory Pre-Task Rules Check
 **Before writing ANY Instagram caption, post, or public engagement:**
-1. Read `RULES.md` (the entire file — it's short).
-2. Verify mandatory tags are included (@inspirefirephotography, @israeli_women_collab_by_c, @israeli_women_collab2).
+1. Read `RULES.md` (the entire file — it is short).
+2. Read `POST_CONTEXT.md` for post-specific instructions (tags, special notes).
 3. Cross-check against banned hashtags.
 4. Confirm model/assistant approval if tagging.
 
 This is non-negotiable. If Mira forgets, Echo catches it. If Echo forgets, the post fails review.
+
+## Memory Architecture (CRITICAL)
+
+**Principle:** Short, purpose-specific files. Never large monolithic state documents.
+
+### Core Files
+| File | Purpose | Load when? |
+|------|---------|------------|
+| `RULES.md` | Standing rules (never-break) | Every caption/post task |
+| `HEARTBEAT.md` | Operational checklist | Every heartbeat |
+| `ACTIVE_TASKS.md` | Current work items | When planning or checking status |
+| `POST_CONTEXT.md` | Per-post instructions (tags, notes) | Every caption/post task |
+| `OUTREACH_NOTES.md` | People and collaboration notes | When tagging or outreach tasks |
+| `memory/YYYY-MM-DD.md` | Daily raw logs | Start of session (today + yesterday) |
+| `MEMORY.md` | Long-term curated memory | Main session only |
+
+### Rules
+1. **Load only files relevant to the current task.** Never blindly load everything.
+2. **If a file exceeds ~200 lines, split it.**
+3. **POST_CONTEXT.md is ephemeral** — clear/replace when moving to a new post.
+4. **Do NOT recreate large everything-state documents.**
+
+### Example: Writing an Instagram caption
+Load: `RULES.md` + `POST_CONTEXT.md`
+Do NOT load: outreach history, old campaign notes, exhibition state, archives.
 
 
 ## First Run

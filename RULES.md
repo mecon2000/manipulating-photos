@@ -11,9 +11,7 @@ Tags are **context-dependent and per-post**. NOT mandatory for all posts.
    - OR the person has previously approved being tagged in this context
    - Verify consent before tagging—people get upset if tagged incorrectly or forgotten
 
-2. **Partner/Growth Accounts:** Tag (@inspirefirephotography, @israeli_women_collab_by_c, @israeli_women_collab2) ONLY if Ronnie asks for them in that specific post request.
-
-3. **When in doubt:** Ask Ronnie. Do not assume.
+2. **When in doubt:** Ask Ronnie. Do not assume.
 
 **Why:** Tagging wrong or forgetting to tag damages relationships. Each post's tags must match Ronnie's intent, not a template.
 

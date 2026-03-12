@@ -2,28 +2,46 @@
 
 These rules are **non-negotiable** and must be checked before every Instagram post, caption, or engagement task.
 
-## Instagram Posts — Mandatory Tags
-Every feed post MUST include these three accounts in the caption or first comment:
-- `@inspirefirephotography`
-- `@israeli_women_collab_by_c`
-- `@israeli_women_collab2`
+## Instagram Posts — Tagging Protocol
+Tags are **context-dependent and per-post**. NOT mandatory for all posts.
 
-**Why:** These are Ronnie's core growth partners. Tagging them increases reach and signals community alignment.
+### Rules:
+1. **Models/Assistants:** Tag ONLY if:
+   - Ronnie explicitly requests it in that specific post
+   - OR the person has previously approved being tagged in this context
+   - Verify consent before tagging—people get upset if tagged incorrectly or forgotten
+
+2. **Partner/Growth Accounts:** Tag (@inspirefirephotography, @israeli_women_collab_by_c, @israeli_women_collab2) ONLY if Ronnie asks for them in that specific post request.
+
+3. **When in doubt:** Ask Ronnie. Do not assume.
+
+**Why:** Tagging wrong or forgetting to tag damages relationships. Each post's tags must match Ronnie's intent, not a template.
 
 ---
 
-## Instagram Posts — Banned Hashtags
-NEVER use these hashtags, regardless of context:
-- `#nude`
-- `#naked`
-- `#nudeart`
-- `#artisticnude`
-- `#nsfw`
-- `#sexy`
-- `#bdsm`
-- `#fetish`
+## Instagram Posts — Hashtag Safety
+This is critical for avoiding shadow-banning.
 
-**Why:** Instagram's algorithm suppresses reach on posts with these tags. Fine-art framing keeps us safe.
+### Blacklist (NEVER use):
+- `#nude` `#naked` `#nudeart` `#artisticnude` `#nsfw` `#sexy` `#bdsm` `#fetish`
+
+### Before using ANY hashtag:
+1. Check if it's on the **Blacklist** above → If yes, REJECT.
+2. If NOT on the blacklist → Check against these criteria:
+   - Is it suppressed by Instagram (suppress reach on sensitive content)?
+   - Is it frequently used by spam/NSFW accounts?
+   - Does it risk triggering the Adult Content filter?
+3. **When uncertain:** Ask Ronnie or skip that hashtag entirely.
+
+### Safe Hashtag Categories (Use freely):
+- `#photography` `#portraitphotography` `#fineartphotography`
+- `#lightandshadow` `#moodyphotography` `#silhouette`
+- `#israel` `#telaviv` `#ישראל`
+- `#artphotography` `#contemporaryart` `#artofvisuals`
+- `#portraitmode` `#naturallight` `#elegance`
+- Geographic & artistic tags (verified safe)
+
+**Why:** Instagram's AI scans every hashtag. One suppressed tag on a post tanks reach for the entire post. Better to be conservative.
 
 ---
 

@@ -124,7 +124,7 @@ def run_tensor_inpaint(image_pil, mask_pil, output_dir, dilation_px=25, margin_p
     mask_res_id, mw, mh = upload_to_tensor(mask_crop, output_dir)
     
     # 4. Job Payload (Using Juggernaut for realistic inpainting)
-    MODEL_INPAINT = "sdxl_1.0_inpainting"
+    MODEL_INPAINT = "677354709792734564"
     payload = {
         "requestId": str(uuid.uuid4()),
         "stages": [
@@ -273,8 +273,6 @@ def main():
         log_to_file(output_dir, "Inpainting failed, falling back to original")
         bg_clean = img_orig.copy()
     bg_clean.save(os.path.join(output_dir, "2_bg_clean_tensor.jpg"))
-    print("STOPPING AFTER STEP 2 AS REQUESTED")
-    return
     
     log_to_file(output_dir, f"--- Step 4: Stylizing Background (Strength {args.bg_strength}) ---")
     bg_prompt = f"An abstract fine art {args.style} background, {prompt_add}, moody, cinematic, painterly textures"

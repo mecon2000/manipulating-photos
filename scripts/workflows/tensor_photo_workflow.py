@@ -11,8 +11,7 @@ import re
 from PIL import Image, ImageFilter, ImageOps, ImageStat, ImageDraw
 from io import BytesIO
 import numpy as np
-from datetime import datetime
-import pytz
+from datetime import datetime, timedelta
 
 # Configure line buffering for stdout
 sys.stdout.reconfigure(line_buffering=True)
@@ -25,13 +24,11 @@ TENSOR_BASE_URL = "https://ap-east-1.tensorart.cloud/v1"
 # Model IDs
 MODEL_DEFAULT = "965126062386242266" # Z-Image-Uncensored-fp16-v3
 
-def get_israel_time():
-    tz = pytz.timezone('Asia/Jerusalem')
-    return datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-
 def log_to_file(output_dir, message):
     log_path = os.path.join(output_dir, "workflow.log")
-    formatted_message = f"[{get_israel_time()}] {message}"
+    # Israel Time (UTC+3 for April)
+    israel_time = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    formatted_message = f"[{israel_time}] {message}"
     print(formatted_message)
     with open(log_path, "a") as f:
         f.write(formatted_message + "\n")
@@ -53,94 +50,6 @@ def run_fal_rembg(image_path, output_dir):
     else:
         log_to_file(output_dir, f"Fal.ai Error {response.status_code}: {response.text}")
         return None
-
-
-def run_tensor_inpaint(
-    image_pil,
-    mask_pil,
-    output_dir,
-    dilation_px=9,
-    margin_ratio=0.1,
-    max_retries=3,
-    timeout=60,
-):
-    def log(msg):
-        log_to_file(output_dir, msg)
-
-    # 1. HARDEN MASK
-    mask = mask_pil.convert("L")
-    mask = mask.point(lambda p: 255 if p > 127 else 0)
-    k = dilation_px if dilation_px % 2 != 0 else dilation_px + 1
-    mask = mask.filter(ImageFilter.MaxFilter(k))
-    mask = mask.point(lambda p: 255 if p > 127 else 0)
-    mask.save(os.path.join(output_dir, "mask_final.png"))
-
-    # 2. ROI
-    mask_np = np.array(mask)
-    ys, xs = np.where(mask_np > 0)
-    if len(xs) == 0:
-        return image_pil
-
-    x_min, x_max = xs.min(), xs.max()
-    y_min, y_max = ys.min(), ys.max()
-    margin = int(max(image_pil.size) * margin_ratio)
-
-    x_min = max(0, x_min - margin)
-    y_min = max(0, y_min - margin)
-    x_max = min(image_pil.width, x_max + margin)
-    y_max = min(image_pil.height, y_max + margin)
-
-    image_crop = image_pil.crop((x_min, y_min, x_max, y_max))
-    mask_crop = mask.crop((x_min, y_min, x_max, y_max))
-
-    # 3. UPLOAD RESOURCES (Proper way for Tensor Cloud API)
-    log("Uploading ROI and Mask to Tensor Art...")
-    img_res_id, cw, ch = upload_to_tensor(image_crop, output_dir)
-    mask_res_id, mw, mh = upload_to_tensor(mask_crop, output_dir)
-
-    # 4. REQUEST
-    MODEL_INPAINT = "677354709792734564" # https://tensor.art/models/845475299014578498
-    payload = {
-        "requestId": str(uuid.uuid4()),
-        "stages": [
-            {
-                "type": "INPUT_INITIALIZE",
-                "inputInitialize": { "image_resource_id": img_res_id, "count": 1, "seed": 42 }
-            },
-            {
-                "type": "DIFFUSION",
-                "diffusion": {
-                    "width": cw, "height": ch,
-                    "prompts": [{
-                        "text": "empty background, no person, natural scene, preserve original environment, consistent perspective, realistic textures",
-                        "weight": 1
-                    }],
-                    "negative_prompts": [{
-                        "text": "person, human, body, skin, face, clothes, blur, artifacts",
-                        "weight": 1
-                    }],
-                    "sdModel": MODEL_INPAINT,
-                    "steps": 28, "cfgScale": 6.5, "denoisingStrength": 0.75, "sampler": "Euler a",
-                    "mask_resource_id": mask_res_id
-                }
-            }
-        ]
-    }
-
-    # 5. EXECUTION
-    for attempt in range(max_retries):
-        log(f"--- Inpaint Attempt {attempt+1} ---")
-        img_url = run_tensor_job(payload, output_dir)
-        if img_url:
-            result_crop = Image.open(requests.get(img_url, stream=True, timeout=timeout).raw).convert("RGB")
-            # Ensure resizing back to ROI size in case Tensor adjusted it
-            result_crop = result_crop.resize((x_max - x_min, y_max - y_min), Image.LANCZOS)
-            final = image_pil.copy()
-            final.paste(result_crop, (x_min, y_min))
-            return final
-
-    return None
-
 
 def run_tensor_job(payload, output_dir):
     url = f"{TENSOR_BASE_URL}/jobs"
@@ -179,12 +88,74 @@ def upload_to_tensor(image_pil, output_dir):
         image_pil = image_pil.resize((new_w, new_h), Image.LANCZOS)
     
     buffer = BytesIO()
-    image_pil.save(buffer, format='PNG')
+    image_pil.save(buffer, format='PNG') # Use PNG for internal quality
     headers = {"Authorization": f"Bearer {TENSOR_API_KEY}", "Content-Type": "application/json"}
     
     res = requests.post(f"{TENSOR_BASE_URL}/resource/image", json={}, headers=headers).json()
     requests.put(res["putUrl"], data=buffer.getvalue(), headers=res["headers"])
     return res["resourceId"], new_w, new_h
+
+def run_tensor_inpaint(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
+    log_to_file(output_dir, f"--- Step 2: Cleaning Background using Tensor (Inpaint, Dilation: {dilation_px}px) ---")
+    
+    # 1. Harden and Dilate Mask
+    mask = mask_pil.convert("L")
+    mask = mask.point(lambda p: 255 if p > 127 else 0)
+    k = dilation_px if dilation_px % 2 != 0 else dilation_px + 1
+    mask = mask.filter(ImageFilter.MaxFilter(k))
+    mask = mask.point(lambda p: 255 if p > 127 else 0)
+    mask.save(os.path.join(output_dir, "1b_dilated_mask_final.png"))
+
+    # 2. Compute ROI
+    mask_np = np.array(mask)
+    ys, xs = np.where(mask_np > 0)
+    if len(xs) == 0 or len(ys) == 0:
+        log_to_file(output_dir, "Empty mask, skipping inpaint")
+        return image_pil
+
+    x_min, x_max = max(0, xs.min() - margin_px), min(image_pil.width, xs.max() + margin_px)
+    y_min, y_max = max(0, ys.min() - margin_px), min(image_pil.height, ys.max() + margin_px)
+    
+    image_crop = image_pil.crop((x_min, y_min, x_max, y_max))
+    mask_crop = mask.crop((x_min, y_min, x_max, y_max))
+    
+    # 3. Upload to Tensor
+    img_res_id, cw, ch = upload_to_tensor(image_crop, output_dir)
+    mask_res_id, mw, mh = upload_to_tensor(mask_crop, output_dir)
+    
+    # 4. Job Payload (Using Juggernaut for realistic inpainting)
+    MODEL_INPAINT = MODEL_DEFAULT # Juggernaut XL
+    payload = {
+        "requestId": str(uuid.uuid4()),
+        "stages": [
+            {
+                "type": "INPUT_INITIALIZE", 
+                "inputInitialize": { "image_resource_id": img_res_id, "count": 1, "seed": 42 }
+            },
+            {
+                "type": "DIFFUSION", 
+                "diffusion": {
+                    "width": cw, "height": ch, 
+                    "prompts": [{ "text": "clean background, remove person completely, reconstruct missing area naturally, sharp edges, realistic scene, no blur", "weight": 1.0 }],
+                    "negative_prompts": [{ "text": "person, human, body, blur, artifacts, distortion", "weight": 1.0 }],
+                    "sdModel": MODEL_INPAINT, "steps": 30, "cfgScale": 7.5, 
+                    "denoisingStrength": 1.0, "sampler": "Euler a",
+                    "mask_resource_id": mask_res_id
+                }
+            }
+        ]
+    }
+    
+    img_url = run_tensor_job(payload, output_dir)
+    if img_url:
+        result_crop = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
+        result_crop = result_crop.resize((x_max - x_min, y_max - y_min), Image.LANCZOS)
+        final = image_pil.copy()
+        final.paste(result_crop, (x_min, y_min))
+        return final
+    
+    log_to_file(output_dir, "Tensor Inpaint Failed")
+    return None
 
 def tensor_stylize(image_pil, prompt, strength, cfg_scale, output_dir):
     resource_id, w, h = upload_to_tensor(image_pil, output_dir)
@@ -279,15 +250,14 @@ def main():
         else:
             prompt_add = "fine art, detailed, artistic"
 
-    # Israel Time
-    tz = pytz.timezone('Asia/Jerusalem')
-    israel_dt = datetime.now(tz)
+    # Israel Time (UTC+3 for April)
+    israel_dt = datetime.utcnow() + timedelta(hours=3)
     timestamp = israel_dt.strftime("%Y%m%d_%H%M%S")
-    output_dir = f"outputs/workflow_pro_v15_{photo_name}_{timestamp}"
+    output_dir = f"outputs/workflow_pro_v14_{photo_name}_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     
-    shutil.copy(__file__, os.path.join(output_dir, f"tensor_photo_workflow_v15_{timestamp}.py"))
-    log_to_file(output_dir, f"Starting Workflow Pro v15 (Model: {model_name} | Style: {args.style})")
+    shutil.copy(__file__, os.path.join(output_dir, f"tensor_photo_workflow_v14_{timestamp}.py"))
+    log_to_file(output_dir, f"Starting Workflow Pro v14 (Model: {model_name} | Style: {args.style})")
     log_to_file(output_dir, f"BG Strength: {args.bg_strength} | Dilation: {args.dilation}px")
 
     img_orig = Image.open(args.source).convert("RGB")
@@ -297,7 +267,7 @@ def main():
     if not mask: return
     mask.save(os.path.join(output_dir, "1_mask.png"))
     
-    # NEW: Ronnie's inpaint logic with Tensor Art inpaint model
+    # Step 2: Generative Inpainting with Tensor
     bg_clean = run_tensor_inpaint(img_orig, mask, output_dir, args.dilation)
     if not bg_clean:
         log_to_file(output_dir, "Inpainting failed, falling back to original")

@@ -95,67 +95,57 @@ def upload_to_tensor(image_pil, output_dir):
     requests.put(res["putUrl"], data=buffer.getvalue(), headers=res["headers"])
     return res["resourceId"], new_w, new_h
 
-def run_tensor_inpaint(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
-    log_to_file(output_dir, f"--- Step 2: Cleaning Background using Tensor (Inpaint, Dilation: {dilation_px}px) ---")
+
+def run_fal_lama(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
+    log_to_file(output_dir, "--- Step 2: Cleaning Background using Fal.ai (LaMa) ---")
     
     # 1. Harden and Dilate Mask
-    mask = mask_pil.convert("L")
-    mask = mask.point(lambda p: 255 if p > 127 else 0)
+    mask = mask_pil.convert("L").point(lambda p: 255 if p > 127 else 0)
     k = dilation_px if dilation_px % 2 != 0 else dilation_px + 1
-    mask = mask.filter(ImageFilter.MaxFilter(k))
-    mask = mask.point(lambda p: 255 if p > 127 else 0)
+    mask = mask.filter(ImageFilter.MaxFilter(k)).point(lambda p: 255 if p > 127 else 0)
     mask.save(os.path.join(output_dir, "1b_dilated_mask_final.png"))
 
-    # 2. Compute ROI
+    # 2. ROI Logic
     mask_np = np.array(mask)
     ys, xs = np.where(mask_np > 0)
-    if len(xs) == 0 or len(ys) == 0:
-        log_to_file(output_dir, "Empty mask, skipping inpaint")
-        return image_pil
-
+    if len(xs) == 0: return image_pil
+    
     x_min, x_max = max(0, xs.min() - margin_px), min(image_pil.width, xs.max() + margin_px)
     y_min, y_max = max(0, ys.min() - margin_px), min(image_pil.height, ys.max() + margin_px)
     
     image_crop = image_pil.crop((x_min, y_min, x_max, y_max))
     mask_crop = mask.crop((x_min, y_min, x_max, y_max))
     
-    # 3. Upload to Tensor
-    img_res_id, cw, ch = upload_to_tensor(image_crop, output_dir)
-    mask_res_id, mw, mh = upload_to_tensor(mask_crop, output_dir)
+    # 3. Call Fal.ai LaMa
+    url = "https://fal.run/fal-ai/lama"
+    headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
     
-    # 4. Job Payload (Using Juggernaut for realistic inpainting)
-    MODEL_INPAINT = "677354709792734564"
+    # Upload ROI and Mask as Base64 for Fal
+    def to_b64(pil_img):
+        buf = BytesIO()
+        pil_img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode('utf-8')
+
     payload = {
-        "requestId": str(uuid.uuid4()),
-        "stages": [
-            {
-                "type": "INPUT_INITIALIZE", 
-                "inputInitialize": { "image_resource_id": img_res_id, "count": 1, "seed": 42 }
-            },
-            {
-                "type": "DIFFUSION", 
-                "diffusion": {
-                    "width": cw, "height": ch, 
-                    "prompts": [{ "text": "clean background, remove person completely, reconstruct missing area naturally, sharp edges, realistic scene, no blur", "weight": 1.0 }],
-                    "negative_prompts": [{ "text": "person, human, body, blur, artifacts, distortion", "weight": 1.0 }],
-                    "sdModel": MODEL_INPAINT, "steps": 30, "cfgScale": 7.5, 
-                    "denoisingStrength": 1.0, "sampler": "Euler a",
-                    "mask_resource_id": mask_res_id
-                }
-            }
-        ]
+        "image_url": f"data:image/png;base64,{to_b64(image_crop)}",
+        "mask_url": f"data:image/png;base64,{to_b64(mask_crop)}"
     }
     
-    img_url = run_tensor_job(payload, output_dir)
-    if img_url:
-        result_crop = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        res_url = response.json()["image"]["url"]
+        result_crop = Image.open(requests.get(res_url, stream=True).raw).convert("RGB")
         result_crop = result_crop.resize((x_max - x_min, y_max - y_min), Image.LANCZOS)
+        
+        # 4. FEATHERED BLENDING
+        mask_blur = mask_crop.filter(ImageFilter.GaussianBlur(radius=5))
         final = image_pil.copy()
-        final.paste(result_crop, (x_min, y_min))
+        final.paste(result_crop, (x_min, y_min), mask=mask_blur)
         return final
-    
-    log_to_file(output_dir, "Tensor Inpaint Failed")
-    return None
+    else:
+        log_to_file(output_dir, f"LaMa Error: {response.text}")
+        return None
+
 
 def tensor_stylize(image_pil, prompt, strength, cfg_scale, output_dir):
     resource_id, w, h = upload_to_tensor(image_pil, output_dir)
@@ -268,11 +258,13 @@ def main():
     mask.save(os.path.join(output_dir, "1_mask.png"))
     
     # Step 2: Generative Inpainting with Tensor
-    bg_clean = run_tensor_inpaint(img_orig, mask, output_dir, args.dilation)
+    bg_clean = run_fal_lama(img_orig, mask, output_dir, args.dilation)
     if not bg_clean:
         log_to_file(output_dir, "Inpainting failed, falling back to original")
         bg_clean = img_orig.copy()
     bg_clean.save(os.path.join(output_dir, "2_bg_clean_tensor.jpg"))
+    print("STOPPING AFTER STEP 2 FOR TEST")
+    return
     
     log_to_file(output_dir, f"--- Step 4: Stylizing Background (Strength {args.bg_strength}) ---")
     bg_prompt = f"An abstract fine art {args.style} background, {prompt_add}, moody, cinematic, painterly textures"

@@ -124,7 +124,7 @@ def run_tensor_inpaint(image_pil, mask_pil, output_dir, dilation_px=25, margin_p
     mask_res_id, mw, mh = upload_to_tensor(mask_crop, output_dir)
     
     # 4. Job Payload (Using Juggernaut for realistic inpainting)
-    MODEL_INPAINT = "sdxl-inpainting"
+    MODEL_INPAINT = "sdxl_1.0_inpainting"
     payload = {
         "requestId": str(uuid.uuid4()),
         "stages": [

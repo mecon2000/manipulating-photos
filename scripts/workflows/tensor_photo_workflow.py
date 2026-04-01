@@ -54,6 +54,7 @@ def run_fal_rembg(image_path, output_dir):
         log_to_file(output_dir, f"Fal.ai Error {response.status_code}: {response.text}")
         return None
 
+
 def run_tensor_inpaint(
     image_pil,
     mask_pil,
@@ -63,17 +64,8 @@ def run_tensor_inpaint(
     max_retries=3,
     timeout=60,
 ):
-    """
-    Generic background reconstruction (remove person, fill naturally).
-    As provided by Ronnie.
-    """
     def log(msg):
         log_to_file(output_dir, msg)
-
-    API_KEY = os.environ.get("TENSOR_API_KEY")
-    if not API_KEY:
-        log("Missing TENSOR_API_KEY")
-        return None
 
     # 1. HARDEN MASK
     mask = mask_pil.convert("L")
@@ -101,40 +93,24 @@ def run_tensor_inpaint(
     image_crop = image_pil.crop((x_min, y_min, x_max, y_max))
     mask_crop = mask.crop((x_min, y_min, x_max, y_max))
 
-    # 3. ENCODE PNG
-    def to_b64(img):
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-    img_b64 = to_b64(image_crop)
-    mask_b64 = to_b64(mask_crop)
+    # 3. UPLOAD RESOURCES (Proper way for Tensor Cloud API)
+    log("Uploading ROI and Mask to Tensor Art...")
+    img_res_id, cw, ch = upload_to_tensor(image_crop, output_dir)
+    mask_res_id, mw, mh = upload_to_tensor(mask_crop, output_dir)
 
     # 4. REQUEST
-    url = "https://api.tensor.art/v1/jobs"
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    # replace with real Tensor inpaint model
     MODEL_INPAINT = "845475299014578498" # https://tensor.art/models/845475299014578498
-
     payload = {
         "requestId": str(uuid.uuid4()),
         "stages": [
             {
                 "type": "INPUT_INITIALIZE",
-                "inputInitialize": {
-                    "count": 1,
-                    "seed": 42
-                }
+                "inputInitialize": { "image_resource_id": img_res_id, "count": 1, "seed": 42 }
             },
             {
                 "type": "DIFFUSION",
                 "diffusion": {
-                    "width": image_crop.width,
-                    "height": image_crop.height,
+                    "width": cw, "height": ch,
                     "prompts": [{
                         "text": "empty background, no person, natural scene, preserve original environment, consistent perspective, realistic textures",
                         "weight": 1
@@ -144,12 +120,8 @@ def run_tensor_inpaint(
                         "weight": 1
                     }],
                     "sdModel": MODEL_INPAINT,
-                    "steps": 28,
-                    "cfgScale": 6.5,
-                    "denoisingStrength": 0.75,
-                    "sampler": "Euler a",
-                    "image": f"data:image/png;base64,{img_b64}",
-                    "mask": f"data:image/png;base64,{mask_b64}"
+                    "steps": 28, "cfgScale": 6.5, "denoisingStrength": 0.75, "sampler": "Euler a",
+                    "mask_resource_id": mask_res_id
                 }
             }
         ]
@@ -157,44 +129,18 @@ def run_tensor_inpaint(
 
     # 5. EXECUTION
     for attempt in range(max_retries):
-        try:
-            log(f"--- Inpaint Attempt {attempt+1} ---")
-            res = requests.post(url, headers=headers, json=payload, timeout=timeout)
-            if res.status_code != 200:
-                log(f"Fail {res.status_code}: {res.text}")
-                continue
-
-            data = res.json()
-            job_id = data.get("job", {}).get("id")
-            if not job_id:
-                continue
-
-            # poll result
-            for _ in range(60):
-                time.sleep(5)
-                r = requests.get(
-                    f"https://api.tensor.art/v1/jobs/{job_id}",
-                    headers=headers,
-                    timeout=timeout
-                )
-                jd = r.json()
-                status = jd.get("job", {}).get("status")
-                if status == "SUCCESS":
-                    img_url = jd["job"]["successInfo"]["images"][0]["url"]
-                    result_crop = Image.open(
-                        requests.get(img_url, stream=True, timeout=timeout).raw
-                    ).convert("RGB")
-                    
-                    final = image_pil.copy()
-                    final.paste(result_crop, (x_min, y_min))
-                    return final
-                elif status == "FAILED":
-                    log(f"Job failed: {jd}")
-                    break
-        except Exception as e:
-            log(f"Error during inpaint: {str(e)}")
+        log(f"--- Inpaint Attempt {attempt+1} ---")
+        img_url = run_tensor_job(payload, output_dir)
+        if img_url:
+            result_crop = Image.open(requests.get(img_url, stream=True, timeout=timeout).raw).convert("RGB")
+            # Ensure resizing back to ROI size in case Tensor adjusted it
+            result_crop = result_crop.resize((x_max - x_min, y_max - y_min), Image.LANCZOS)
+            final = image_pil.copy()
+            final.paste(result_crop, (x_min, y_min))
+            return final
 
     return None
+
 
 def run_tensor_job(payload, output_dir):
     url = f"{TENSOR_BASE_URL}/jobs"

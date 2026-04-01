@@ -6,11 +6,12 @@ import base64
 import uuid
 import time
 import shutil
+import subprocess
+import re
 from PIL import Image, ImageFilter, ImageOps, ImageStat, ImageDraw
-import numpy as np
 from io import BytesIO
 
-# Configure line buffering for stdout to ensure logs are visible in real-time
+# Configure line buffering for stdout
 sys.stdout.reconfigure(line_buffering=True)
 
 # API Keys
@@ -37,12 +38,10 @@ def run_fal_rembg(image_path, output_dir):
         img_b64 = base64.b64encode(f.read()).decode('utf-8')
     payload = {"image_url": f"data:image/jpeg;base64,{img_b64}"}
     
-    log_to_file(output_dir, f"Calling Fal.ai rembg for {image_path}")
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
         res = response.json()
         mask_url = res["image"]["url"]
-        log_to_file(output_dir, f"Mask URL: {mask_url}")
         mask_img = Image.open(requests.get(mask_url, stream=True).raw).split()[3]
         return mask_img
     else:
@@ -62,34 +61,19 @@ def run_fal_faceswap(source_path, target_path, output_dir):
         "swap_image_url": f"data:image/jpeg;base64,{source_b64}"
     }
     
-    log_to_file(output_dir, "Calling Fal.ai Face Swap")
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 200:
         res = response.json()
         img_url = res.get("image", {}).get("url")
         if img_url:
-            log_to_file(output_dir, f"Face Swap Success: {img_url}")
             return Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
     log_to_file(output_dir, f"Face Swap Failed: {response.text}")
     return None
-
-def pinching_fill(img, mask, output_dir):
-    log_to_file(output_dir, "--- BG Prep: Applying 'pinching' fill to subject hole ---")
-    avg_color = ImageStat.Stat(img).median
-    bg_only = img.copy()
-    fill = Image.new("RGB", img.size, tuple(avg_color))
-    bg_only.paste(fill, mask=mask)
-    for r in [4, 8, 16, 32, 64]:
-        smeared = bg_only.filter(ImageFilter.BoxBlur(radius=r))
-        bg_only.paste(smeared, mask=mask)
-    bg_only.paste(img, mask=ImageOps.invert(mask))
-    return bg_only
 
 def run_tensor_job(payload, output_dir):
     url = f"{TENSOR_BASE_URL}/jobs"
     headers = {"Authorization": f"Bearer {TENSOR_API_KEY}", "Content-Type": "application/json"}
     
-    log_to_file(output_dir, f"Creating Tensor Art Job with payload: {json.dumps(payload, indent=2)}")
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code != 200:
         log_to_file(output_dir, f"Tensor Art Job Creation Error {response.status_code}: {response.text}")
@@ -97,18 +81,13 @@ def run_tensor_job(payload, output_dir):
     
     job_data = response.json()
     job_id = job_data.get("job", {}).get("id")
-    log_to_file(output_dir, f"Job Created. ID: {job_id}")
-    
     if not job_id: return None
-    for i in range(60):
+    for _ in range(60):
         time.sleep(5)
         res = requests.get(f"{TENSOR_BASE_URL}/jobs/{job_id}", headers=headers).json()
         status = res.get("job", {}).get("status")
-        log_to_file(output_dir, f"Polling Job {job_id}: {status}")
         if status == "SUCCESS":
-            img_url = res["job"]["successInfo"]["images"][0]["url"]
-            log_to_file(output_dir, f"Job Success: {img_url}")
-            return img_url
+            return res["job"]["successInfo"]["images"][0]["url"]
         elif status == "FAILED":
             log_to_file(output_dir, f"Job Failed: {json.dumps(res, indent=2)}")
             return None
@@ -116,6 +95,13 @@ def run_tensor_job(payload, output_dir):
 
 def upload_to_tensor(image_pil, output_dir):
     w, h = image_pil.size
+    MAX_PIXELS = 2073600
+    if w * h > MAX_PIXELS:
+        scale = (MAX_PIXELS / (w * h)) ** 0.5
+        new_w, new_h = int(w * scale), int(h * scale)
+        image_pil = image_pil.resize((new_w, new_h), Image.LANCZOS)
+        w, h = image_pil.size
+    
     new_w, new_h = (w // 8) * 8, (h // 8) * 8
     if (new_w, new_h) != (w, h):
         image_pil = image_pil.resize((new_w, new_h), Image.LANCZOS)
@@ -124,39 +110,26 @@ def upload_to_tensor(image_pil, output_dir):
     image_pil.save(buffer, format='JPEG', quality=95)
     headers = {"Authorization": f"Bearer {TENSOR_API_KEY}", "Content-Type": "application/json"}
     
-    log_to_file(output_dir, "Uploading resource to Tensor Art...")
     res = requests.post(f"{TENSOR_BASE_URL}/resource/image", json={}, headers=headers).json()
-    put_url = res["putUrl"]
-    resource_id = res["resourceId"]
-    
-    requests.put(put_url, data=buffer.getvalue(), headers=res["headers"])
-    log_to_file(output_dir, f"Resource Uploaded. ID: {resource_id}")
-    return resource_id, new_w, new_h
+    requests.put(res["putUrl"], data=buffer.getvalue(), headers=res["headers"])
+    return res["resourceId"], new_w, new_h
 
-def tensor_stylize(image_pil, prompt, strength, output_dir):
+def tensor_stylize(image_pil, prompt, strength, cfg_scale, output_dir):
     resource_id, w, h = upload_to_tensor(image_pil, output_dir)
     payload = {
         "requestId": str(uuid.uuid4()),
         "stages": [
             {
                 "type": "INPUT_INITIALIZE", 
-                "inputInitialize": { 
-                    "image_resource_id": resource_id, 
-                    "count": 1,
-                    "seed": -1
-                }
+                "inputInitialize": { "image_resource_id": resource_id, "count": 1, "seed": 42 }
             },
             {
                 "type": "DIFFUSION", 
                 "diffusion": {
-                    "width": w, 
-                    "height": h, 
+                    "width": w, "height": h, 
                     "prompts": [{ "text": prompt, "weight": 1.0 }],
-                    "sdModel": MODEL_DEFAULT, 
-                    "steps": 30, 
-                    "cfgScale": 7, 
-                    "denoisingStrength": strength,
-                    "sampler": "Euler a"
+                    "sdModel": MODEL_DEFAULT, "steps": 30, "cfgScale": cfg_scale, 
+                    "denoisingStrength": strength, "sampler": "Euler a"
                 }
             }
         ]
@@ -165,68 +138,92 @@ def tensor_stylize(image_pil, prompt, strength, output_dir):
     if img_url: return Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
     return None
 
+def upload_to_gdrive(local_dir, model_name, photo_name, timestamp):
+    gdrive_path = f"gdrive:_photos from openclaw/daily_game/public/{model_name}_{photo_name}_{timestamp}"
+    try:
+        subprocess.run(["rclone", "copy", local_dir, gdrive_path], check=True)
+        res = subprocess.run(["rclone", "link", gdrive_path], capture_output=True, text=True)
+        return res.stdout.strip()
+    except Exception as e:
+        return f"GDrive Upload Failed: {e}"
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--style", default="Oil_Paint_Impasto")
-    parser.add_argument("--faceswap", action="store_true")
+    parser.add_argument("--style", default="Indigo Dye Aesthetic")
+    parser.add_argument("--prompt-add", default="deep blue monochromatic look, shibori fabric patterns, moody, cinematic")
+    parser.add_argument("--bg-strength", type=float, default=0.55) # Higher as requested
+    parser.add_argument("--cfg-scale", type=float, default=6.5)
+    parser.add_argument("--faceswap", action="store_true", default=True)
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    basename = os.path.basename(args.source)
+    match = re.search(r"(Original_|BLD_|Rong_IMG_)(.*?)_(.*)\.(jpg|png|jpeg|JPG)", basename, re.IGNORECASE)
+    if match:
+        model_name = match.group(2).replace(" ", "_")
+        photo_name = match.group(3).replace(" ", "_")
+    else:
+        model_name = "Unknown"
+        photo_name = os.path.splitext(basename)[0]
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    output_dir = f"outputs/workflow_pro_v9_{photo_name}_{timestamp}"
+    os.makedirs(output_dir, exist_ok=True)
     
-    # Initialize log file
-    open(os.path.join(args.output_dir, "workflow.log"), "w").close()
-    
-    # Copy script to output dir for auditability
-    shutil.copy(__file__, os.path.join(args.output_dir, "tensor_photo_workflow.py"))
-    
-    log_to_file(args.output_dir, f"Starting Workflow Pro v4 for {args.source}")
-    log_to_file(args.output_dir, f"Output directory: {args.output_dir}")
-    log_to_file(args.output_dir, f"Style: {args.style}")
+    shutil.copy(__file__, os.path.join(output_dir, "tensor_photo_workflow_v9.py"))
+    log_to_file(output_dir, f"Starting Workflow Pro v9 (Solid Hole for BG)")
+    log_to_file(output_dir, f"Source: {args.source} | Style: {args.style} | BG Strength: {args.bg_strength}")
 
     img_orig = Image.open(args.source).convert("RGB")
-    img_orig.save(os.path.join(args.output_dir, "0_original.jpg"))
+    img_orig.save(os.path.join(output_dir, "0_original.jpg"))
     
-    mask = run_fal_rembg(args.source, args.output_dir)
+    mask = run_fal_rembg(args.source, output_dir)
     if not mask: return
-    mask.save(os.path.join(args.output_dir, "1_mask.png"))
+    mask.save(os.path.join(output_dir, "1_mask.png"))
     
-    bg_prepped = pinching_fill(img_orig, mask, args.output_dir)
-    bg_prepped.save(os.path.join(args.output_dir, "2_bg_prep_pinched.jpg"))
+    # Step 2: Solid Hole Background
+    log_to_file(output_dir, "--- Step 2: Creating Background with Solid Hole (No Pinching) ---")
+    avg_color = ImageStat.Stat(img_orig).median
+    bg_holed = img_orig.copy()
+    fill = Image.new("RGB", img_orig.size, tuple(avg_color))
+    bg_holed.paste(fill, mask=mask)
+    bg_holed.save(os.path.join(output_dir, "2_bg_holed.jpg"))
     
-    log_to_file(args.output_dir, "--- Step 3: AI Filling Background (Strength 0.2) ---")
-    bg_ai_fill = tensor_stylize(bg_prepped, "simple background, clean art studio", 0.2, args.output_dir)
-    if not bg_ai_fill: return
-    bg_ai_fill.save(os.path.join(args.output_dir, "3_bg_ai_fill.jpg"))
+    # Step 3: Same as Step 2 (as requested "without fill")
+    log_to_file(output_dir, "--- Step 3: Skipping AI Fill ---")
+    bg_holed.save(os.path.join(output_dir, "3_bg_ai_fill.jpg"))
     
-    log_to_file(args.output_dir, "--- Step 4: Stylizing Background (Strength 0.8) ---")
-    bg_stylized = tensor_stylize(bg_ai_fill, f"An abstract fine art {args.style} background, moody, cinematic", 0.8, args.output_dir)
+    log_to_file(output_dir, f"--- Step 4: Stylizing Background (Strength {args.bg_strength}) ---")
+    bg_prompt = f"An abstract fine art {args.style} background, {args.prompt_add}, moody, cinematic, painterly textures"
+    bg_stylized = tensor_stylize(bg_holed, bg_prompt, args.bg_strength, args.cfg_scale, output_dir)
     if not bg_stylized: return
-    bg_stylized.save(os.path.join(args.output_dir, "4_bg_stylized.jpg"))
+    bg_stylized.save(os.path.join(output_dir, "4_bg_stylized.jpg"))
     
-    log_to_file(args.output_dir, "--- Step 6: Stylizing Model (Strength 0.4) ---")
+    log_to_file(output_dir, "--- Step 6: Stylizing Model (Strength 0.4) ---")
     model_only = Image.new("RGB", img_orig.size, (0,0,0))
     model_only.paste(img_orig, mask=mask)
-    model_only.save(os.path.join(args.output_dir, "5_model_only.jpg"))
+    model_only.save(os.path.join(output_dir, "5_model_only.jpg"))
     
-    model_stylized = tensor_stylize(model_only, f"A fine art portrait, {args.style} style, high detail, realistic skin texture", 0.4, args.output_dir)
+    model_prompt = f"A fine art portrait, {args.style} style, {args.prompt_add}, high detail, realistic skin texture"
+    model_stylized = tensor_stylize(model_only, model_prompt, 0.4, args.cfg_scale, output_dir)
     if not model_stylized: return
-    model_stylized.save(os.path.join(args.output_dir, "6_model_stylized.jpg"))
+    model_stylized.save(os.path.join(output_dir, "6_model_stylized.jpg"))
     
-    log_to_file(args.output_dir, "--- Step 8: Final Compositing ---")
-    soft_mask = mask.resize(model_stylized.size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(radius=2))
+    log_to_file(output_dir, "--- Step 8: Final Compositing ---")
+    soft_mask = mask.resize(model_stylized.size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(radius=3))
     final = Image.composite(model_stylized, bg_stylized, soft_mask)
-    final_path = os.path.join(args.output_dir, "7_final_result.jpg")
+    final_path = os.path.join(output_dir, "7_final_result.jpg")
     final.save(final_path, "JPEG", quality=95)
     
     if args.faceswap:
-        final_swapped = run_fal_faceswap(args.source, final_path, args.output_dir)
+        final_swapped = run_fal_faceswap(args.source, final_path, output_dir)
         if final_swapped:
-            final_swapped.save(os.path.join(args.output_dir, "8_final_swapped.jpg"), "JPEG", quality=95)
+            final_swapped.save(os.path.join(output_dir, "8_final_swapped.jpg"), "JPEG", quality=95)
     
-    log_to_file(args.output_dir, f"Workflow Complete! Results in {args.output_dir}")
+    log_to_file(output_dir, "--- Final Step: Uploading to GDrive ---")
+    public_link = upload_to_gdrive(output_dir, model_name, photo_name, timestamp)
+    log_to_file(output_dir, f"Workflow Complete! Public Link: {public_link}")
 
 if __name__ == '__main__':
     main()

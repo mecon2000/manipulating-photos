@@ -6,7 +6,7 @@
 - **Valeria (Bath session):** Approved, loves the photo. Safe to use publicly.
 - **Valeria (UV session):** BLOCKED. Never received photos. Do NOT use publicly.
 - **Noga (Candles):** Approved, SFW, safe to use.
-- **Miki, Liel, Jenia, Ruby:** Used in Shadow & Soul Reel. Consent assumed for artistic use (verify if tagging).
+- **Miki, Liel, Jenia, Ruby:** Used in Shadow & Soul Reel. Ronnie decided: NO TAGS for the CapCut Reel (Sunday 15/03).
 
 ## Growth Accounts (tag only when requested per-post)
 - @inspirefirephotography
@@ -16,4 +16,4 @@
 ## Engagement Targets
 See agents/mira/growth_strategy_v1.md for full outreach list (20 accounts).
 
-**Last updated:** 2026-03-12
+**Last updated:** 2026-03-13

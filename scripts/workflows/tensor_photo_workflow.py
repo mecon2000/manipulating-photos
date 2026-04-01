@@ -99,7 +99,7 @@ def run_tensor_inpaint(
     mask_res_id, mw, mh = upload_to_tensor(mask_crop, output_dir)
 
     # 4. REQUEST
-    MODEL_INPAINT = "845475299014578498" # https://tensor.art/models/845475299014578498
+    MODEL_INPAINT = MODEL_DEFAULT # https://tensor.art/models/845475299014578498
     payload = {
         "requestId": str(uuid.uuid4()),
         "stages": [

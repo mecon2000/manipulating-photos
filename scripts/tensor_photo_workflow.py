@@ -15,9 +15,8 @@ FAL_API_KEY = os.getenv("FAL_API_KEY")
 TENSOR_BASE_URL = "https://ap-east-1.tensorart.cloud/v1"
 
 # Model IDs
-MODEL_NSFW = "965126062386242266" # Z-Image-Uncensored-fp16-v3
-MODEL_TURBO = "979103055941916325" # Z-Image-Turbo
-MODEL_FLUX = "1046927429141014138" # FLUX.1-dev
+# Ronnie likes this one: Z-Image-Uncensored-fp16-v3
+MODEL_DEFAULT = "965126062386242266" 
 
 def run_fal_rembg(image_path):
     print(f"--- Step 1: Extracting Mask using Fal.ai (rembg) ---")
@@ -39,25 +38,23 @@ def run_fal_rembg(image_path):
 def pinching_fill(img, mask):
     """
     Fills the mask area by 'pinching' colors from the edges of the mask inwards.
-    A simple implementation using a strong radial blur/smear.
     """
     print("--- BG Prep: Applying 'pinching' fill to subject hole ---")
-    img_np = np.array(img).astype(np.float32)
-    mask_np = np.array(mask).astype(np.float32) / 255.0
     
-    # Simple Content-Aware-ish fill: blur the background heavily under the mask
-    # and then feather it in.
+    # Fill mask area with average color first to avoid black artifacts
+    avg_color = ImageStat.Stat(img).median
     bg_only = img.copy()
-    # Paste a blurred version over the mask area
-    blurred_bg = img.filter(ImageFilter.GaussianBlur(radius=20))
-    bg_only.paste(blurred_bg, mask=mask)
+    fill = Image.new("RGB", img.size, tuple(avg_color))
+    bg_only.paste(fill, mask=mask)
     
-    # For a 'pinched' look, we'd ideally smear boundary pixels. 
-    # Here we'll just do a multi-pass large blur to fill the void.
-    for _ in range(3):
-        bg_only = bg_only.filter(ImageFilter.GaussianBlur(radius=10))
-        # Re-paste original background (where mask is 0)
-        bg_only.paste(img, mask=ImageOps.invert(mask))
+    # Iterative large BoxBlur to smear surrounding pixels into the hole
+    # This creates a 'streaky' effect that pulls colors from the boundary.
+    for r in [4, 8, 16, 32, 64]:
+        smeared = bg_only.filter(ImageFilter.BoxBlur(radius=r))
+        bg_only.paste(smeared, mask=mask)
+        
+    # Re-paste original background (outside mask)
+    bg_only.paste(img, mask=ImageOps.invert(mask))
     
     return bg_only
 
@@ -90,8 +87,14 @@ def run_tensor_job(payload):
     return None
 
 def upload_to_tensor(image_pil):
+    # Ensure dimensions are multiples of 8
+    w, h = image_pil.size
+    new_w, new_h = (w // 8) * 8, (h // 8) * 8
+    if (new_w, new_h) != (w, h):
+        image_pil = image_pil.resize((new_w, new_h), Image.LANCZOS)
+
     buffer = BytesIO()
-    image_pil.save(buffer, format='PNG')
+    image_pil.save(buffer, format='JPEG', quality=95)
     buffer_size = buffer.tell()
     buffer.seek(0)
     
@@ -103,11 +106,11 @@ def upload_to_tensor(image_pil):
     put_info = res.json()
     
     requests.put(put_info["putUrl"], data=buffer, headers=put_info["headers"])
-    return put_info["resourceId"]
+    return put_info["resourceId"], new_w, new_h
 
-def tensor_stylize(image_pil, prompt, model_id, strength):
-    # Determine resource ID
-    resource_id = upload_to_tensor(image_pil)
+def tensor_stylize(image_pil, prompt, strength):
+    # Determine resource ID and normalized dimensions
+    resource_id, w, h = upload_to_tensor(image_pil)
     
     payload = {
         "requestId": str(uuid.uuid4()),
@@ -119,14 +122,15 @@ def tensor_stylize(image_pil, prompt, model_id, strength):
             {
                 "type": "DIFFUSION",
                 "diffusion": {
-                    "width": image_pil.width,
-                    "height": image_pil.height,
+                    "width": w,
+                    "height": h,
                     "prompts": [{ "text": prompt, "weight": 1.0 }],
-                    "sdModel": model_id,
-                    "steps": 30 if "FLUX" not in model_id else 20,
+                    "sdModel": MODEL_DEFAULT,
+                    "steps": 30,
                     "cfgScale": 7,
                     "denoisingStrength": strength,
-                    "image": resource_id
+                    "image": resource_id,
+                    "sampler": "Euler a"
                 }
             }
         ]
@@ -164,36 +168,34 @@ def main():
     bg_prepped = pinching_fill(img_orig, mask)
     bg_prepped.save(os.path.join(args.output_dir, "2_bg_prep_pinched.jpg"))
     
-    # Step 2b: AI Fill (Strength 0.2)
-    print("--- Step 2b: AI Filling Background (Strength 0.2) ---")
-    bg_ai_fill = tensor_stylize(bg_prepped, "remove, clean background, abstract", MODEL_TURBO, 0.2)
+    # Step 3: AI Fill Background (Strength 0.2)
+    print("--- Step 3: AI Filling Background (Strength 0.2) ---")
+    bg_ai_fill = tensor_stylize(bg_prepped, "simple background, clean art studio", 0.2)
     if not bg_ai_fill: return
     check_not_black(bg_ai_fill, "BG AI Fill")
     bg_ai_fill.save(os.path.join(args.output_dir, "3_bg_ai_fill.jpg"))
     
     # Step 4: Stylize BG (Strength 0.8)
     print("--- Step 4: Stylizing Background (Strength 0.8) ---")
-    bg_stylized = tensor_stylize(bg_ai_fill, f"An abstract fine art {args.style} background, moody, cinematic", MODEL_TURBO, 0.8)
+    bg_stylized = tensor_stylize(bg_ai_fill, f"An abstract fine art {args.style} background, moody, cinematic, dark artistic atmosphere", 0.8)
     if not bg_stylized: return
     check_not_black(bg_stylized, "Stylized BG")
     bg_stylized.save(os.path.join(args.output_dir, "4_bg_stylized.jpg"))
     
     # Step 6: Stylize Model (Strength 0.4)
     print("--- Step 6: Stylizing Model (Strength 0.4) ---")
-    # Isolate model first
     model_only = Image.new("RGB", img_orig.size, (0,0,0))
     model_only.paste(img_orig, mask=mask)
     model_only.save(os.path.join(args.output_dir, "5_model_only.jpg"))
     
-    model_stylized = tensor_stylize(model_only, f"A fine art portrait, {args.style} style, high detail, realistic skin texture", MODEL_NSFW, 0.4)
+    model_stylized = tensor_stylize(model_only, f"A fine art portrait, {args.style} style, high detail, realistic skin texture, masterwork art", 0.4)
     if not model_stylized: return
     check_not_black(model_stylized, "Stylized Model")
     model_stylized.save(os.path.join(args.output_dir, "6_model_stylized.jpg"))
     
     # Step 8: Composite
     print("--- Step 8: Final Compositing ---")
-    # Soften mask slightly for better blend
-    soft_mask = mask.filter(ImageFilter.GaussianBlur(radius=2))
+    soft_mask = mask.resize(model_stylized.size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(radius=2))
     final = Image.composite(model_stylized, bg_stylized, soft_mask)
     final.save(os.path.join(args.output_dir, "7_final_result.jpg"), "JPEG", quality=95)
     

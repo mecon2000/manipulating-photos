@@ -1,24 +1,23 @@
 # ACTIVE_TASKS.md — Current Work Items
 
+## ⏸️ ALL PUBLISHING PAUSED (Requested 2026-03-14 14:46 UTC)
+
 ## In Progress
-- [ ] Ronnie to download + upload Reel to Instagram (add "After Dark Slowed" from IG audio library)
-- [ ] Echo Cinema script: Spec sent to Ronnie → Opus will write it → clone from GitHub
-- [ ] Reel Candidates: 3 folders in GDrive awaiting Ronnie's review
-- [ ] Post 4 Carousel (BLD_4183 + BLD_4214) — target Fri 20/03
+- [ ] New Reel: Bath and Water theme (Candidates in GDrive) - ON HOLD
 
-## Scheduled (Cron)
+## Scheduled (ALL CRONS DELETED)
 - [x] Post 1: Daniella silhouette — Published 12/03 20:00
-- [ ] Post 2: Elly window — Sat 14/03 20:00
-- [ ] Post 3: Daniella red dress — Tue 17/03 20:00
 
-## Blocked
-- [ ] Google Calendar OAuth — Ronnie must add mecon2000@gmail.com as Test User
-- [ ] Lighting diagram — shelved until professional renderer exists
+## Done ✅
+- [x] Google Calendar Integration (Fully Functional)
+- [x] Elly Teaser Crops (Ultra Macro Neck confirmed)
+- [x] PH21 Candidate Selection (9 images ranked)
+- [x] PH21 Barcelona: Early Bird payment and email sent (2026-03-23)
 
-## Exhibition Deadlines
-- PH21 Barcelona early bird — March 23 (Ronnie to pay)
+## Exhibition Deadlines (Active)
+- PH21 Barcelona early bird — DONE ✅
 - CICA Museum "Form 2027" — March 30
 - Black Box Gallery B&W — April 10
 - A Smith Gallery "Light" — April 13
 
-**Last updated:** 2026-03-12
+**Last updated:** 2026-03-23 19:50 UTC

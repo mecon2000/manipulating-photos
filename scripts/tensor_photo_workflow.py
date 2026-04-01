@@ -48,6 +48,34 @@ def run_fal_rembg(image_path, output_dir):
         log_to_file(output_dir, f"Fal.ai Error {response.status_code}: {response.text}")
         return None
 
+def run_fal_lama(image_pil, mask_pil, output_dir):
+    log_to_file(output_dir, "--- Step 2/3: Cleaning Background using Fal.ai (LaMa Inpainting) ---")
+    url = "https://fal.run/fal-ai/lama"
+    headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+    
+    img_buffer = BytesIO()
+    image_pil.save(img_buffer, format='JPEG', quality=95)
+    img_b64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+    
+    mask_buffer = BytesIO()
+    mask_pil.save(mask_buffer, format='PNG')
+    mask_b64 = base64.b64encode(mask_buffer.getvalue()).decode('utf-8')
+    
+    payload = {
+        "image_url": f"data:image/jpeg;base64,{img_b64}",
+        "mask_url": f"data:image/png;base64,{mask_b64}"
+    }
+    
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        res = response.json()
+        img_url = res.get("image", {}).get("url")
+        if img_url:
+            return Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
+    
+    log_to_file(output_dir, f"LaMa Inpainting Failed {response.status_code}: {response.text}")
+    return None
+
 def run_fal_faceswap(source_path, target_path, output_dir):
     log_to_file(output_dir, "--- Step 9: Running Face Swap using Fal.ai ---")
     url = "https://fal.run/fal-ai/face-swap"
@@ -151,9 +179,9 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
-    parser.add_argument("--style", default="Indigo Dye Aesthetic")
-    parser.add_argument("--prompt-add", default="deep blue monochromatic look, shibori fabric patterns, moody, cinematic")
-    parser.add_argument("--bg-strength", type=float, default=0.55) # Higher as requested
+    parser.add_argument("--style", default="Baroque Chiaroscuro")
+    parser.add_argument("--prompt-add", default="dramatic Caravaggio-style lighting, intense contrast, theatrical, moody")
+    parser.add_argument("--bg-strength", type=float, default=0.55)
     parser.add_argument("--cfg-scale", type=float, default=6.5)
     parser.add_argument("--faceswap", action="store_true", default=True)
     args = parser.parse_args()
@@ -168,12 +196,12 @@ def main():
         photo_name = os.path.splitext(basename)[0]
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_dir = f"outputs/workflow_pro_v9_{photo_name}_{timestamp}"
+    output_dir = f"outputs/workflow_pro_v10_{photo_name}_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     
-    shutil.copy(__file__, os.path.join(output_dir, "tensor_photo_workflow_v9.py"))
-    log_to_file(output_dir, f"Starting Workflow Pro v9 (Solid Hole for BG)")
-    log_to_file(output_dir, f"Source: {args.source} | Style: {args.style} | BG Strength: {args.bg_strength}")
+    shutil.copy(__file__, os.path.join(output_dir, "tensor_photo_workflow_v10.py"))
+    log_to_file(output_dir, f"Starting Workflow Pro v10 (Generative Inpainting for BG)")
+    log_to_file(output_dir, f"Source: {args.source} | Style: {args.style}")
 
     img_orig = Image.open(args.source).convert("RGB")
     img_orig.save(os.path.join(output_dir, "0_original.jpg"))
@@ -182,21 +210,21 @@ def main():
     if not mask: return
     mask.save(os.path.join(output_dir, "1_mask.png"))
     
-    # Step 2: Solid Hole Background
-    log_to_file(output_dir, "--- Step 2: Creating Background with Solid Hole (No Pinching) ---")
-    avg_color = ImageStat.Stat(img_orig).median
-    bg_holed = img_orig.copy()
-    fill = Image.new("RGB", img_orig.size, tuple(avg_color))
-    bg_holed.paste(fill, mask=mask)
-    bg_holed.save(os.path.join(output_dir, "2_bg_holed.jpg"))
-    
-    # Step 3: Same as Step 2 (as requested "without fill")
-    log_to_file(output_dir, "--- Step 3: Skipping AI Fill ---")
-    bg_holed.save(os.path.join(output_dir, "3_bg_ai_fill.jpg"))
+    # Step 2/3: Generative Inpainting with LaMa
+    bg_clean = run_fal_lama(img_orig, mask, output_dir)
+    if not bg_clean:
+        log_to_file(output_dir, "Inpainting failed, falling back to solid hole")
+        avg_color = ImageStat.Stat(img_orig).median
+        bg_clean = img_orig.copy()
+        fill = Image.new("RGB", img_orig.size, tuple(avg_color))
+        bg_clean.paste(fill, mask=mask)
+        
+    bg_clean.save(os.path.join(output_dir, "2_bg_clean_lama.jpg"))
+    bg_clean.save(os.path.join(output_dir, "3_bg_ai_fill.jpg"))
     
     log_to_file(output_dir, f"--- Step 4: Stylizing Background (Strength {args.bg_strength}) ---")
     bg_prompt = f"An abstract fine art {args.style} background, {args.prompt_add}, moody, cinematic, painterly textures"
-    bg_stylized = tensor_stylize(bg_holed, bg_prompt, args.bg_strength, args.cfg_scale, output_dir)
+    bg_stylized = tensor_stylize(bg_clean, bg_prompt, args.bg_strength, args.cfg_scale, output_dir)
     if not bg_stylized: return
     bg_stylized.save(os.path.join(output_dir, "4_bg_stylized.jpg"))
     

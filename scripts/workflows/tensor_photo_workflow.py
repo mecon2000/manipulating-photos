@@ -97,13 +97,13 @@ def upload_to_tensor(image_pil, output_dir):
 
 
 
+
 def run_fal_lama(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
-    log_to_file(output_dir, "--- Step 2: Cleaning Background using Fal.ai (LaMa) ---")
+    log_to_file(output_dir, "--- Step 2: Cleaning Background using Fal.ai (LaMa + GDrive URLs) ---")
     
     mask = mask_pil.convert("L").point(lambda p: 255 if p > 127 else 0)
     k = dilation_px if dilation_px % 2 != 0 else dilation_px + 1
     mask = mask.filter(ImageFilter.MaxFilter(k)).point(lambda p: 255 if p > 127 else 0)
-    mask.save(os.path.join(output_dir, "1b_dilated_mask_final.png"))
 
     mask_np = np.array(mask)
     ys, xs = np.where(mask_np > 0)
@@ -115,33 +115,39 @@ def run_fal_lama(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
     image_crop = image_pil.crop((x_min, y_min, x_max, y_max))
     mask_crop = mask.crop((x_min, y_min, x_max, y_max))
     
-    # Resize for Base64 stability (max 1024)
-    orig_size = image_crop.size
-    if max(orig_size) > 1024:
-        scale = 1024 / max(orig_size)
-        image_crop_send = image_crop.resize((int(orig_size[0]*scale), int(orig_size[1]*scale)), Image.LANCZOS)
-        mask_crop_send = mask_crop.resize((int(orig_size[0]*scale), int(orig_size[1]*scale)), Image.LANCZOS)
-    else:
-        image_crop_send, mask_crop_send = image_crop, mask_crop
+    # Save locally first
+    crop_path = os.path.join(output_dir, "temp_crop.png")
+    mask_crop_path = os.path.join(output_dir, "temp_mask_crop.png")
+    image_crop.save(crop_path)
+    mask_crop.save(mask_crop_path)
 
+    # Upload to GDrive for public URL
+    def get_public_url(local_path):
+        remote_folder = "gdrive:_photos from openclaw/temp_api/"
+        filename = os.path.basename(local_path)
+        subprocess.run(["rclone", "copy", local_path, remote_folder], check=True)
+        res = subprocess.run(["rclone", "link", f"{remote_folder}{filename}"], capture_output=True, text=True)
+        return res.stdout.strip()
+
+    try:
+        img_url = get_public_url(crop_path)
+        mask_url = get_public_url(mask_crop_path)
+        log_to_file(output_dir, f"Uploaded to GDrive: {img_url}")
+    except Exception as e:
+        log_to_file(output_dir, f"GDrive Upload for API Failed: {e}")
+        return None
+
+    # Call Fal.ai
     url = "https://fal.run/fal-ai/lama"
     headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
-    
-    def to_b64(pil_img):
-        buf = BytesIO()
-        pil_img.save(buf, format="JPEG", quality=90)
-        return base64.b64encode(buf.getvalue()).decode('utf-8')
-
-    payload = {
-        "image_url": f"data:image/jpeg;base64,{to_b64(image_crop_send)}",
-        "mask_url": f"data:image/jpeg;base64,{to_b64(mask_crop_send)}"
-    }
+    payload = {"image_url": img_url, "mask_url": mask_url}
     
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        res_url = response.json()["image"]["url"]
-        result_crop = Image.open(requests.get(res_url, stream=True).raw).convert("RGB")
-        result_crop = result_crop.resize(orig_size, Image.LANCZOS)
+        res_data = response.json()
+        res_img_url = res_data["image"]["url"]
+        result_crop = Image.open(requests.get(res_img_url, stream=True).raw).convert("RGB")
+        result_crop = result_crop.resize((x_max - x_min, y_max - y_min), Image.LANCZOS)
         
         # Feathered Blending
         mask_blur = mask_crop.filter(ImageFilter.GaussianBlur(radius=8))
@@ -149,8 +155,9 @@ def run_fal_lama(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
         final.paste(result_crop, (x_min, y_min), mask=mask_blur)
         return final
     else:
-        log_to_file(output_dir, f"LaMa Failed: {response.text}")
+        log_to_file(output_dir, f"LaMa API Failed: {response.text}")
         return None
+
 
 
 

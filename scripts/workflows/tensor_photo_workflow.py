@@ -96,16 +96,15 @@ def upload_to_tensor(image_pil, output_dir):
     return res["resourceId"], new_w, new_h
 
 
+
 def run_fal_lama(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
     log_to_file(output_dir, "--- Step 2: Cleaning Background using Fal.ai (LaMa) ---")
     
-    # 1. Harden and Dilate Mask
     mask = mask_pil.convert("L").point(lambda p: 255 if p > 127 else 0)
     k = dilation_px if dilation_px % 2 != 0 else dilation_px + 1
     mask = mask.filter(ImageFilter.MaxFilter(k)).point(lambda p: 255 if p > 127 else 0)
     mask.save(os.path.join(output_dir, "1b_dilated_mask_final.png"))
 
-    # 2. ROI Logic
     mask_np = np.array(mask)
     ys, xs = np.where(mask_np > 0)
     if len(xs) == 0: return image_pil
@@ -116,35 +115,43 @@ def run_fal_lama(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
     image_crop = image_pil.crop((x_min, y_min, x_max, y_max))
     mask_crop = mask.crop((x_min, y_min, x_max, y_max))
     
-    # 3. Call Fal.ai LaMa
+    # Resize for Base64 stability (max 1024)
+    orig_size = image_crop.size
+    if max(orig_size) > 1024:
+        scale = 1024 / max(orig_size)
+        image_crop_send = image_crop.resize((int(orig_size[0]*scale), int(orig_size[1]*scale)), Image.LANCZOS)
+        mask_crop_send = mask_crop.resize((int(orig_size[0]*scale), int(orig_size[1]*scale)), Image.LANCZOS)
+    else:
+        image_crop_send, mask_crop_send = image_crop, mask_crop
+
     url = "https://fal.run/fal-ai/lama"
     headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
     
-    # Upload ROI and Mask as Base64 for Fal
     def to_b64(pil_img):
         buf = BytesIO()
-        pil_img.save(buf, format="PNG")
+        pil_img.save(buf, format="JPEG", quality=90)
         return base64.b64encode(buf.getvalue()).decode('utf-8')
 
     payload = {
-        "image_url": f"data:image/png;base64,{to_b64(image_crop)}",
-        "mask_url": f"data:image/png;base64,{to_b64(mask_crop)}"
+        "image_url": f"data:image/jpeg;base64,{to_b64(image_crop_send)}",
+        "mask_url": f"data:image/jpeg;base64,{to_b64(mask_crop_send)}"
     }
     
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
         res_url = response.json()["image"]["url"]
         result_crop = Image.open(requests.get(res_url, stream=True).raw).convert("RGB")
-        result_crop = result_crop.resize((x_max - x_min, y_max - y_min), Image.LANCZOS)
+        result_crop = result_crop.resize(orig_size, Image.LANCZOS)
         
-        # 4. FEATHERED BLENDING
-        mask_blur = mask_crop.filter(ImageFilter.GaussianBlur(radius=5))
+        # Feathered Blending
+        mask_blur = mask_crop.filter(ImageFilter.GaussianBlur(radius=8))
         final = image_pil.copy()
         final.paste(result_crop, (x_min, y_min), mask=mask_blur)
         return final
     else:
-        log_to_file(output_dir, f"LaMa Error: {response.text}")
+        log_to_file(output_dir, f"LaMa Failed: {response.text}")
         return None
+
 
 
 def tensor_stylize(image_pil, prompt, strength, cfg_scale, output_dir):
@@ -263,8 +270,6 @@ def main():
         log_to_file(output_dir, "Inpainting failed, falling back to original")
         bg_clean = img_orig.copy()
     bg_clean.save(os.path.join(output_dir, "2_bg_clean_tensor.jpg"))
-    print("STOPPING AFTER STEP 2 FOR TEST")
-    return
     
     log_to_file(output_dir, f"--- Step 4: Stylizing Background (Strength {args.bg_strength}) ---")
     bg_prompt = f"An abstract fine art {args.style} background, {prompt_add}, moody, cinematic, painterly textures"

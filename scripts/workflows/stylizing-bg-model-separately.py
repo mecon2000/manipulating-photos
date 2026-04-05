@@ -815,23 +815,24 @@ def run_workflow(args):
             mask = run_fal_rembg(args.source, output_dir)
             timings[1] = time.time() - t0
             if mask is None:
-                log(output_dir, "FATAL: Mask extraction failed — cannot continue in separate mode", "ERROR")
-                _print_summary(args, output_dir, mode, bg_style, model_style, base_seed, timings, quality_report, None, None)
-                return
-            mask.save(os.path.join(output_dir, "1_mask.png"))
+                log(output_dir, "Mask extraction failed — falling back to whole-image mode", "WARN")
+                use_separate = False
+                mode = "whole-image (auto: mask failed)"
+            else:
+                mask.save(os.path.join(output_dir, "1_mask.png"))
 
-            # Check mask coverage — if subject fills most of the frame, separation is pointless
-            mask_np = np.array(mask.convert("L"))
-            mask_coverage = (mask_np > 127).sum() / mask_np.size
-            log(output_dir, f"Mask coverage: {mask_coverage:.1%} of image")
-            if mask_coverage > 0.70:
-                log(output_dir, f"Subject fills {mask_coverage:.0%} of the frame — switching to whole-image mode (separation would remove most of the image)", "WARN")
-                use_separate = False
-                mode = "whole-image (auto: subject too large)"
-            elif mask_coverage < 0.05:
-                log(output_dir, f"Mask covers only {mask_coverage:.1%} — rembg couldn't find the subject. Switching to whole-image mode", "WARN")
-                use_separate = False
-                mode = "whole-image (auto: no subject found)"
+                # Check mask coverage — if subject fills most of the frame, separation is pointless
+                mask_np = np.array(mask.convert("L"))
+                mask_coverage = (mask_np > 127).sum() / mask_np.size
+                log(output_dir, f"Mask coverage: {mask_coverage:.1%} of image")
+                if mask_coverage > 0.70:
+                    log(output_dir, f"Subject fills {mask_coverage:.0%} of the frame — switching to whole-image mode (separation would remove most of the image)", "WARN")
+                    use_separate = False
+                    mode = "whole-image (auto: subject too large)"
+                elif mask_coverage < 0.05:
+                    log(output_dir, f"Mask covers only {mask_coverage:.1%} — rembg couldn't find the subject. Switching to whole-image mode", "WARN")
+                    use_separate = False
+                    mode = "whole-image (auto: no subject found)"
 
             log(output_dir, f"Step 1 done ({timings[1]:.1f}s)")
         if up_to < 2:

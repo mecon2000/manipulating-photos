@@ -8,7 +8,10 @@ Photo stylization pipeline for fine-art transformations of portrait/boudoir phot
 - **API keys**: `~/sol/.env` (FAL_API_KEY, TENSOR_API_KEY, GOOGLE_API_KEY, ANTHROPIC_API_KEY)
 - **Photos**: `~/.openclaw/workspace/_photos/` — subfolders per model name, each has `Processed/` and/or `Unprocessed/`
 - **Shared folder** (visible from Windows): `~/.openclaw/workspace/shared/`
-- **Styles**: `scripts/workflows/styles.json` — 100 art styles with prompt additions
+- **Styles**: `scripts/workflows/styles.json` — 111 art styles with prompt additions
+- **Style guide**: `scripts/workflows/style-guide.json` — per-category strength recommendations
+- **Favorites**: `~/.openclaw/workspace/shared/favorites/favorites.json` — liked outputs with full reconstruction commands
+- **Impasto experiments**: `~/.openclaw/workspace/shared/impasto_experiments/` — shelved stroke direction research with examples
 
 ## Active Scripts
 
@@ -30,9 +33,9 @@ Photo stylization pipeline for fine-art transformations of portrait/boudoir phot
 ./scripts/workflows/stylizing-bg-model-separately.py --source photo.jpg --style "Old Dutch Master" --bg-strength 0.35 --model-strength 0.2 --output-to local --local-output-dir ~/.openclaw/workspace/shared --auto-correct
 ```
 
-**All flags:** `--source`, `--style`, `--bg-style`, `--model-style`, `--bg-strength` (default 0.6), `--model-strength` (default 0.4), `--cfg-scale`, `--separate/--no-separate`, `--up-to-step 1-7`, `--faceswap/--no-faceswap`, `--tensor-model`, `--seed`, `--max-retries`, `--auto-correct`, `--max-corrections`, `--output-to` (gdrive/local/both), `--local-output-dir`, `--list-styles`
+**All flags:** `--source`, `--style`, `--bg-style`, `--model-style`, `--bg-strength` (default 0.6), `--model-strength` (default 0.4), `--cfg-scale`, `--separate/--no-separate`, `--up-to-step 1-7`, `--faceswap/--no-faceswap`, `--tensor-model`, `--seed`, `--max-retries`, `--auto-correct`, `--max-corrections`, `--output-to` (gdrive/local/both), `--local-output-dir`, `--list-styles`, `--bg-fill` (blur/lama, default blur), `--mask-model` (birefnet/rembg, default birefnet), `--posterize` (2-8 tone levels), `--downscale` (target long-edge px), `--stroke-angle` (degrees), `--stroke-length` (px), `--mask-expand` (px), `--prompt-extra` (appended to style prompt)
 
-**Steps:** 1. Extract mask (fal.ai rembg) → 2. Clean BG (fal.ai LaMa) → 3. Stylize BG+Model in parallel (Tensor Art) → 4. Composite → 5. Face swap (fal.ai) → 6. Quality eval + auto-correct (Gemini) → 7. Upload
+**Steps:** 1. Extract mask (fal.ai BiRefNet/rembg) → 2. Clean BG (blur fill or fal.ai LaMa) → 3. Stylize BG+Model in parallel (Tensor Art) → 4. Composite → 5. Face swap (fal.ai) → 6. Quality eval + auto-correct (Gemini 2.5 Flash) → 7. Upload
 
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.
@@ -66,7 +69,11 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 ## Recommended Settings
 
 Based on testing, good starting points:
-- **BG strength**: 0.3–0.4 (higher = more artistic but risks losing the scene)
-- **Model strength**: 0.15–0.25 (higher = risks distorting the subject)
-- **Styles that work well**: Old Dutch Master, Cinematic Teal Orange, Golden Hour Glow, Velvet Noir
+- **BG strength**: 0.45–0.6 for textural styles, 0.3–0.45 for color-shift styles
+- **Model strength**: 0.0–0.15 (preserve subject anatomy; 0.0 skips Tensor Art entirely)
+- **Styles that work well**: Old Dutch Master, Cinematic Teal Orange, Golden Hour Glow, Velvet Noir, Oil Impasto (with posterize)
+- **Oil Impasto tip**: Use `--posterize 3-4 --downscale 768` for chunky visible brush strokes
 - **Always use** `--output-to local --local-output-dir ~/.openclaw/workspace/shared` to see results on Windows
+- **BiRefNet** (default) captures hands/limbs correctly; rembg misses them
+- **Blur fill** (default) produces even BG texture; LaMa fill gets over-stylized
+- See `style-guide.json` for per-category strength recommendations

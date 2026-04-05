@@ -287,6 +287,7 @@ def run_iclight(subject_img, prompt, negative_prompt, output_dir, seed=None,
         log(output_dir, "IC-Light returned no image URL", "ERROR")
         return None
 
+    log(output_dir, f"IC-Light CDN URL: {result_url}")
     result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw).convert("RGB")
     log(output_dir, f"IC-Light result: {result_img.size[0]}x{result_img.size[1]}")
     return result_img

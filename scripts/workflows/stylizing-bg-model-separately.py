@@ -233,13 +233,13 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
 
         payload = {
             "contents": [{"parts": parts}],
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 500},
+            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1024},
         }
 
         response = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
             json=payload,
-            timeout=30,
+            timeout=60,
         )
 
         if response.status_code != 200:
@@ -247,8 +247,15 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
             return None
 
         raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        log(output_dir, f"Gemini raw response: {raw[:300]}")
+        # Strip markdown fences, extract JSON object
         raw = re.sub(r"^```json\s*|```\s*$", "", raw, flags=re.MULTILINE).strip()
-        result = json.loads(raw)
+        # Find the JSON object even if there's text around it
+        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not json_match:
+            log(output_dir, "Gemini response contains no JSON object", "WARN")
+            return None
+        result = json.loads(json_match.group())
 
         score = result.get("score", "?")
         critique = result.get("critique", "")
@@ -820,7 +827,11 @@ def run_workflow(args):
             if mask_coverage > 0.70:
                 log(output_dir, f"Subject fills {mask_coverage:.0%} of the frame — switching to whole-image mode (separation would remove most of the image)", "WARN")
                 use_separate = False
-                mode = "whole-image (auto-switched)"
+                mode = "whole-image (auto: subject too large)"
+            elif mask_coverage < 0.05:
+                log(output_dir, f"Mask covers only {mask_coverage:.1%} — rembg couldn't find the subject. Switching to whole-image mode", "WARN")
+                use_separate = False
+                mode = "whole-image (auto: no subject found)"
 
             log(output_dir, f"Step 1 done ({timings[1]:.1f}s)")
         if up_to < 2:

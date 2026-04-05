@@ -243,7 +243,9 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
 
         payload = {
             "contents": [{"parts": parts}],
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1024},
+            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048},
+            # Disable thinking to avoid token budget eaten by internal reasoning
+            "thinkingConfig": {"thinkingBudget": 0},
         }
 
         response = requests.post(
@@ -256,8 +258,22 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
             log(output_dir, f"Gemini API error ({response.status_code}): {response.text[:200]}", "WARN")
             return None
 
-        raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        log(output_dir, f"Gemini raw response ({len(raw)} chars): {raw[:500]}")
+        resp_json = response.json()
+        # Handle missing/empty candidates (safety blocks, quota errors, etc.)
+        candidates = resp_json.get("candidates", [])
+        if not candidates:
+            reason = resp_json.get("promptFeedback", {}).get("blockReason", "unknown")
+            log(output_dir, f"Gemini returned no candidates (reason: {reason})", "WARN")
+            return None
+        # Handle finishReason != STOP (e.g. SAFETY, MAX_TOKENS)
+        finish_reason = candidates[0].get("finishReason", "")
+        content = candidates[0].get("content", {})
+        parts_out = content.get("parts", [])
+        if not parts_out:
+            log(output_dir, f"Gemini candidate has no content parts (finishReason: {finish_reason})", "WARN")
+            return None
+        raw = parts_out[0].get("text", "").strip()
+        log(output_dir, f"Gemini raw response ({len(raw)} chars, finishReason={finish_reason}): {raw[:500]}")
         # Strip markdown fences line by line
         lines = raw.split("\n")
         lines = [l for l in lines if not l.strip().startswith("```")]

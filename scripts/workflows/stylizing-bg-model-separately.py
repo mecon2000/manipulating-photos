@@ -860,14 +860,24 @@ def run_workflow(args):
     log(output_dir, "=" * 60)
 
     img_orig = Image.open(args.source).convert("RGB")
+    orig_full_size = img_orig.size  # Save for final upscale
     img_orig.save(os.path.join(output_dir, "0_original.jpg"), quality=95)
 
     # Pre-processing
     if args.posterize:
-        bits = args.posterize  # e.g. 3 = 8 tones per channel, 2 = 4 tones
+        bits = args.posterize
         img_orig = ImageOps.posterize(img_orig, bits)
         log(output_dir, f"Pre-process: posterized to {bits} bits ({2**bits} tones per channel)")
         img_orig.save(os.path.join(output_dir, "0_preprocessed.jpg"), quality=95)
+
+    if args.downscale:
+        long_edge = max(img_orig.size)
+        if long_edge > args.downscale:
+            scale = args.downscale / long_edge
+            new_size = (int(img_orig.size[0] * scale), int(img_orig.size[1] * scale))
+            img_orig = img_orig.resize(new_size, Image.LANCZOS)
+            log(output_dir, f"Pre-process: downscaled {orig_full_size} -> {new_size} (strokes will appear larger)")
+            img_orig.save(os.path.join(output_dir, "0_downscaled.jpg"), quality=95)
 
     timings = {}
     up_to = args.up_to_step or 7
@@ -1075,6 +1085,11 @@ def run_workflow(args):
                 log(output_dir, "Whole-image stylization failed", "ERROR")
                 _print_summary(args, output_dir, mode, bg_style, model_style, base_seed, timings, quality_report, None, None)
                 return
+            # Upscale back to original dimensions if we downscaled
+            if args.downscale and final_img.size != orig_full_size:
+                log(output_dir, f"Upscaling {final_img.size} -> {orig_full_size}")
+                final_img = final_img.resize(orig_full_size, Image.LANCZOS)
+
             final_path = os.path.join(output_dir, "3_stylized_whole.jpg")
             final_img.save(final_path, "JPEG", quality=95)
             log(output_dir, f"Step 3 done ({timings[3]:.1f}s)")
@@ -1368,6 +1383,8 @@ def main():
     parser.add_argument("--prompt-extra", default="", help="Additional prompt text appended to the style prompt (e.g. 'long brush strokes, bold palette knife')")
     parser.add_argument("--posterize", type=int, default=None, choices=[2, 3, 4, 5],
                         help="Pre-process: reduce image to N bits per channel (2=4 tones, 3=8 tones, 4=16 tones)")
+    parser.add_argument("--downscale", type=int, default=None,
+                        help="Pre-process: downscale long edge to N pixels before stylizing (e.g. 512, 768). Makes brush strokes appear larger. Result is upscaled back.")
 
     # Strengths
     parser.add_argument("--bg-strength", type=float, default=0.6, help="Denoising strength for BG (default: 0.6)")

@@ -828,7 +828,7 @@ def run_workflow(args):
     timestamp = israel_dt.strftime("%Y-%m-%d_%H-%M-%S")
     # Short style tag for folder name (first 2-3 words, cleaned)
     style_tag = bg_style.replace(" ", "_")[:20]
-    folder_name = f"{model_name}_{photo_name}_{timestamp}_{style_tag}"
+    folder_name = f"{model_name}_{photo_name}_{timestamp}_{style_tag}_{random.randint(10,99)}"
     if args.local_output_dir:
         output_dir = os.path.join(args.local_output_dir, folder_name)
     else:

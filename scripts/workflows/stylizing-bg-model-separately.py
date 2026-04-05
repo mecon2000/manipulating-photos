@@ -243,9 +243,11 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
 
         payload = {
             "contents": [{"parts": parts}],
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048},
-            # Disable thinking to avoid token budget eaten by internal reasoning
-            "thinkingConfig": {"thinkingBudget": 0},
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 2048,
+                "responseMimeType": "application/json",
+            },
         }
 
         response = requests.post(

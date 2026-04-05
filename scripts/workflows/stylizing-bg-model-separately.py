@@ -797,9 +797,10 @@ def run_workflow(args):
     quality_report = {}
 
     # -----------------------------------------------------------------------
-    # SEPARATE MODE
+    # STEP 1: MASK (separate mode only, but may auto-switch to whole-image)
     # -----------------------------------------------------------------------
-    if args.separate:
+    use_separate = args.separate
+    if use_separate:
         # --- Step 1: Mask ---
         if up_to >= 1:
             t0 = time.time()
@@ -811,11 +812,25 @@ def run_workflow(args):
                 _print_summary(args, output_dir, mode, bg_style, model_style, base_seed, timings, quality_report, None, None)
                 return
             mask.save(os.path.join(output_dir, "1_mask.png"))
+
+            # Check mask coverage — if subject fills most of the frame, separation is pointless
+            mask_np = np.array(mask.convert("L"))
+            mask_coverage = (mask_np > 127).sum() / mask_np.size
+            log(output_dir, f"Mask coverage: {mask_coverage:.1%} of image")
+            if mask_coverage > 0.70:
+                log(output_dir, f"Subject fills {mask_coverage:.0%} of the frame — switching to whole-image mode (separation would remove most of the image)", "WARN")
+                use_separate = False
+                mode = "whole-image (auto-switched)"
+
             log(output_dir, f"Step 1 done ({timings[1]:.1f}s)")
         if up_to < 2:
             _print_summary(args, output_dir, mode, bg_style, model_style, base_seed, timings, quality_report, None, None)
             return
 
+    # -----------------------------------------------------------------------
+    # SEPARATE MODE: Steps 2-4 (only if still using separate after mask check)
+    # -----------------------------------------------------------------------
+    if use_separate:
         # --- Step 2: Clean BG ---
         if up_to >= 2:
             t0 = time.time()
@@ -826,7 +841,6 @@ def run_workflow(args):
                 log(output_dir, "LaMa cleanup failed — falling back to original image as BG", "WARN")
                 bg_clean = img_orig.copy()
             bg_clean.save(os.path.join(output_dir, "2_bg_clean.jpg"), quality=95)
-            # Quality check on cleaned BG
             check_image_quality(bg_clean, "cleaned BG", output_dir)
             log(output_dir, f"Step 2 done ({timings[2]:.1f}s)")
         if up_to < 3:
@@ -839,10 +853,7 @@ def run_workflow(args):
             log(output_dir, f"--- Step 3/7: {STEP_NAMES[3]} ---")
 
             # Prepare model-only image: subject on heavily blurred original BG
-            # (Using black BG causes Tensor Art to return near-black results.
-            #  A blurred BG gives the model enough tonal context to work with.)
             blurred_bg = img_orig.filter(ImageFilter.GaussianBlur(radius=30))
-            # Desaturate the blurred BG so it doesn't compete with the subject
             blurred_bg = ImageEnhance.Color(blurred_bg).enhance(0.3)
             model_only = blurred_bg.copy()
             model_only.paste(img_orig, mask=mask)
@@ -866,7 +877,6 @@ def run_workflow(args):
 
             if bg_stylized is not None:
                 bg_stylized.save(os.path.join(output_dir, "3a_bg_stylized.jpg"), quality=95)
-                # SSIM check: is stylized BG reasonable vs cleaned BG?
                 ssim_val = ssim_simple(bg_clean, bg_stylized)
                 quality_report["bg_ssim"] = round(ssim_val, 3)
                 if ssim_val > 0.95:
@@ -909,9 +919,9 @@ def run_workflow(args):
             return
 
     # -----------------------------------------------------------------------
-    # WHOLE-IMAGE MODE (--no-separate)
+    # WHOLE-IMAGE MODE (--no-separate or auto-switched)
     # -----------------------------------------------------------------------
-    else:
+    if not use_separate:
         # Skip steps 1, 2, 4 — just stylize the whole image
         if up_to >= 3:
             t0 = time.time()

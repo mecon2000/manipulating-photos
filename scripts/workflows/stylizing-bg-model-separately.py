@@ -73,6 +73,16 @@ STYLE_PROMPTS = {
     "Noir":        "high contrast black and white, deep shadows, film noir, cinematic grain",
 }
 
+# Load extended styles from styles.json if available
+_styles_json = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles.json")
+if os.path.isfile(_styles_json):
+    try:
+        with open(_styles_json) as _f:
+            for _s in json.load(_f):
+                STYLE_PROMPTS[_s["name"]] = _s["prompt"]
+    except Exception:
+        pass  # Fall back to built-in styles
+
 STEP_NAMES = {
     1: "Extract mask",
     2: "Clean background (LaMa)",
@@ -1269,7 +1279,15 @@ def main():
                         help="Where to upload results (default: both)")
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
 
+    parser.add_argument("--list-styles", action="store_true", help="List all available styles and exit")
+
     args = parser.parse_args()
+
+    if args.list_styles:
+        print(f"\n{len(STYLE_PROMPTS)} available styles:\n")
+        for name, prompt in sorted(STYLE_PROMPTS.items()):
+            print(f"  {name:<30} {prompt[:70]}")
+        sys.exit(0)
 
     # Validate source exists
     if not os.path.isfile(args.source):

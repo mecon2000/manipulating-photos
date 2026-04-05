@@ -932,12 +932,33 @@ def run_workflow(args):
         # --- Step 2: Clean BG ---
         if up_to >= 2:
             t0 = time.time()
-            log(output_dir, f"--- Step 2/7: {STEP_NAMES[2]} ---")
-            bg_clean = run_fal_lama(img_orig, mask, output_dir, args.dilation)
-            timings[2] = time.time() - t0
-            if bg_clean is None:
-                log(output_dir, "LaMa cleanup failed — falling back to original image as BG", "WARN")
+            log(output_dir, f"--- Step 2/7: {STEP_NAMES[2]} (method: {args.bg_fill}) ---")
+
+            if args.bg_fill == "blur":
+                # Blur the model area in the original — no LaMa API call needed.
+                # Produces uniform texture so stylization is even across the whole BG.
+                log(output_dir, "Filling model area with heavy blur (no LaMa)")
+                mask_dilated = mask.convert("L").point(lambda p: 255 if p > 127 else 0)
+                k = args.dilation if args.dilation % 2 != 0 else args.dilation + 1
+                mask_dilated = mask_dilated.filter(ImageFilter.MaxFilter(k))
+                # Heavy blur of original to fill the hole
+                blurred_fill = img_orig.filter(ImageFilter.GaussianBlur(radius=40))
                 bg_clean = img_orig.copy()
+                # Feathered paste of blurred area over the model region
+                mask_feathered = mask_dilated.filter(ImageFilter.GaussianBlur(radius=15))
+                bg_clean.paste(blurred_fill, mask=mask_feathered)
+            else:
+                # LaMa inpainting — produces cleaner fill but different texture than real BG
+                bg_clean = run_fal_lama(img_orig, mask, output_dir, args.dilation)
+                if bg_clean is None:
+                    log(output_dir, "LaMa cleanup failed — falling back to blur fill", "WARN")
+                    blurred_fill = img_orig.filter(ImageFilter.GaussianBlur(radius=40))
+                    mask_l = mask.convert("L").point(lambda p: 255 if p > 127 else 0)
+                    mask_f = mask_l.filter(ImageFilter.GaussianBlur(radius=15))
+                    bg_clean = img_orig.copy()
+                    bg_clean.paste(blurred_fill, mask=mask_f)
+
+            timings[2] = time.time() - t0
             bg_clean.save(os.path.join(output_dir, "2_bg_clean.jpg"), quality=95)
             check_image_quality(bg_clean, "cleaned BG", output_dir)
             log(output_dir, f"Step 2 done ({timings[2]:.1f}s)")
@@ -1017,7 +1038,15 @@ def run_workflow(args):
         if up_to >= 4:
             t0 = time.time()
             log(output_dir, f"--- Step 4/7: {STEP_NAMES[4]} ---")
-            soft_mask = mask.resize(model_stylized.size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(radius=3))
+            # Resize everything to original dimensions (Tensor Art may return different sizes)
+            orig_size = img_orig.size
+            if bg_stylized.size != orig_size:
+                log(output_dir, f"Resizing BG {bg_stylized.size} -> {orig_size}")
+                bg_stylized = bg_stylized.resize(orig_size, Image.LANCZOS)
+            if model_stylized.size != orig_size:
+                log(output_dir, f"Resizing Model {model_stylized.size} -> {orig_size}")
+                model_stylized = model_stylized.resize(orig_size, Image.LANCZOS)
+            soft_mask = mask.resize(orig_size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(radius=3))
             final_img = Image.composite(model_stylized, bg_stylized, soft_mask)
             final_path = os.path.join(output_dir, "4_composite.jpg")
             final_img.save(final_path, "JPEG", quality=95)
@@ -1358,6 +1387,8 @@ def main():
     # Tensor Art
     parser.add_argument("--tensor-model", default=MODEL_DEFAULT, help=f"Tensor Art model ID (default: {MODEL_DEFAULT})")
     parser.add_argument("--dilation", type=int, default=25, help="Mask dilation in pixels for LaMa (default: 25)")
+    parser.add_argument("--bg-fill", choices=["lama", "blur"], default="blur",
+                        help="How to fill the model hole in BG: 'blur' (uniform texture, default) or 'lama' (AI inpainting)")
     parser.add_argument("--mask-expand", type=int, default=0, help="Expand foreground mask by N pixels to catch nearby body parts (default: 0)")
     parser.add_argument("--mask-model", choices=["birefnet", "rembg"], default="birefnet",
                         help="Segmentation model for mask extraction (default: birefnet — better edges, catches hands)")

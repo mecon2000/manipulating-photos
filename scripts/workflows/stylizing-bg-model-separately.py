@@ -826,7 +826,7 @@ def run_workflow(args):
     # Output directory — <model_name>_<original_filename>_<timestamp>
     israel_dt = datetime.now(ISRAEL_TZ)
     timestamp = israel_dt.strftime("%Y-%m-%d_%H-%M-%S")
-    folder_name = f"{model_name}_{photo_name}_{timestamp}"
+    folder_name = f"{model_name}_{photo_name}_{timestamp}_{random.randint(100,999)}"
     if args.local_output_dir:
         output_dir = os.path.join(args.local_output_dir, folder_name)
     else:

@@ -237,7 +237,7 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
         }
 
         response = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
             json=payload,
             timeout=30,
         )
@@ -1124,11 +1124,16 @@ def run_workflow(args):
             gdrive_link = upload_to_gdrive(output_dir, model_name, photo_name, timestamp, output_dir)
 
         if args.output_to in ("local", "both"):
-            default_local = os.path.expanduser(f"~/openclaw-outputs/{model_name}_{photo_name}_{timestamp}")
-            dest = args.local_output_dir or default_local
-            local_path = copy_to_local(output_dir, dest)
-            if local_path:
-                log(output_dir, f"Local copy: {local_path}")
+            if args.local_output_dir and os.path.abspath(output_dir).startswith(os.path.abspath(args.local_output_dir)):
+                # output_dir is already inside local_output_dir — no copy needed
+                local_path = output_dir
+                log(output_dir, f"Output already in local dir: {local_path}")
+            else:
+                default_local = os.path.expanduser(f"~/openclaw-outputs/{model_name}_{photo_name}_{timestamp}")
+                dest = args.local_output_dir or default_local
+                local_path = copy_to_local(output_dir, dest)
+                if local_path:
+                    log(output_dir, f"Local copy: {local_path}")
 
         timings[7] = time.time() - t0
         log(output_dir, f"Step 7 done ({timings[7]:.1f}s)")

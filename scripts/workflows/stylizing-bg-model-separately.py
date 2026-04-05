@@ -863,6 +863,9 @@ def run_workflow(args):
     orig_full_size = img_orig.size  # Save for final upscale
     img_orig.save(os.path.join(output_dir, "0_original.jpg"), quality=95)
 
+    # Keep a pristine copy for model compositing (before posterize/downscale)
+    img_pristine = img_orig.copy()
+
     # Pre-processing
     if args.posterize:
         bits = args.posterize
@@ -981,11 +984,11 @@ def run_workflow(args):
             t0 = time.time()
             log(output_dir, f"--- Step 3/7: {STEP_NAMES[3]} ---")
 
-            # Skip model stylization entirely if strength is 0 — just use original pixels
+            # Skip model stylization entirely if strength is 0 — use pristine original pixels
             if args.model_strength == 0.0:
-                log(output_dir, "Model strength=0.0 — skipping model stylization, using original subject")
-                model_only = img_orig.copy()
-                model_stylized = img_orig.copy()
+                log(output_dir, "Model strength=0.0 — skipping model stylization, using pristine original subject")
+                model_only = img_pristine.copy()
+                model_stylized = img_pristine.copy()
 
                 # Stylize BG only
                 bg_stylized = tensor_stylize_with_retry(

@@ -258,8 +258,10 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
 
         raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
         log(output_dir, f"Gemini raw response ({len(raw)} chars): {raw[:500]}")
-        # Strip markdown fences
-        raw = re.sub(r"^```json\s*|```\s*$", "", raw, flags=re.MULTILINE).strip()
+        # Strip markdown fences line by line
+        lines = raw.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        raw = "\n".join(lines).strip()
         # Find outermost JSON object (handle nested braces)
         # First try parsing the whole thing
         try:

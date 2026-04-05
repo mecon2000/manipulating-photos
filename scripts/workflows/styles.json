@@ -97,5 +97,15 @@
   {"name": "Sacred Geometry", "prompt": "sacred geometry patterns, mandala, Fibonacci spirals, mystical mathematical beauty"},
   {"name": "Wet Street Reflection", "prompt": "rain-soaked streets, puddle reflections, city lights, moody urban night"},
   {"name": "Ivy & Stone", "prompt": "ivy-covered stone walls, English garden, weathered, romantic overgrowth, timeless"},
-  {"name": "Mercury Silver", "prompt": "liquid mercury aesthetic, mirror-like silver, reflective, futuristic, cold metallic"}
+  {"name": "Mercury Silver", "prompt": "liquid mercury aesthetic, mirror-like silver, reflective, futuristic, cold metallic"},
+  {"name": "Palette Knife", "prompt": "flat angular palette knife strokes, thick paint ridges, sharp edges between colors, textured surface"},
+  {"name": "Wet Oil Blend", "prompt": "wet-on-wet oil painting, colors bleeding into each other, smooth flowing transitions, soft blending"},
+  {"name": "Expressionist", "prompt": "wild expressive brushstrokes, De Kooning style, emotional, gestural, raw energy, abstract expressionism"},
+  {"name": "Fauvism", "prompt": "bold unnatural colors, loose wild brushwork, Matisse-inspired, vibrant, simplified forms"},
+  {"name": "Pointillism", "prompt": "tiny dots of pure color, Seurat-inspired, stippled, optical color mixing, Neo-Impressionism"},
+  {"name": "Thick Acrylic", "prompt": "heavy acrylic paint texture, squeezed from tube, three-dimensional surface, glossy ridges"},
+  {"name": "Dry Brush", "prompt": "dry brush technique, scratchy strokes, paint barely covering canvas, rough texture, raw"},
+  {"name": "Sgraffito", "prompt": "scratched through wet paint revealing layers beneath, etched lines, layered colors, textured"},
+  {"name": "Glazing Layers", "prompt": "translucent oil glazes, layered luminous color, depth through transparency, old master technique"},
+  {"name": "Action Painting", "prompt": "Pollock-inspired drips and splashes, paint thrown at canvas, chaotic energy, abstract expressionist"}
 ]

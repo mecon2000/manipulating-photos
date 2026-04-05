@@ -868,7 +868,30 @@ def run_workflow(args):
     # Keep a pristine copy for model compositing (before posterize/downscale)
     img_pristine = img_orig.copy()
 
-    # Pre-processing
+    # Pre-processing (order matters: directional blur → posterize → downscale)
+    if args.stroke_angle is not None:
+        length = args.stroke_length or 20
+        angle = args.stroke_angle
+        log(output_dir, f"Pre-process: directional blur angle={angle}° length={length}px (guides AI stroke direction)")
+        # Create a motion blur kernel at the given angle
+        import math
+        rad = math.radians(angle)
+        kernel_size = length
+        kernel = Image.new("L", (kernel_size, kernel_size), 0)
+        draw = ImageDraw.Draw(kernel)
+        cx, cy = kernel_size // 2, kernel_size // 2
+        dx = math.cos(rad) * kernel_size / 2
+        dy = -math.sin(rad) * kernel_size / 2  # negative because y-axis is flipped
+        draw.line([(cx - dx, cy - dy), (cx + dx, cy + dy)], fill=255, width=1)
+        # Normalize and apply as convolution
+        kernel_data = list(kernel.getdata())
+        k_sum = sum(kernel_data) or 1
+        kernel_normalized = [v / k_sum for v in kernel_data]
+        from PIL import ImageFilter as IF
+        motion_kernel = IF.Kernel((kernel_size, kernel_size), kernel_normalized, scale=1, offset=0)
+        img_orig = img_orig.filter(motion_kernel)
+        img_orig.save(os.path.join(output_dir, "0_directional_blur.jpg"), quality=95)
+
     if args.posterize:
         bits = args.posterize
         img_orig = ImageOps.posterize(img_orig, bits)
@@ -1395,6 +1418,10 @@ def main():
                         help="Pre-process: reduce image to N bits per channel (2=4 tones, 3=8 tones, 4=16 tones)")
     parser.add_argument("--downscale", type=int, default=None,
                         help="Pre-process: downscale long edge to N pixels before stylizing (e.g. 512, 768). Makes brush strokes appear larger. Result is upscaled back.")
+    parser.add_argument("--stroke-angle", type=int, default=None,
+                        help="Pre-process: apply directional blur at N degrees before stylizing (0=horizontal, 45=diagonal, 90=vertical). Guides AI to follow stroke direction.")
+    parser.add_argument("--stroke-length", type=int, default=20,
+                        help="Length of directional blur in pixels (default: 20). Larger = more pronounced direction.")
 
     # Strengths
     parser.add_argument("--bg-strength", type=float, default=0.6, help="Denoising strength for BG (default: 0.6)")

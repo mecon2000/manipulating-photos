@@ -1,0 +1,55 @@
+{
+  "_description": "Style-strength guide. Updated based on testing and user feedback.",
+  "_notes": [
+    "Color-shift styles (palette changes) work at lower strengths since they just recolor",
+    "Textural styles (surface changes) need higher strengths to actually transform surfaces",
+    "Full transformation styles need moderate strength to stay recognizable",
+    "Model strength should usually be lower than BG to preserve subject anatomy",
+    "For photos where you want to keep the model untouched, use model_strength 0.0-0.1",
+    "Mask dilation helps when body parts (hands, arms) are misclassified as background"
+  ],
+  "style_categories": {
+    "color_shift": {
+      "description": "Styles that primarily change the color palette",
+      "recommended_bg": [0.3, 0.45],
+      "recommended_model": [0.15, 0.25],
+      "styles": ["Cinematic Teal Orange", "Golden Hour Glow", "Desaturated Matte", "Cross Process", "Bleach Bypass", "Sepia Daguerreotype", "Kodachrome", "Infrared Dream"]
+    },
+    "textural": {
+      "description": "Styles that change surface quality and texture",
+      "recommended_bg": [0.45, 0.6],
+      "recommended_model": [0.2, 0.35],
+      "styles": ["Velvet Noir", "Oil Impasto", "Grunge Texture", "Charcoal Sketch", "Copper Patina", "Rust Industrial", "Brutalist Concrete"]
+    },
+    "painterly": {
+      "description": "Styles that transform into a painting look",
+      "recommended_bg": [0.35, 0.5],
+      "recommended_model": [0.15, 0.3],
+      "styles": ["Old Dutch Master", "Monet Impressionist", "Van Gogh Starry", "Renaissance Classical", "Rococo Pastel", "Fresco"]
+    },
+    "atmospheric": {
+      "description": "Styles that add mood/atmosphere (smoke, light, particles)",
+      "recommended_bg": [0.3, 0.45],
+      "recommended_model": [0.1, 0.2],
+      "styles": ["Smoke & Mist", "Moonlit Silver", "Misty Morning", "Ethereal Fairy", "Northern Lights", "Electric Storm"]
+    },
+    "ornamental": {
+      "description": "Styles that add decorative/metallic elements",
+      "recommended_bg": [0.3, 0.45],
+      "recommended_model": [0.2, 0.3],
+      "styles": ["Klimt Gold", "Art Deco Glamour", "Art Nouveau", "Stained Glass", "Sacred Geometry", "Pearl & Opal"]
+    },
+    "bold_transformation": {
+      "description": "Styles that heavily reimagine the image. Use with caution.",
+      "recommended_bg": [0.25, 0.4],
+      "recommended_model": [0.1, 0.2],
+      "styles": ["Baroque Chiaroscuro", "Surrealist Dali", "Pop Art", "Digital Glitch", "Cyberpunk Neon", "Soviet Constructivist", "Powder Pigment"]
+    },
+    "minimal_touch": {
+      "description": "For when you want to barely change the model and just transform the BG",
+      "recommended_bg": [0.4, 0.6],
+      "recommended_model": [0.0, 0.1],
+      "notes": "Good for photos where the model already looks perfect and you just want an artistic background"
+    }
+  }
+}

@@ -841,6 +841,14 @@ def run_workflow(args):
                 use_separate = False
                 mode = "whole-image (auto: mask failed)"
             else:
+                mask.save(os.path.join(output_dir, "1_mask_raw.png"))
+
+                # Expand mask to catch nearby body parts (hands, arms) misclassified as BG
+                if args.mask_expand > 0:
+                    k = args.mask_expand if args.mask_expand % 2 != 0 else args.mask_expand + 1
+                    mask = mask.filter(ImageFilter.MaxFilter(k))
+                    log(output_dir, f"Mask expanded by {args.mask_expand}px to catch nearby body parts")
+
                 mask.save(os.path.join(output_dir, "1_mask.png"))
 
                 # Check mask coverage — if subject fills most of the frame, separation is pointless
@@ -1279,6 +1287,7 @@ def main():
     # Tensor Art
     parser.add_argument("--tensor-model", default=MODEL_DEFAULT, help=f"Tensor Art model ID (default: {MODEL_DEFAULT})")
     parser.add_argument("--dilation", type=int, default=25, help="Mask dilation in pixels for LaMa (default: 25)")
+    parser.add_argument("--mask-expand", type=int, default=0, help="Expand foreground mask by N pixels to catch nearby body parts (default: 0)")
     parser.add_argument("--seed", type=int, default=None, help="Base seed (random if not set)")
     parser.add_argument("--max-retries", type=int, default=2, help="Max retries per stylization on quality failure (default: 2)")
     parser.add_argument("--auto-correct", action="store_true", default=False,

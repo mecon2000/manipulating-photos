@@ -1351,6 +1351,17 @@ def run_workflow(args):
                 if local_path:
                     log(output_dir, f"Local copy: {local_path}")
 
+        # Copy final image to a "finals" folder for easy browsing
+        if args.local_output_dir and final_path and os.path.exists(final_path):
+            finals_dir = os.path.join(args.local_output_dir, "finals")
+            os.makedirs(finals_dir, exist_ok=True)
+            finals_name = os.path.basename(output_dir) + ".jpg"
+            finals_dest = os.path.join(finals_dir, finals_name)
+            with open(final_path, "rb") as f_in:
+                with open(finals_dest, "wb") as f_out:
+                    f_out.write(f_in.read())
+            log(output_dir, f"Final copied to: {finals_dest}")
+
         timings[7] = time.time() - t0
         log(output_dir, f"Step 7 done ({timings[7]:.1f}s)")
 

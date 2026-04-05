@@ -920,6 +920,11 @@ def run_workflow(args):
                     mask = mask.filter(ImageFilter.MaxFilter(k))
                     log(output_dir, f"Mask expanded by {args.mask_expand}px to catch nearby body parts")
 
+                # Resize mask to match img_orig if it was downscaled
+                if mask.size != img_orig.size:
+                    log(output_dir, f"Resizing mask {mask.size} -> {img_orig.size} to match (pre-processed) image")
+                    mask = mask.resize(img_orig.size, Image.LANCZOS)
+
                 mask.save(os.path.join(output_dir, "1_mask.png"))
 
                 # Check mask coverage — if subject fills most of the frame, separation is pointless

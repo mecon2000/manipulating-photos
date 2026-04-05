@@ -42,7 +42,7 @@ import argparse
 import subprocess
 import threading
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -84,7 +84,7 @@ _log_lock = threading.Lock()
 # Logging
 # ---------------------------------------------------------------------------
 def log(output_dir, message, level="INFO"):
-    israel_time = (datetime.now(datetime.timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    israel_time = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{israel_time}] [{level}] {message}"
     print(formatted)
     with _log_lock:
@@ -223,7 +223,11 @@ def run_fal_rembg(image_path, output_dir):
     with open(image_path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    response = requests.post(url, headers=headers, json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=60)
+    try:
+        response = requests.post(url, headers=headers, json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
+    except requests.RequestException as e:
+        log(output_dir, f"rembg request failed: {e}", "ERROR")
+        return None
     if response.status_code != 200:
         log(output_dir, f"rembg failed ({response.status_code}): {response.text}", "ERROR")
         return None
@@ -275,7 +279,11 @@ def run_fal_lama(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
         "mask_image_url": f"data:image/jpeg;base64,{to_b64(mask_crop_send)}",
     }
 
-    response = requests.post("https://fal.run/fal-ai/lama", headers=headers, json=payload, timeout=120)
+    try:
+        response = requests.post("https://fal.run/fal-ai/lama", headers=headers, json=payload, timeout=180)
+    except requests.RequestException as e:
+        log(output_dir, f"LaMa request failed: {e}", "ERROR")
+        return None
     if response.status_code != 200:
         log(output_dir, f"LaMa API failed ({response.status_code}): {response.text}", "ERROR")
         return None
@@ -515,7 +523,7 @@ def run_workflow(args):
     base_seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
 
     # Output directory
-    israel_dt = datetime.now(datetime.timezone.utc) + timedelta(hours=3)
+    israel_dt = datetime.now(timezone.utc) + timedelta(hours=3)
     timestamp = israel_dt.strftime("%Y%m%d_%H%M%S")
     if args.local_output_dir:
         output_dir = args.local_output_dir
@@ -524,7 +532,12 @@ def run_workflow(args):
     os.makedirs(output_dir, exist_ok=True)
 
     # Save a copy of this script for reproducibility
-    shutil.copy(__file__, os.path.join(output_dir, f"workflow_script_{timestamp}.py"))
+    # Save a copy of this script for reproducibility (use raw copy to avoid permission issues on shared folders)
+    try:
+        with open(__file__, "r") as src, open(os.path.join(output_dir, f"workflow_script_{timestamp}.py"), "w") as dst:
+            dst.write(src.read())
+    except OSError:
+        log(output_dir, "Could not save script copy (permission issue, non-critical)", "WARN")
 
     # Log configuration
     mode = "separate" if args.separate else "whole-image"

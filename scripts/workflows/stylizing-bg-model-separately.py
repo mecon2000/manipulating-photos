@@ -459,15 +459,15 @@ def _get_tensor_key():
 
 
 def run_fal_rembg(image_path, output_dir):
-    """Step 1: Extract foreground mask using Fal.ai rembg."""
-    log(output_dir, "Extracting mask using Fal.ai rembg...")
-    url = "https://fal.run/fal-ai/rembg"
+    """Extract foreground mask using Fal.ai rembg (basic, fast)."""
+    log(output_dir, "Extracting mask using rembg...")
     headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
     with open(image_path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode("utf-8")
 
     try:
-        response = requests.post(url, headers=headers, json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
+        response = requests.post("https://fal.run/fal-ai/rembg", headers=headers,
+            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
     except requests.RequestException as e:
         log(output_dir, f"rembg request failed: {e}", "ERROR")
         return None
@@ -478,6 +478,42 @@ def run_fal_rembg(image_path, output_dir):
     mask_url = response.json()["image"]["url"]
     mask_img = Image.open(requests.get(mask_url, stream=True, timeout=30).raw).split()[3]
     return mask_img
+
+
+def run_fal_birefnet(image_path, output_dir):
+    """Extract foreground mask using BiRefNet (better edges, catches hands/limbs)."""
+    log(output_dir, "Extracting mask using BiRefNet (high quality)...")
+    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
+    with open(image_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    try:
+        response = requests.post("https://fal.run/fal-ai/birefnet", headers=headers,
+            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
+    except requests.RequestException as e:
+        log(output_dir, f"BiRefNet request failed: {e}", "ERROR")
+        return None
+    if response.status_code != 200:
+        log(output_dir, f"BiRefNet failed ({response.status_code}): {response.text}", "ERROR")
+        return None
+
+    data = response.json()
+    result_url = data["image"]["url"]
+    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw)
+    if result_img.mode == "RGBA":
+        return result_img.split()[3]
+    else:
+        return result_img.convert("L")
+
+
+def extract_mask(image_path, output_dir, model="birefnet"):
+    """Extract foreground mask using the specified model. Falls back on failure."""
+    if model == "birefnet":
+        mask = run_fal_birefnet(image_path, output_dir)
+        if mask is not None:
+            return mask
+        log(output_dir, "BiRefNet failed, falling back to rembg", "WARN")
+    return run_fal_rembg(image_path, output_dir)
 
 
 def run_fal_lama(image_pil, mask_pil, output_dir, dilation_px=25, margin_px=96):
@@ -842,7 +878,7 @@ def run_workflow(args):
         if up_to >= 1:
             t0 = time.time()
             log(output_dir, f"--- Step 1/7: {STEP_NAMES[1]} ---")
-            mask = run_fal_rembg(args.source, output_dir)
+            mask = extract_mask(args.source, output_dir, model=args.mask_model)
             timings[1] = time.time() - t0
             if mask is None:
                 log(output_dir, "Mask extraction failed — falling back to whole-image mode", "WARN")
@@ -1299,6 +1335,8 @@ def main():
     parser.add_argument("--tensor-model", default=MODEL_DEFAULT, help=f"Tensor Art model ID (default: {MODEL_DEFAULT})")
     parser.add_argument("--dilation", type=int, default=25, help="Mask dilation in pixels for LaMa (default: 25)")
     parser.add_argument("--mask-expand", type=int, default=0, help="Expand foreground mask by N pixels to catch nearby body parts (default: 0)")
+    parser.add_argument("--mask-model", choices=["birefnet", "rembg"], default="birefnet",
+                        help="Segmentation model for mask extraction (default: birefnet — better edges, catches hands)")
     parser.add_argument("--seed", type=int, default=None, help="Base seed (random if not set)")
     parser.add_argument("--max-retries", type=int, default=2, help="Max retries per stylization on quality failure (default: 2)")
     parser.add_argument("--auto-correct", action="store_true", default=False,

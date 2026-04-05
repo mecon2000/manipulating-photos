@@ -870,26 +870,27 @@ def run_workflow(args):
 
     # Pre-processing (order matters: directional blur → posterize → downscale)
     if args.stroke_angle is not None:
+        import math
+        from scipy.ndimage import convolve
         length = args.stroke_length or 20
         angle = args.stroke_angle
         log(output_dir, f"Pre-process: directional blur angle={angle}° length={length}px (guides AI stroke direction)")
-        # Create a motion blur kernel at the given angle
-        import math
+        # Create a motion blur kernel as a numpy array
+        kernel = np.zeros((length, length), dtype=np.float64)
+        cx, cy = length // 2, length // 2
         rad = math.radians(angle)
-        kernel_size = length
-        kernel = Image.new("L", (kernel_size, kernel_size), 0)
-        draw = ImageDraw.Draw(kernel)
-        cx, cy = kernel_size // 2, kernel_size // 2
-        dx = math.cos(rad) * kernel_size / 2
-        dy = -math.sin(rad) * kernel_size / 2  # negative because y-axis is flipped
-        draw.line([(cx - dx, cy - dy), (cx + dx, cy + dy)], fill=255, width=1)
-        # Normalize and apply as convolution
-        kernel_data = list(kernel.getdata())
-        k_sum = sum(kernel_data) or 1
-        kernel_normalized = [v / k_sum for v in kernel_data]
-        from PIL import ImageFilter as IF
-        motion_kernel = IF.Kernel((kernel_size, kernel_size), kernel_normalized, scale=1, offset=0)
-        img_orig = img_orig.filter(motion_kernel)
+        for i in range(length):
+            t = i - length // 2
+            x = int(cx + t * math.cos(rad))
+            y = int(cy - t * math.sin(rad))
+            if 0 <= x < length and 0 <= y < length:
+                kernel[y, x] = 1.0
+        kernel /= kernel.sum() or 1
+        # Apply to each channel
+        img_arr = np.array(img_orig, dtype=np.float64)
+        for c in range(3):
+            img_arr[:, :, c] = convolve(img_arr[:, :, c], kernel, mode='reflect')
+        img_orig = Image.fromarray(np.clip(img_arr, 0, 255).astype(np.uint8))
         img_orig.save(os.path.join(output_dir, "0_directional_blur.jpg"), quality=95)
 
     if args.posterize:

@@ -257,15 +257,25 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
             return None
 
         raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        log(output_dir, f"Gemini raw response: {raw[:300]}")
-        # Strip markdown fences, extract JSON object
+        log(output_dir, f"Gemini raw response ({len(raw)} chars): {raw[:500]}")
+        # Strip markdown fences
         raw = re.sub(r"^```json\s*|```\s*$", "", raw, flags=re.MULTILINE).strip()
-        # Find the JSON object even if there's text around it
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not json_match:
-            log(output_dir, "Gemini response contains no JSON object", "WARN")
-            return None
-        result = json.loads(json_match.group())
+        # Find outermost JSON object (handle nested braces)
+        # First try parsing the whole thing
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError:
+            # Find first { and last } to extract the JSON object
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                log(output_dir, f"Gemini response contains no JSON object: {raw[:200]}", "WARN")
+                return None
+            try:
+                result = json.loads(raw[start:end + 1])
+            except json.JSONDecodeError as e:
+                log(output_dir, f"Gemini JSON parse failed: {e}. Raw: {raw[start:start+300]}", "WARN")
+                return None
 
         score = result.get("score", "?")
         critique = result.get("critique", "")

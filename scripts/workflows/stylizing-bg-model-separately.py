@@ -43,6 +43,11 @@ import subprocess
 import threading
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+    ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
+except ImportError:
+    ISRAEL_TZ = timezone(timedelta(hours=3))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -84,7 +89,7 @@ _log_lock = threading.Lock()
 # Logging
 # ---------------------------------------------------------------------------
 def log(output_dir, message, level="INFO"):
-    israel_time = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    israel_time = datetime.now(ISRAEL_TZ).strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{israel_time}] [{level}] {message}"
     print(formatted)
     with _log_lock:
@@ -512,23 +517,33 @@ def run_workflow(args):
     photo_name = os.path.splitext(basename)[0]
     model_name = args.model_name
     if not model_name:
+        # Try to extract from filename pattern (e.g. BLD_Michaela_001.jpg)
         match = re.search(r"(Original_|BLD_|Rong_IMG_)(.*?)_(.*)\.(jpg|png|jpeg|JPG)", basename, re.IGNORECASE)
         if match:
             model_name = match.group(2).replace(" ", "_")
             photo_name = match.group(3).replace(" ", "_")
         else:
-            model_name = "Unknown"
+            # Try to detect from folder path (e.g. _photos/Michaela/Processed/file.jpg)
+            source_abs = os.path.abspath(args.source)
+            parts = source_abs.replace("\\", "/").split("/")
+            try:
+                photos_idx = parts.index("_photos")
+                if photos_idx + 1 < len(parts):
+                    model_name = parts[photos_idx + 1].replace(" ", "_")
+            except ValueError:
+                model_name = "Unknown"
 
     # Seed
     base_seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
 
-    # Output directory
-    israel_dt = datetime.now(timezone.utc) + timedelta(hours=3)
+    # Output directory — <model_name>_<original_filename>_<timestamp>
+    israel_dt = datetime.now(ISRAEL_TZ)
     timestamp = israel_dt.strftime("%Y%m%d_%H%M%S")
+    folder_name = f"{model_name}_{photo_name}_{timestamp}"
     if args.local_output_dir:
-        output_dir = args.local_output_dir
+        output_dir = os.path.join(args.local_output_dir, folder_name)
     else:
-        output_dir = f"outputs/stylize_{photo_name}_{timestamp}"
+        output_dir = os.path.join("outputs", folder_name)
     os.makedirs(output_dir, exist_ok=True)
 
     # Save a copy of this script for reproducibility

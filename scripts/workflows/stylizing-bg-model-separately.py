@@ -148,52 +148,139 @@ def ssim_simple(img_a, img_b, size=256):
     return float(ssim)
 
 
-def evaluate_with_claude_vision(img, output_dir):
-    """Optional aesthetic evaluation using Claude Vision API."""
+def evaluate_aesthetic(img, output_dir, original_img=None):
+    """Aesthetic evaluation using Gemini Vision (free tier) or Claude Vision (fallback).
+
+    Returns dict with:
+        score: int 1-10
+        critique: str
+        issues: list of issue codes for auto-correction
+        adjustments: dict of suggested parameter changes
+    """
+    # Try Gemini first (free), then Claude as fallback
+    result = _evaluate_with_gemini(img, output_dir, original_img)
+    if result is None:
+        result = _evaluate_with_claude(img, output_dir)
+    return result
+
+
+def _img_to_b64(img, max_size=1024):
+    """Downscale and encode image to base64 JPEG."""
+    img_resized = img.copy()
+    img_resized.thumbnail((max_size, max_size), Image.LANCZOS)
+    buf = BytesIO()
+    img_resized.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+_EVAL_PROMPT = """\
+You are an art director evaluating a stylized photograph for social media and fine art prints.
+
+Evaluate the image on these criteria:
+1. Overall aesthetic appeal (composition, color harmony, visual impact)
+2. Subject integrity (does the person look natural or distorted/warped?)
+3. Style coherence (is the artistic style consistent across the image?)
+4. Background-subject balance (does the background overwhelm the subject?)
+5. Technical quality (sharpness where needed, no artifacts, proper contrast)
+
+Respond ONLY with valid JSON (no markdown fences):
+{
+  "score": <int 1-10>,
+  "critique": "<2-3 sentences>",
+  "issues": [<zero or more from: "subject_distorted", "too_dark", "too_bright", "bg_overwhelms", "style_inconsistent", "low_contrast", "artifacts", "colors_clash", "subject_lost", "too_blurry">],
+  "adjustments": {
+    "bg_strength": <null or suggested float 0.1-0.9>,
+    "model_strength": <null or suggested float 0.1-0.9>,
+    "cfg_scale": <null or suggested float 3-15>,
+    "try_different_seed": <true/false>,
+    "suggestion": "<one sentence about what to change>"
+  }
+}"""
+
+
+def _evaluate_with_gemini(img, output_dir, original_img=None):
+    """Evaluate using Google Gemini Vision API (free tier)."""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        log(output_dir, "GOOGLE_API_KEY not set — skipping Gemini evaluation")
+        return None
+
+    try:
+        img_b64 = _img_to_b64(img)
+
+        parts = [
+            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+        ]
+        # If we have the original, send it too for comparison
+        if original_img is not None:
+            orig_b64 = _img_to_b64(original_img)
+            parts.insert(0, {"text": "ORIGINAL (before stylization):"})
+            parts.insert(1, {"inline_data": {"mime_type": "image/jpeg", "data": orig_b64}})
+            parts.append({"text": "STYLIZED (after processing):\n\n" + _EVAL_PROMPT})
+        else:
+            parts.append({"text": _EVAL_PROMPT})
+
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 500},
+        }
+
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
+            json=payload,
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            log(output_dir, f"Gemini API error ({response.status_code}): {response.text[:200]}", "WARN")
+            return None
+
+        raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        raw = re.sub(r"^```json\s*|```\s*$", "", raw, flags=re.MULTILINE).strip()
+        result = json.loads(raw)
+
+        score = result.get("score", "?")
+        critique = result.get("critique", "")
+        issues = result.get("issues", [])
+        log(output_dir, f"Gemini score: {score}/10 — {critique}")
+        if issues:
+            log(output_dir, f"Gemini issues: {', '.join(issues)}")
+        adjustments = result.get("adjustments", {})
+        if adjustments.get("suggestion"):
+            log(output_dir, f"Gemini suggests: {adjustments['suggestion']}")
+
+        return result
+    except Exception as e:
+        log(output_dir, f"Gemini evaluation failed: {e}", "WARN")
+        return None
+
+
+def _evaluate_with_claude(img, output_dir):
+    """Fallback: evaluate using Claude Vision API."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        log(output_dir, "ANTHROPIC_API_KEY not set — skipping Claude Vision evaluation")
         return None
 
     try:
         import anthropic
     except ImportError:
-        log(output_dir, "anthropic package not installed — skipping Claude Vision evaluation")
         return None
 
     try:
-        buf = BytesIO()
-        img_resized = img.copy()
-        # Downscale for API cost/speed — 1024px long edge is plenty for evaluation
-        img_resized.thumbnail((1024, 1024), Image.LANCZOS)
-        img_resized.save(buf, format="JPEG", quality=85)
-        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-
+        img_b64 = _img_to_b64(img)
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=300,
+            max_tokens=500,
             messages=[{
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "You are an art director evaluating a stylized photo for social media / fine art print. "
-                            "Rate it 1-10 on aesthetic appeal. Consider: composition, color harmony, "
-                            "style coherence, whether the subject looks natural vs. distorted, overall visual impact. "
-                            "Respond ONLY with valid JSON: {\"score\": <int 1-10>, \"critique\": \"<2-3 sentences>\"}"
-                        ),
-                    },
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}},
+                    {"type": "text", "text": _EVAL_PROMPT},
                 ],
             }],
         )
         raw = response.content[0].text.strip()
-        # Try to parse JSON, tolerating markdown fences
         raw = re.sub(r"^```json\s*|```\s*$", "", raw, flags=re.MULTILINE).strip()
         result = json.loads(raw)
         log(output_dir, f"Claude Vision score: {result.get('score')}/10 — {result.get('critique')}")
@@ -201,6 +288,58 @@ def evaluate_with_claude_vision(img, output_dir):
     except Exception as e:
         log(output_dir, f"Claude Vision evaluation failed: {e}", "WARN")
         return None
+
+
+def apply_adjustments(args, eval_result, output_dir):
+    """Parse evaluation result and return adjusted parameters for a retry.
+    Returns dict of adjusted params, or None if no adjustment needed."""
+    if not eval_result:
+        return None
+
+    score = eval_result.get("score", 10)
+    if score >= 7:
+        return None  # Good enough
+
+    adjustments = eval_result.get("adjustments", {})
+    issues = eval_result.get("issues", [])
+    changes = {}
+
+    # Map issues to parameter changes
+    if "bg_overwhelms" in issues or "subject_lost" in issues:
+        changes["bg_strength"] = max(0.2, args.bg_strength - 0.15)
+        changes["model_strength"] = min(0.7, args.model_strength + 0.1)
+
+    if "too_dark" in issues:
+        changes["cfg_scale"] = max(3.0, args.cfg_scale - 1.5)
+        changes["model_strength"] = max(0.2, args.model_strength - 0.1)
+
+    if "too_bright" in issues:
+        changes["cfg_scale"] = min(12.0, args.cfg_scale + 1.0)
+
+    if "subject_distorted" in issues:
+        changes["model_strength"] = max(0.15, args.model_strength - 0.15)
+
+    if "style_inconsistent" in issues or "colors_clash" in issues:
+        changes["cfg_scale"] = min(10.0, args.cfg_scale + 1.5)
+
+    if "low_contrast" in issues:
+        changes["bg_strength"] = min(0.8, args.bg_strength + 0.1)
+
+    # Use explicit adjustments from the evaluator if provided
+    if adjustments.get("bg_strength") is not None:
+        changes["bg_strength"] = adjustments["bg_strength"]
+    if adjustments.get("model_strength") is not None:
+        changes["model_strength"] = adjustments["model_strength"]
+    if adjustments.get("cfg_scale") is not None:
+        changes["cfg_scale"] = adjustments["cfg_scale"]
+    if adjustments.get("try_different_seed"):
+        changes["new_seed"] = True
+
+    if not changes:
+        return None
+
+    log(output_dir, f"Auto-correction adjustments: {changes}")
+    return changes
 
 
 # ---------------------------------------------------------------------------
@@ -751,17 +890,85 @@ def run_workflow(args):
         _print_summary(args, output_dir, mode, bg_style, model_style, base_seed, timings, quality_report, None, None)
         return
 
-    # --- Step 6: Quality evaluation ---
+    # --- Step 6: Quality evaluation + auto-correction ---
     if up_to >= 6 and final_img:
         t0 = time.time()
         log(output_dir, f"--- Step 6/7: {STEP_NAMES[6]} ---")
         qc_final = check_image_quality(final_img, "FINAL", output_dir)
         quality_report["final"] = qc_final
 
-        # Claude Vision aesthetic evaluation (optional)
-        vision_result = evaluate_with_claude_vision(final_img, output_dir)
-        if vision_result:
-            quality_report["claude_vision"] = vision_result
+        # Aesthetic evaluation (Gemini free tier, Claude fallback)
+        eval_result = evaluate_aesthetic(final_img, output_dir, original_img=img_orig)
+        if eval_result:
+            quality_report["aesthetic"] = eval_result
+
+            # Auto-correction: if score < 7 and --auto-correct, retry with adjusted params
+            if args.auto_correct and eval_result.get("score", 10) < 7:
+                changes = apply_adjustments(args, eval_result, output_dir)
+                if changes:
+                    log(output_dir, f"--- Auto-correction triggered (score={eval_result['score']}/10) ---")
+                    correction_seed = base_seed + 100 if changes.get("new_seed") else base_seed
+
+                    if args.separate and bg_clean is not None and mask is not None:
+                        adj_bg_str = changes.get("bg_strength", args.bg_strength)
+                        adj_model_str = changes.get("model_strength", args.model_strength)
+                        adj_cfg = changes.get("cfg_scale", args.cfg_scale)
+                        log(output_dir, f"Re-stylizing with bg_str={adj_bg_str}, model_str={adj_model_str}, cfg={adj_cfg}, seed={correction_seed}")
+
+                        # Reuse model_only from step 3 prep
+                        blurred_bg = img_orig.filter(ImageFilter.GaussianBlur(radius=30))
+                        blurred_bg = ImageEnhance.Color(blurred_bg).enhance(0.3)
+                        model_only_retry = blurred_bg.copy()
+                        model_only_retry.paste(img_orig, mask=mask)
+
+                        with ThreadPoolExecutor(max_workers=2) as pool:
+                            f_bg = pool.submit(tensor_stylize_with_retry,
+                                bg_clean, bg_prompt, adj_bg_str, adj_cfg,
+                                output_dir, "BG-retry", args.tensor_model, correction_seed, 1)
+                            f_model = pool.submit(tensor_stylize_with_retry,
+                                model_only_retry, model_prompt, adj_model_str, adj_cfg,
+                                output_dir, "Model-retry", args.tensor_model, correction_seed, 1)
+                            bg_retry = f_bg.result()
+                            model_retry = f_model.result()
+
+                        if bg_retry and model_retry:
+                            soft_mask = mask.resize(model_retry.size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(radius=3))
+                            retry_composite = Image.composite(model_retry, bg_retry, soft_mask)
+                            retry_path = os.path.join(output_dir, "6_auto_corrected.jpg")
+                            retry_composite.save(retry_path, "JPEG", quality=95)
+
+                            # Re-evaluate
+                            retry_eval = evaluate_aesthetic(retry_composite, output_dir, original_img=img_orig)
+                            retry_score = retry_eval.get("score", 0) if retry_eval else 0
+                            original_score = eval_result.get("score", 0)
+
+                            if retry_score > original_score:
+                                log(output_dir, f"Auto-correction improved score: {original_score} -> {retry_score}")
+                                final_img = retry_composite
+                                final_path = retry_path
+                                quality_report["aesthetic_retry"] = retry_eval
+                            else:
+                                log(output_dir, f"Auto-correction did not improve (was {original_score}, got {retry_score}) — keeping original", "WARN")
+                        else:
+                            log(output_dir, "Auto-correction stylization failed — keeping original", "WARN")
+
+                    elif not args.separate:
+                        adj_str = changes.get("bg_strength", args.bg_strength)
+                        adj_cfg = changes.get("cfg_scale", args.cfg_scale)
+                        log(output_dir, f"Re-stylizing whole image with strength={adj_str}, cfg={adj_cfg}, seed={correction_seed}")
+                        whole_prompt = f"A fine art {bg_style} photograph, {bg_prompt_add}, moody, cinematic, painterly textures, high detail"
+                        retry_img = tensor_stylize_with_retry(
+                            img_orig, whole_prompt, adj_str, adj_cfg,
+                            output_dir, "Whole-retry", args.tensor_model, correction_seed, 1)
+                        if retry_img:
+                            retry_path = os.path.join(output_dir, "6_auto_corrected.jpg")
+                            retry_img.save(retry_path, "JPEG", quality=95)
+                            retry_eval = evaluate_aesthetic(retry_img, output_dir, original_img=img_orig)
+                            retry_score = retry_eval.get("score", 0) if retry_eval else 0
+                            if retry_score > eval_result.get("score", 0):
+                                log(output_dir, f"Auto-correction improved score: {eval_result['score']} -> {retry_score}")
+                                final_img = retry_img
+                                final_path = retry_path
 
         timings[6] = time.time() - t0
         log(output_dir, f"Step 6 done ({timings[6]:.1f}s)")
@@ -826,9 +1033,14 @@ def _print_summary(args, output_dir, mode, bg_style, model_style, seed, timings,
         lines.append(f"    Final image:   brightness={qc['brightness']}  contrast={qc['contrast']}  entropy={qc['entropy']}  {status}")
     if "bg_ssim" in quality_report:
         lines.append(f"    BG SSIM:       {quality_report['bg_ssim']}")
-    if "claude_vision" in quality_report:
-        cv = quality_report["claude_vision"]
-        lines.append(f"    Claude Vision: {cv.get('score', '?')}/10 — {cv.get('critique', 'N/A')}")
+    if "aesthetic" in quality_report:
+        ae = quality_report["aesthetic"]
+        lines.append(f"    Aesthetic:     {ae.get('score', '?')}/10 — {ae.get('critique', 'N/A')}")
+        if ae.get("issues"):
+            lines.append(f"    Issues:        {', '.join(ae['issues'])}")
+    if "aesthetic_retry" in quality_report:
+        ar = quality_report["aesthetic_retry"]
+        lines.append(f"    After fix:     {ar.get('score', '?')}/10 — {ar.get('critique', 'N/A')}")
 
     lines.append("")
     lines.append("  Output:")
@@ -883,6 +1095,8 @@ def main():
     parser.add_argument("--dilation", type=int, default=25, help="Mask dilation in pixels for LaMa (default: 25)")
     parser.add_argument("--seed", type=int, default=None, help="Base seed (random if not set)")
     parser.add_argument("--max-retries", type=int, default=2, help="Max retries per stylization on quality failure (default: 2)")
+    parser.add_argument("--auto-correct", action="store_true", default=False,
+                        help="If aesthetic score < 7, auto-adjust params and retry stylization")
 
     # Output
     parser.add_argument("--output-to", choices=["gdrive", "local", "both"], default="both",

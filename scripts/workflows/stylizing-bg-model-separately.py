@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/rong/openclaw-venv/bin/python3
 """
 Stylized Photo Workflow — Separate BG/Model Stylization
 
@@ -20,6 +20,17 @@ Usage:
 
 import os
 import sys
+
+# Auto-load env vars from ~/sol/.env if not already set
+_env_file = os.path.expanduser("~/sol/.env")
+if os.path.isfile(_env_file):
+    with open(_env_file) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _val = _line.split("=", 1)
+                os.environ.setdefault(_key.strip(), _val.strip())
+
 import re
 import json
 import time
@@ -73,7 +84,7 @@ _log_lock = threading.Lock()
 # Logging
 # ---------------------------------------------------------------------------
 def log(output_dir, message, level="INFO"):
-    israel_time = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    israel_time = (datetime.now(datetime.timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{israel_time}] [{level}] {message}"
     print(formatted)
     with _log_lock:
@@ -504,7 +515,7 @@ def run_workflow(args):
     base_seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
 
     # Output directory
-    israel_dt = datetime.utcnow() + timedelta(hours=3)
+    israel_dt = datetime.now(datetime.timezone.utc) + timedelta(hours=3)
     timestamp = israel_dt.strftime("%Y%m%d_%H%M%S")
     if args.local_output_dir:
         output_dir = args.local_output_dir
@@ -590,10 +601,15 @@ def run_workflow(args):
             t0 = time.time()
             log(output_dir, f"--- Step 3/7: {STEP_NAMES[3]} ---")
 
-            # Prepare model-only image (subject on black BG)
-            model_only = Image.new("RGB", img_orig.size, (0, 0, 0))
+            # Prepare model-only image: subject on heavily blurred original BG
+            # (Using black BG causes Tensor Art to return near-black results.
+            #  A blurred BG gives the model enough tonal context to work with.)
+            blurred_bg = img_orig.filter(ImageFilter.GaussianBlur(radius=30))
+            # Desaturate the blurred BG so it doesn't compete with the subject
+            blurred_bg = ImageEnhance.Color(blurred_bg).enhance(0.3)
+            model_only = blurred_bg.copy()
             model_only.paste(img_orig, mask=mask)
-            model_only.save(os.path.join(output_dir, "3_model_only.jpg"), quality=95)
+            model_only.save(os.path.join(output_dir, "3_model_input.jpg"), quality=95)
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 future_bg = pool.submit(

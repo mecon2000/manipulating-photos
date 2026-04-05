@@ -747,8 +747,9 @@ def run_workflow(args):
     bg_prompt_add = args.prompt_add or build_prompt_addition(bg_style)
     model_prompt_add = args.prompt_add or build_prompt_addition(model_style)
 
-    bg_prompt = f"An abstract fine art {bg_style} background, {bg_prompt_add}, moody, cinematic, painterly textures"
-    model_prompt = f"A fine art portrait, {model_style} style, {model_prompt_add}, high detail, realistic skin texture"
+    extra = f", {args.prompt_extra}" if args.prompt_extra else ""
+    bg_prompt = f"An abstract fine art {bg_style} background, {bg_prompt_add}, moody, cinematic, painterly textures{extra}"
+    model_prompt = f"A fine art portrait, {model_style} style, {model_prompt_add}, high detail, realistic skin texture{extra}"
 
     # Resolve model/photo names from filename
     basename = os.path.basename(args.source)
@@ -812,6 +813,13 @@ def run_workflow(args):
 
     img_orig = Image.open(args.source).convert("RGB")
     img_orig.save(os.path.join(output_dir, "0_original.jpg"), quality=95)
+
+    # Pre-processing
+    if args.posterize:
+        bits = args.posterize  # e.g. 3 = 8 tones per channel, 2 = 4 tones
+        img_orig = ImageOps.posterize(img_orig, bits)
+        log(output_dir, f"Pre-process: posterized to {bits} bits ({2**bits} tones per channel)")
+        img_orig.save(os.path.join(output_dir, "0_preprocessed.jpg"), quality=95)
 
     timings = {}
     up_to = args.up_to_step or 7
@@ -1268,6 +1276,9 @@ def main():
     parser.add_argument("--bg-style", default=None, help="Override style for background only")
     parser.add_argument("--model-style", default=None, help="Override style for model/subject only")
     parser.add_argument("--prompt-add", default="", help="Extra prompt text (overrides auto style-based addition)")
+    parser.add_argument("--prompt-extra", default="", help="Additional prompt text appended to the style prompt (e.g. 'long brush strokes, bold palette knife')")
+    parser.add_argument("--posterize", type=int, default=None, choices=[2, 3, 4, 5],
+                        help="Pre-process: reduce image to N bits per channel (2=4 tones, 3=8 tones, 4=16 tones)")
 
     # Strengths
     parser.add_argument("--bg-strength", type=float, default=0.6, help="Denoising strength for BG (default: 0.6)")

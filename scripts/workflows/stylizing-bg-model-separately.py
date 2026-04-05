@@ -594,13 +594,21 @@ def upload_to_tensor(image_pil, output_dir):
     image_pil.save(buf, format="PNG")
     headers = {"Authorization": f"Bearer {_get_tensor_key()}", "Content-Type": "application/json"}
 
-    res = requests.post(f"{TENSOR_BASE_URL}/resource/image", json={}, headers=headers, timeout=30)
+    try:
+        res = requests.post(f"{TENSOR_BASE_URL}/resource/image", json={}, headers=headers, timeout=30)
+    except requests.RequestException as e:
+        log(output_dir, f"Tensor upload init failed: {e}", "ERROR")
+        return None, w, h
     if res.status_code != 200:
         log(output_dir, f"Tensor upload init failed ({res.status_code}): {res.text}", "ERROR")
         return None, w, h
     data = res.json()
 
-    put_resp = requests.put(data["putUrl"], data=buf.getvalue(), headers=data["headers"], timeout=60)
+    try:
+        put_resp = requests.put(data["putUrl"], data=buf.getvalue(), headers=data["headers"], timeout=120)
+    except requests.RequestException as e:
+        log(output_dir, f"Tensor upload PUT failed: {e}", "ERROR")
+        return None, w, h
     if put_resp.status_code not in (200, 201):
         log(output_dir, f"Tensor upload PUT failed ({put_resp.status_code})", "ERROR")
         return None, w, h
@@ -942,26 +950,38 @@ def run_workflow(args):
             t0 = time.time()
             log(output_dir, f"--- Step 3/7: {STEP_NAMES[3]} ---")
 
-            # Prepare model-only image: subject on heavily blurred original BG
-            blurred_bg = img_orig.filter(ImageFilter.GaussianBlur(radius=30))
-            blurred_bg = ImageEnhance.Color(blurred_bg).enhance(0.3)
-            model_only = blurred_bg.copy()
-            model_only.paste(img_orig, mask=mask)
-            model_only.save(os.path.join(output_dir, "3_model_input.jpg"), quality=95)
+            # Skip model stylization entirely if strength is 0 — just use original pixels
+            if args.model_strength == 0.0:
+                log(output_dir, "Model strength=0.0 — skipping model stylization, using original subject")
+                model_only = img_orig.copy()
+                model_stylized = img_orig.copy()
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                future_bg = pool.submit(
-                    tensor_stylize_with_retry,
+                # Stylize BG only
+                bg_stylized = tensor_stylize_with_retry(
                     bg_clean, bg_prompt, args.bg_strength, args.cfg_scale,
                     output_dir, "BG", args.tensor_model, base_seed, args.max_retries,
                 )
-                future_model = pool.submit(
-                    tensor_stylize_with_retry,
-                    model_only, model_prompt, args.model_strength, args.cfg_scale,
-                    output_dir, "Model", args.tensor_model, base_seed, args.max_retries,
-                )
-                bg_stylized = future_bg.result()
-                model_stylized = future_model.result()
+            else:
+                # Prepare model-only image: subject on heavily blurred original BG
+                blurred_bg = img_orig.filter(ImageFilter.GaussianBlur(radius=30))
+                blurred_bg = ImageEnhance.Color(blurred_bg).enhance(0.3)
+                model_only = blurred_bg.copy()
+                model_only.paste(img_orig, mask=mask)
+                model_only.save(os.path.join(output_dir, "3_model_input.jpg"), quality=95)
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    future_bg = pool.submit(
+                        tensor_stylize_with_retry,
+                        bg_clean, bg_prompt, args.bg_strength, args.cfg_scale,
+                        output_dir, "BG", args.tensor_model, base_seed, args.max_retries,
+                    )
+                    future_model = pool.submit(
+                        tensor_stylize_with_retry,
+                        model_only, model_prompt, args.model_strength, args.cfg_scale,
+                        output_dir, "Model", args.tensor_model, base_seed, args.max_retries,
+                    )
+                    bg_stylized = future_bg.result()
+                    model_stylized = future_model.result()
 
             timings[3] = time.time() - t0
 

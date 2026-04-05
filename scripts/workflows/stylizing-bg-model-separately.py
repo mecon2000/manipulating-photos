@@ -718,7 +718,11 @@ def run_fal_faceswap(source_path, target_path, output_dir):
         "base_image_url": f"data:image/jpeg;base64,{target_b64}",
         "swap_image_url": f"data:image/jpeg;base64,{source_b64}",
     }
-    response = requests.post("https://fal.run/fal-ai/face-swap", headers=headers, json=payload, timeout=120)
+    try:
+        response = requests.post("https://fal.run/fal-ai/face-swap", headers=headers, json=payload, timeout=180)
+    except requests.RequestException as e:
+        log(output_dir, f"Face swap request failed: {e}", "ERROR")
+        return None
     if response.status_code == 200:
         img_url = response.json().get("image", {}).get("url")
         if img_url:

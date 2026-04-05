@@ -175,24 +175,35 @@ def _img_to_b64(img, max_size=1024):
 
 _EVAL_PROMPT = """\
 You are an art director evaluating a stylized photograph for social media and fine art prints.
+If you see TWO images, the first is the ORIGINAL and the second is the STYLIZED result — compare them.
 
-Evaluate the image on these criteria:
+Evaluate the STYLIZED image on these criteria:
 1. Overall aesthetic appeal (composition, color harmony, visual impact)
-2. Subject integrity (does the person look natural or distorted/warped?)
-3. Style coherence (is the artistic style consistent across the image?)
-4. Background-subject balance (does the background overwhelm the subject?)
-5. Technical quality (sharpness where needed, no artifacts, proper contrast)
+2. Subject integrity: does the person's face/body look anatomically correct? Look for warped faces, \
+extra/missing fingers, melted features, backwards-facing heads, unnatural skin
+3. Style coherence: is the artistic style consistent across the whole image, or do BG and subject clash?
+4. Background quality: is there a visible "hole" or silhouette artifact where the subject was removed? \
+Does the BG look like it belongs with the subject?
+5. Background-subject balance: does the BG overwhelm or overpower the subject?
+6. Face orientation: is the subject's face clearly visible and facing the camera, or turned away/profile?
+7. Brightness/contrast: is the subject too dark, washed out, or lacking definition?
 
 Respond ONLY with valid JSON (no markdown fences):
 {
   "score": <int 1-10>,
   "critique": "<2-3 sentences>",
-  "issues": [<zero or more from: "subject_distorted", "too_dark", "too_bright", "bg_overwhelms", "style_inconsistent", "low_contrast", "artifacts", "colors_clash", "subject_lost", "too_blurry">],
+  "issues": [<zero or more from: "subject_distorted", "face_warped", "too_dark", "too_bright", \
+"bg_overwhelms", "bg_has_hole", "bg_unrelated", "style_inconsistent", "low_contrast", "artifacts", \
+"colors_clash", "subject_lost", "too_blurry", "face_sideways", "model_too_dark", "anatomy_wrong">],
   "adjustments": {
     "bg_strength": <null or suggested float 0.1-0.9>,
     "model_strength": <null or suggested float 0.1-0.9>,
     "cfg_scale": <null or suggested float 3-15>,
     "try_different_seed": <true/false>,
+    "skip_faceswap": <true if face is sideways or distorted>,
+    "try_different_style": <true if style fundamentally doesn't work>,
+    "brighten_model": <true if subject is too dark after stylization>,
+    "increase_lama_dilation": <true if BG has a visible hole/silhouette>,
     "suggestion": "<one sentence about what to change>"
   }
 }"""
@@ -291,8 +302,14 @@ def _evaluate_with_claude(img, output_dir):
 
 
 def apply_adjustments(args, eval_result, output_dir):
-    """Parse evaluation result and return adjusted parameters for a retry.
-    Returns dict of adjusted params, or None if no adjustment needed."""
+    """Parse evaluation result and return correction strategy.
+
+    Returns dict with:
+        - Numeric param adjustments (bg_strength, model_strength, cfg_scale)
+        - Strategy flags (skip_faceswap, try_different_style, brighten_model,
+          increase_lama_dilation, new_seed)
+    Or None if no correction needed.
+    """
     if not eval_result:
         return None
 
@@ -304,28 +321,39 @@ def apply_adjustments(args, eval_result, output_dir):
     issues = eval_result.get("issues", [])
     changes = {}
 
-    # Map issues to parameter changes
+    # --- Strategy: BG has hole/silhouette artifact → re-run LaMa with bigger dilation ---
+    if "bg_has_hole" in issues or adjustments.get("increase_lama_dilation"):
+        changes["increase_lama_dilation"] = True
+
+    # --- Strategy: BG completely unrelated or style doesn't work → try different style ---
+    if "bg_unrelated" in issues or "style_inconsistent" in issues or adjustments.get("try_different_style"):
+        changes["try_different_style"] = True
+
+    # --- Strategy: face issues → skip face swap + lower model strength ---
+    if "face_warped" in issues or "face_sideways" in issues or adjustments.get("skip_faceswap"):
+        changes["skip_faceswap"] = True
+    if "subject_distorted" in issues or "face_warped" in issues or "anatomy_wrong" in issues:
+        changes["model_strength"] = max(0.15, args.model_strength - 0.15)
+
+    # --- Strategy: model too dark → brighten subject post-stylization ---
+    if "model_too_dark" in issues or "too_dark" in issues or adjustments.get("brighten_model"):
+        changes["brighten_model"] = True
+
+    # --- Numeric adjustments ---
     if "bg_overwhelms" in issues or "subject_lost" in issues:
         changes["bg_strength"] = max(0.2, args.bg_strength - 0.15)
         changes["model_strength"] = min(0.7, args.model_strength + 0.1)
 
-    if "too_dark" in issues:
-        changes["cfg_scale"] = max(3.0, args.cfg_scale - 1.5)
-        changes["model_strength"] = max(0.2, args.model_strength - 0.1)
-
     if "too_bright" in issues:
         changes["cfg_scale"] = min(12.0, args.cfg_scale + 1.0)
 
-    if "subject_distorted" in issues:
-        changes["model_strength"] = max(0.15, args.model_strength - 0.15)
-
-    if "style_inconsistent" in issues or "colors_clash" in issues:
-        changes["cfg_scale"] = min(10.0, args.cfg_scale + 1.5)
+    if "colors_clash" in issues:
+        changes["color_match"] = True  # post-process: match model colors to BG
 
     if "low_contrast" in issues:
         changes["bg_strength"] = min(0.8, args.bg_strength + 0.1)
 
-    # Use explicit adjustments from the evaluator if provided
+    # Use explicit numeric adjustments from the evaluator if provided
     if adjustments.get("bg_strength") is not None:
         changes["bg_strength"] = adjustments["bg_strength"]
     if adjustments.get("model_strength") is not None:
@@ -338,8 +366,50 @@ def apply_adjustments(args, eval_result, output_dir):
     if not changes:
         return None
 
-    log(output_dir, f"Auto-correction adjustments: {changes}")
+    log(output_dir, f"Auto-correction strategy: {changes}")
     return changes
+
+
+def pick_alternative_style(current_style):
+    """Pick a random different style from the available styles."""
+    available = list(STYLE_PROMPTS.keys())
+    # Filter out current style
+    alternatives = [s for s in available if s.lower() not in current_style.lower()]
+    if not alternatives:
+        return current_style
+    return random.choice(alternatives)
+
+
+def brighten_subject(img, mask, factor=1.3):
+    """Brighten the subject area (within mask) without touching the BG."""
+    brightened = ImageEnhance.Brightness(img).enhance(factor)
+    # Also boost contrast slightly to avoid washing out
+    brightened = ImageEnhance.Contrast(brightened).enhance(1.05)
+    # Blend: only apply brightening within the mask area
+    soft_mask = mask.convert("L").filter(ImageFilter.GaussianBlur(radius=5))
+    result = img.copy()
+    result.paste(brightened, mask=soft_mask)
+    return result
+
+
+def color_match_to_bg(model_img, bg_img, mask):
+    """Shift model's color palette toward the BG's palette for coherence."""
+    # Get average color of BG (outside mask area)
+    bg_stat = ImageStat.Stat(bg_img, mask=ImageOps.invert(mask.convert("L")))
+    bg_mean = bg_stat.mean  # [R, G, B]
+
+    # Get average color of model (inside mask area)
+    model_stat = ImageStat.Stat(model_img, mask=mask.convert("L"))
+    model_mean = model_stat.mean
+
+    # Compute per-channel shift (blend 30% toward BG palette)
+    blend = 0.3
+    result = model_img.copy()
+    r, g, b = result.split()
+    r = r.point(lambda p: int(p + blend * (bg_mean[0] - model_mean[0])))
+    g = g.point(lambda p: int(p + blend * (bg_mean[1] - model_mean[1])))
+    b = b.point(lambda p: int(p + blend * (bg_mean[2] - model_mean[2])))
+    return Image.merge("RGB", (r, g, b))
 
 
 # ---------------------------------------------------------------------------
@@ -902,73 +972,140 @@ def run_workflow(args):
         if eval_result:
             quality_report["aesthetic"] = eval_result
 
-            # Auto-correction: if score < 7 and --auto-correct, retry with adjusted params
-            if args.auto_correct and eval_result.get("score", 10) < 7:
-                changes = apply_adjustments(args, eval_result, output_dir)
-                if changes:
-                    log(output_dir, f"--- Auto-correction triggered (score={eval_result['score']}/10) ---")
-                    correction_seed = base_seed + 100 if changes.get("new_seed") else base_seed
+            # Auto-correction loop: retry with adjusted strategies if score < 7
+            max_corrections = args.max_corrections
+            correction_round = 0
+            current_eval = eval_result
+            current_final = final_img
+            current_path = final_path
 
-                    if args.separate and bg_clean is not None and mask is not None:
-                        adj_bg_str = changes.get("bg_strength", args.bg_strength)
-                        adj_model_str = changes.get("model_strength", args.model_strength)
-                        adj_cfg = changes.get("cfg_scale", args.cfg_scale)
-                        log(output_dir, f"Re-stylizing with bg_str={adj_bg_str}, model_str={adj_model_str}, cfg={adj_cfg}, seed={correction_seed}")
+            while (args.auto_correct
+                   and correction_round < max_corrections
+                   and current_eval
+                   and current_eval.get("score", 10) < 7):
 
-                        # Reuse model_only from step 3 prep
-                        blurred_bg = img_orig.filter(ImageFilter.GaussianBlur(radius=30))
-                        blurred_bg = ImageEnhance.Color(blurred_bg).enhance(0.3)
-                        model_only_retry = blurred_bg.copy()
-                        model_only_retry.paste(img_orig, mask=mask)
+                correction_round += 1
+                changes = apply_adjustments(args, current_eval, output_dir)
+                if not changes:
+                    log(output_dir, "No actionable corrections identified — stopping")
+                    break
 
-                        with ThreadPoolExecutor(max_workers=2) as pool:
-                            f_bg = pool.submit(tensor_stylize_with_retry,
-                                bg_clean, bg_prompt, adj_bg_str, adj_cfg,
-                                output_dir, "BG-retry", args.tensor_model, correction_seed, 1)
-                            f_model = pool.submit(tensor_stylize_with_retry,
-                                model_only_retry, model_prompt, adj_model_str, adj_cfg,
-                                output_dir, "Model-retry", args.tensor_model, correction_seed, 1)
-                            bg_retry = f_bg.result()
-                            model_retry = f_model.result()
+                log(output_dir, f"--- Auto-correction round {correction_round}/{max_corrections} (score={current_eval['score']}/10) ---")
+                correction_seed = base_seed + (100 * correction_round) if changes.get("new_seed") else base_seed + correction_round
 
-                        if bg_retry and model_retry:
-                            soft_mask = mask.resize(model_retry.size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(radius=3))
-                            retry_composite = Image.composite(model_retry, bg_retry, soft_mask)
-                            retry_path = os.path.join(output_dir, "6_auto_corrected.jpg")
-                            retry_composite.save(retry_path, "JPEG", quality=95)
+                # --- Strategy: re-run LaMa with bigger dilation ---
+                retry_bg_clean = bg_clean
+                if changes.get("increase_lama_dilation") and args.separate and mask is not None:
+                    new_dilation = args.dilation + 20 * correction_round
+                    log(output_dir, f"Re-running LaMa with dilation={new_dilation}px")
+                    retry_bg_clean = run_fal_lama(img_orig, mask, output_dir, dilation_px=new_dilation)
+                    if retry_bg_clean is None:
+                        retry_bg_clean = bg_clean
+                    else:
+                        retry_bg_clean.save(os.path.join(output_dir, f"6_bg_clean_retry{correction_round}.jpg"), quality=95)
 
-                            # Re-evaluate
-                            retry_eval = evaluate_aesthetic(retry_composite, output_dir, original_img=img_orig)
-                            retry_score = retry_eval.get("score", 0) if retry_eval else 0
-                            original_score = eval_result.get("score", 0)
+                # --- Strategy: try a different style ---
+                retry_bg_style = bg_style
+                retry_model_style = model_style
+                retry_bg_prompt = bg_prompt
+                retry_model_prompt = model_prompt
+                if changes.get("try_different_style"):
+                    retry_bg_style = pick_alternative_style(bg_style)
+                    retry_model_style = retry_bg_style  # keep consistent
+                    retry_bg_add = build_prompt_addition(retry_bg_style)
+                    retry_model_add = build_prompt_addition(retry_model_style)
+                    retry_bg_prompt = f"An abstract fine art {retry_bg_style} background, {retry_bg_add}, moody, cinematic, painterly textures"
+                    retry_model_prompt = f"A fine art portrait, {retry_model_style} style, {retry_model_add}, high detail, realistic skin texture"
+                    log(output_dir, f"Switching style: {bg_style} -> {retry_bg_style}")
 
-                            if retry_score > original_score:
-                                log(output_dir, f"Auto-correction improved score: {original_score} -> {retry_score}")
-                                final_img = retry_composite
-                                final_path = retry_path
-                                quality_report["aesthetic_retry"] = retry_eval
-                            else:
-                                log(output_dir, f"Auto-correction did not improve (was {original_score}, got {retry_score}) — keeping original", "WARN")
-                        else:
-                            log(output_dir, "Auto-correction stylization failed — keeping original", "WARN")
+                adj_bg_str = changes.get("bg_strength", args.bg_strength)
+                adj_model_str = changes.get("model_strength", args.model_strength)
+                adj_cfg = changes.get("cfg_scale", args.cfg_scale)
 
-                    elif not args.separate:
-                        adj_str = changes.get("bg_strength", args.bg_strength)
-                        adj_cfg = changes.get("cfg_scale", args.cfg_scale)
-                        log(output_dir, f"Re-stylizing whole image with strength={adj_str}, cfg={adj_cfg}, seed={correction_seed}")
-                        whole_prompt = f"A fine art {bg_style} photograph, {bg_prompt_add}, moody, cinematic, painterly textures, high detail"
-                        retry_img = tensor_stylize_with_retry(
-                            img_orig, whole_prompt, adj_str, adj_cfg,
-                            output_dir, "Whole-retry", args.tensor_model, correction_seed, 1)
-                        if retry_img:
-                            retry_path = os.path.join(output_dir, "6_auto_corrected.jpg")
-                            retry_img.save(retry_path, "JPEG", quality=95)
-                            retry_eval = evaluate_aesthetic(retry_img, output_dir, original_img=img_orig)
-                            retry_score = retry_eval.get("score", 0) if retry_eval else 0
-                            if retry_score > eval_result.get("score", 0):
-                                log(output_dir, f"Auto-correction improved score: {eval_result['score']} -> {retry_score}")
-                                final_img = retry_img
-                                final_path = retry_path
+                if args.separate and retry_bg_clean is not None and mask is not None:
+                    log(output_dir, f"Re-stylizing with bg_str={adj_bg_str}, model_str={adj_model_str}, cfg={adj_cfg}")
+
+                    blurred_bg = img_orig.filter(ImageFilter.GaussianBlur(radius=30))
+                    blurred_bg = ImageEnhance.Color(blurred_bg).enhance(0.3)
+                    model_only_retry = blurred_bg.copy()
+                    model_only_retry.paste(img_orig, mask=mask)
+
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        f_bg = pool.submit(tensor_stylize_with_retry,
+                            retry_bg_clean, retry_bg_prompt, adj_bg_str, adj_cfg,
+                            output_dir, f"BG-r{correction_round}", args.tensor_model, correction_seed, 1)
+                        f_model = pool.submit(tensor_stylize_with_retry,
+                            model_only_retry, retry_model_prompt, adj_model_str, adj_cfg,
+                            output_dir, f"Model-r{correction_round}", args.tensor_model, correction_seed, 1)
+                        bg_retry = f_bg.result()
+                        model_retry = f_model.result()
+
+                    if not bg_retry or not model_retry:
+                        log(output_dir, "Correction stylization failed — stopping", "WARN")
+                        break
+
+                    # --- Post-processing strategies ---
+                    if changes.get("brighten_model"):
+                        log(output_dir, "Brightening subject")
+                        model_retry = brighten_subject(model_retry,
+                            mask.resize(model_retry.size, Image.LANCZOS))
+
+                    if changes.get("color_match"):
+                        log(output_dir, "Color-matching model to BG")
+                        model_retry = color_match_to_bg(model_retry, bg_retry,
+                            mask.resize(model_retry.size, Image.LANCZOS))
+
+                    soft_mask = mask.resize(model_retry.size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(radius=3))
+                    retry_composite = Image.composite(model_retry, bg_retry, soft_mask)
+
+                    # --- Strategy: skip face swap for this round ---
+                    if not changes.get("skip_faceswap") and args.faceswap:
+                        retry_comp_path = os.path.join(output_dir, f"6_corrected_r{correction_round}_pre_swap.jpg")
+                        retry_composite.save(retry_comp_path, "JPEG", quality=95)
+                        swapped = run_fal_faceswap(args.source, retry_comp_path, output_dir)
+                        if swapped and check_image_quality(swapped, f"faceswap-r{correction_round}", output_dir)["ok"]:
+                            retry_composite = swapped
+                    elif changes.get("skip_faceswap"):
+                        log(output_dir, "Skipping face swap per correction strategy")
+
+                    retry_path = os.path.join(output_dir, f"6_corrected_r{correction_round}.jpg")
+                    retry_composite.save(retry_path, "JPEG", quality=95)
+
+                elif not args.separate:
+                    retry_prompt = f"A fine art {retry_bg_style} photograph, {build_prompt_addition(retry_bg_style)}, moody, cinematic, painterly textures, high detail"
+                    retry_img = tensor_stylize_with_retry(
+                        img_orig, retry_prompt, adj_bg_str, adj_cfg,
+                        output_dir, f"Whole-r{correction_round}", args.tensor_model, correction_seed, 1)
+                    if not retry_img:
+                        log(output_dir, "Correction stylization failed — stopping", "WARN")
+                        break
+                    if changes.get("brighten_model"):
+                        retry_img = ImageEnhance.Brightness(retry_img).enhance(1.3)
+                    retry_composite = retry_img
+                    retry_path = os.path.join(output_dir, f"6_corrected_r{correction_round}.jpg")
+                    retry_composite.save(retry_path, "JPEG", quality=95)
+                else:
+                    break
+
+                # Re-evaluate the corrected version
+                retry_eval = evaluate_aesthetic(retry_composite, output_dir, original_img=img_orig)
+                retry_score = retry_eval.get("score", 0) if retry_eval else 0
+                original_score = current_eval.get("score", 0)
+
+                if retry_score > original_score:
+                    log(output_dir, f"Correction round {correction_round} improved: {original_score} -> {retry_score}")
+                    current_final = retry_composite
+                    current_path = retry_path
+                    current_eval = retry_eval
+                    quality_report[f"aesthetic_r{correction_round}"] = retry_eval
+                else:
+                    log(output_dir, f"Correction round {correction_round} did not improve ({original_score} -> {retry_score}) — stopping", "WARN")
+                    break
+
+            # Use best result
+            if current_final is not final_img:
+                final_img = current_final
+                final_path = current_path
 
         timings[6] = time.time() - t0
         log(output_dir, f"Step 6 done ({timings[6]:.1f}s)")
@@ -1097,6 +1234,8 @@ def main():
     parser.add_argument("--max-retries", type=int, default=2, help="Max retries per stylization on quality failure (default: 2)")
     parser.add_argument("--auto-correct", action="store_true", default=False,
                         help="If aesthetic score < 7, auto-adjust params and retry stylization")
+    parser.add_argument("--max-corrections", type=int, default=2,
+                        help="Max auto-correction rounds (default: 2)")
 
     # Output
     parser.add_argument("--output-to", choices=["gdrive", "local", "both"], default="both",

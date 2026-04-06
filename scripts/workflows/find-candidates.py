@@ -23,6 +23,8 @@ import random
 import shutil
 import argparse
 from datetime import datetime, timedelta, timezone
+from PIL import Image
+from PIL.ExifTags import TAGS
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -69,20 +71,38 @@ def find_all_models(photos_dir):
     return models
 
 
+def get_focal_length(photo_path):
+    """Read focal length from EXIF data. Returns float (mm) or None."""
+    try:
+        img = Image.open(photo_path)
+        exif = img._getexif()
+        img.close()
+        if exif:
+            for tag_id, val in exif.items():
+                if TAGS.get(tag_id) == "FocalLength":
+                    return float(val)
+    except Exception:
+        pass
+    return None
+
+
 def get_photo_info(photo_path, model_name):
     """Get metadata for a photo."""
     stat = os.stat(photo_path)
+    focal = get_focal_length(photo_path)
     return {
         "model": model_name,
         "filename": os.path.basename(photo_path),
         "path": photo_path,
         "size_kb": round(stat.st_size / 1024),
+        "focal_mm": focal,
         "is_processed": "Processed" in photo_path or "processed" in photo_path,
     }
 
 
 def pick_candidates(photos_dir, count=5, include_models=None, exclude_models=None,
-                     min_size=0, prefer_full_body=False, per_model=1):
+                     min_size=0, prefer_full_body=False, per_model=1,
+                     max_focal=None, min_focal=None):
     """Pick candidate photos from different models."""
     all_models = find_all_models(photos_dir)
 
@@ -122,6 +142,20 @@ def pick_candidates(photos_dir, count=5, include_models=None, exclude_models=Non
         if min_size > 0:
             photos = [f for f in photos
                       if os.path.getsize(os.path.join(photo_dir, f)) >= min_size]
+
+        # Filter by focal length
+        if max_focal is not None or min_focal is not None:
+            filtered = []
+            for f in photos:
+                focal = get_focal_length(os.path.join(photo_dir, f))
+                if focal is None:
+                    continue  # Skip photos without EXIF focal length
+                if max_focal is not None and focal > max_focal:
+                    continue
+                if min_focal is not None and focal < min_focal:
+                    continue
+                filtered.append(f)
+            photos = filtered
 
         if not photos:
             continue
@@ -163,6 +197,7 @@ def copy_candidates(candidates, output_dir):
             print(f"  WARN: Failed to copy {c['filename']}: {e}")
             continue
 
+        focal_str = f", {c['focal_mm']:.0f}mm" if c.get("focal_mm") else ""
         entry = {
             "index": i,
             "dest_name": dest_name,
@@ -170,10 +205,11 @@ def copy_candidates(candidates, output_dir):
             "original": c["filename"],
             "source_path": c["path"],
             "size_kb": c["size_kb"],
+            "focal_mm": c.get("focal_mm"),
             "processed": c["is_processed"],
         }
         manifest.append(entry)
-        print(f"  {i}. {dest_name} ({c['size_kb']}KB) — {c['model']}")
+        print(f"  {i}. {dest_name} ({c['size_kb']}KB{focal_str}) — {c['model']}")
 
     # Write manifest
     manifest_path = os.path.join(output_dir, "candidates.json")
@@ -199,6 +235,8 @@ def main():
     parser.add_argument("--prefer-full-body", action="store_true", help="Prefer larger files (more background/full body)")
     parser.add_argument("--photos-dir", default=PHOTOS_DIR, help=f"Photos directory (default: {PHOTOS_DIR})")
     parser.add_argument("--output-dir", default=None, help=f"Output directory (default: {SHARED_DIR}/candidates)")
+    parser.add_argument("--max-focal", type=float, default=None, help="Max focal length in mm (e.g. 50 for framing-friendly)")
+    parser.add_argument("--min-focal", type=float, default=None, help="Min focal length in mm")
     parser.add_argument("--list-models", action="store_true", help="List all available models and exit")
 
     args = parser.parse_args()
@@ -225,6 +263,8 @@ def main():
         exclude_models=exclude,
         min_size=args.min_size,
         prefer_full_body=args.prefer_full_body,
+        max_focal=args.max_focal,
+        min_focal=args.min_focal,
     )
 
     if not candidates:

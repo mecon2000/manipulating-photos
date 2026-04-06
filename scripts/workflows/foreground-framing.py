@@ -603,9 +603,10 @@ def main():
     t0 = time.time()
     log(output_dir, "--- Step 3/4: Blur + color match + composite ---")
 
-    # Auto blur radius: ~2-3% of the longest edge
+    # Auto blur radius: ~2-3% of the longest edge, capped at 60px
+    # Too much blur makes shapes look like abstract blobs rather than real objects
     if blur_radius is None:
-        blur_radius = max(15, int(max(img_orig.width, img_orig.height) * 0.025))
+        blur_radius = max(15, min(60, int(max(img_orig.width, img_orig.height) * 0.025)))
     log(output_dir, f"Blur radius: {blur_radius}px")
 
     # Heavy blur on the inpainted result (only the framing areas will be used)

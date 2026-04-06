@@ -346,8 +346,9 @@ def effect_ghosting(img_arr, mask_arr, intensity, direction_deg, rng, output_dir
     # Number of ghost copies scales with intensity (3-5)
     n_ghosts = int(3 + intensity * 2)
     opacities = [0.7, 0.5, 0.3, 0.15, 0.08][:n_ghosts]
-    # Offset range scales with intensity (5-15px)
-    base_offset = 5 + intensity * 10
+    # Offset range scales with intensity AND image size
+    short_edge = min(h, w)
+    base_offset = short_edge * (0.01 + intensity * 0.02)  # 1-3% of image per step
 
     # Extract subject pixels using the mask
     mask_norm = mask_arr.astype(np.float64) / 255.0  # 0-1
@@ -405,8 +406,9 @@ def effect_motion_trails(img_arr, mask_arr, intensity, direction_deg, output_dir
 
     h, w = img_arr.shape[:2]
 
-    # Create a directional motion blur kernel
-    kernel_size = int(15 + intensity * 30)  # 15-45px depending on intensity
+    # Create a directional motion blur kernel — scaled to image size
+    short_edge = min(h, w)
+    kernel_size = max(15, int(short_edge * (0.02 + intensity * 0.04)))  # 2-6% of image
     kernel = np.zeros((kernel_size, kernel_size), dtype=np.float64)
 
     # Draw a line through the center at the given angle
@@ -520,8 +522,9 @@ def effect_channel_shift(img_arr, mask_arr, intensity, direction_deg, output_dir
     h, w = img_arr.shape[:2]
     result = img_arr.copy()
 
-    # Shift amount: 2-6 pixels based on intensity
-    shift_px = int(2 + intensity * 4)
+    # Shift amount: scales with image size (0.3-1% of short edge)
+    short_edge = min(h, w)
+    shift_px = max(3, int(short_edge * (0.003 + intensity * 0.007)))
 
     rad = math.radians(direction_deg)
     dx = int(round(math.cos(rad) * shift_px))
@@ -711,9 +714,12 @@ def effect_arc_ghosting(img_arr, mask_arr, intensity, direction_deg, rng, output
     mask_3ch = mask_norm[:, :, np.newaxis]
     subject = img_arr.astype(np.float64) * mask_3ch
 
-    # Exponential offsets: 3, 6, 12, 24, 48
-    offsets = [3, 6, 12, 24, 48]
-    opacities = [0.6, 0.45, 0.3, 0.18, 0.08]
+    # Exponential offsets scaled to image size (% of shorter edge)
+    short_edge = min(w, h)
+    base = max(5, int(short_edge * 0.01))  # ~1% of image as base unit
+    offsets = [base * 1, base * 2, base * 4, base * 8, base * 16]
+    opacities = [0.7, 0.55, 0.4, 0.25, 0.12]
+    log(output_dir, f"Arc offsets (base={base}px): {offsets}")
 
     # Arc: each copy curves slightly more
     n_copies = len(offsets)

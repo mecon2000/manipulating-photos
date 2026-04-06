@@ -1,6 +1,6 @@
 # OpenClaw Scripts
 
-Photo stylization pipeline for fine-art transformations of portrait/boudoir photography.
+Photo transformation pipeline for portrait/boudoir photography. Three tools: art stylization, lighting re-imagination, and foreground depth framing.
 
 ## Environment
 
@@ -51,6 +51,27 @@ Photo stylization pipeline for fine-art transformations of portrait/boudoir phot
 
 **20 presets:** Dramatic Rim, Spotlight, Low Key, High Key, Neon Gels, Teal & Orange, Red Drama, Golden Hour, Window Light, Overcast Soft, Candlelight, Butterfly, Split Light, Beauty Dish, Underwater Caustics, Moonlight, Neon Signs, Firelight, Laser
 
+### `scripts/workflows/foreground-framing.py`
+**Foreground depth framing.** Adds blurry foreground elements to photo edges, simulating the "shoot-through" technique at shallow depth of field (f/1.4-2.8, 35-50mm). Uses fal.ai SDXL inpainting for contextual foreground generation, then blurs + darkens + color-matches to the original.
+
+**Usage:**
+```bash
+./scripts/workflows/foreground-framing.py --source photo.jpg --framing "doorframe" --auto-correct
+./scripts/workflows/foreground-framing.py --source photo.jpg --framing "foliage" --coverage 0.25 --darken 0.4
+./scripts/workflows/foreground-framing.py --list-presets
+```
+
+**All flags:** `--source`, `--framing` (preset name), `--prompt` (custom, overrides preset), `--negative`, `--coverage` (0.1-0.4, default 0.20), `--sides` (left-right/top-bottom/all/auto), `--blur-radius` (auto based on image size), `--darken` (0.0-1.0, default 0.55), `--irregularity` (0-1, default 0.5), `--guidance-scale` (default 9.0), `--steps` (default 30), `--seed`, `--auto-correct`, `--output-to`, `--local-output-dir`, `--list-presets`
+
+**10 presets:** foliage, warm foliage, doorframe, curtain, dark curtain, flowers, fairy lights, metal, smoke, brick
+
+**Steps:** 1. Create organic edge mask → 2. Inpaint foreground via SDXL (fal.ai) → 3. Heavy Gaussian blur + color match + darken + composite → 4. Gemini eval + output
+
+**Tips:**
+- Works best with wide-to-normal focal lengths (24-50mm feel). Telephoto compression doesn't suit this effect.
+- `--coverage 0.15-0.25` is the sweet spot. Higher = more dramatic but risks obscuring subject.
+- `--darken 0.4-0.6` keeps framing subtle. Lower = darker framing.
+
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.
 
@@ -65,7 +86,7 @@ Photo stylization pipeline for fine-art transformations of portrait/boudoir phot
 Output goes to `shared/candidates/` with a `candidates.json` manifest.
 
 ### `scripts/workflows/styles.json`
-100 art styles with names and prompt additions. Loaded automatically by the main workflow script. Use `--list-styles` to see all available styles.
+111 art styles with names and prompt additions. Loaded automatically by the stylization script. Use `--list-styles` to see all available styles.
 
 ## Legacy Scripts (from Echo, V9-V18 iterations)
 
@@ -80,6 +101,14 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 - Commit messages describe what changed and why
 - The workflow script copies itself into each output folder for reproducibility
 
+## Output Structure
+
+All scripts output to `~/.openclaw/workspace/shared/` (visible from Windows):
+- Each run creates a timestamped folder with intermediate files + workflow log
+- Final images are also copied to `shared/finals/` for easy side-by-side browsing
+- fal.ai CDN URLs are logged for remote viewing (temporary public links)
+- Favorites are tracked in `shared/favorites/favorites.json` with full reconstruction commands
+
 ## Recommended Settings
 
 Based on testing, good starting points:
@@ -91,3 +120,15 @@ Based on testing, good starting points:
 - **BiRefNet** (default) captures hands/limbs correctly; rembg misses them
 - **Blur fill** (default) produces even BG texture; LaMa fill gets over-stylized
 - See `style-guide.json` for per-category strength recommendations
+
+### Relighting
+- **Dramatic Rim** and **Spotlight** work on almost any photo
+- **Underwater themes** (Ocean Blue, Underwater Caustics) are magic on pool/water photos
+- `--highres-denoise 0.4-0.5` keeps subject faithful; higher = more creative freedom
+- Custom prompts via `--prompt` are very effective for specific lighting setups
+
+### Foreground Framing
+- **Doorframe** preset is ideal for indoor hallway/room shots
+- **Curtain/dark curtain** works for window scenes
+- **Foliage** works for outdoor shots
+- Best on wide-to-normal lens photos (24-50mm). Telephoto doesn't suit this effect.

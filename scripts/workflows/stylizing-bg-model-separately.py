@@ -245,7 +245,7 @@ def _evaluate_with_gemini(img, output_dir, original_img=None):
             "contents": [{"parts": parts}],
             "generationConfig": {
                 "temperature": 0.3,
-                "maxOutputTokens": 2048,
+                "maxOutputTokens": 4096,
                 "responseMimeType": "application/json",
             },
         }

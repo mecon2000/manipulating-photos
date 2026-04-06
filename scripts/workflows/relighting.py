@@ -267,7 +267,7 @@ def run_iclight(subject_img, prompt, negative_prompt, output_dir, seed=None,
 
     try:
         response = requests.post("https://fal.run/fal-ai/iclight-v2", headers=headers,
-                                 json=payload, timeout=300)
+                                 json=payload, timeout=600)
     except requests.RequestException as e:
         log(output_dir, f"IC-Light request failed: {e}", "ERROR")
         return None
@@ -353,7 +353,7 @@ def evaluate_with_gemini(img, output_dir, original_img=None):
             "contents": [{"parts": parts}],
             "generationConfig": {
                 "temperature": 0.3,
-                "maxOutputTokens": 2048,
+                "maxOutputTokens": 4096,
                 "responseMimeType": "application/json",
             },
         }

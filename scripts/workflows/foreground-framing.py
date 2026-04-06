@@ -459,8 +459,9 @@ def match_framing_colors(original, inpainted, mask, darken=0.6):
 
     def shift_channel(ch, current, target):
         diff = target - current
-        # Blend toward target (not full shift — keep some of the generated character)
-        shift = int(diff * 0.6)
+        # Light blend toward scene colors — keep most of the generated character
+        # (was 0.6 but that washed out doorframe/wood tones into generic scene colors)
+        shift = int(diff * 0.3)
         return ch.point(lambda p: max(0, min(255, p + shift)))
 
     r = shift_channel(r, current_mean[0], target_mean[0])
@@ -483,14 +484,14 @@ def match_framing_colors(original, inpainted, mask, darken=0.6):
 # Inpainting via fal.ai
 # ---------------------------------------------------------------------------
 def run_inpaint(image, mask, prompt, negative_prompt, output_dir,
-                guidance_scale=9.0, steps=30, seed=None):
+                guidance_scale=9.0, steps=30, seed=None, strength=0.95):
     """Inpaint masked areas with text-guided content using fal.ai SDXL inpainting."""
-    log(output_dir, f"Inpainting: '{prompt[:80]}...' (guidance={guidance_scale}, steps={steps})")
+    log(output_dir, f"Inpainting: '{prompt[:80]}...' (guidance={guidance_scale}, steps={steps}, strength={strength})")
 
     headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
 
-    img_b64 = _img_to_b64(image)
-    mask_b64 = _img_to_b64(mask.convert("RGB"), fmt="PNG", quality=100)
+    img_b64 = _img_to_b64_simple(image)
+    mask_b64 = _img_to_b64_simple(mask.convert("RGB"), fmt="PNG", quality=100)
 
     payload = {
         "model_name": "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
@@ -500,6 +501,7 @@ def run_inpaint(image, mask, prompt, negative_prompt, output_dir,
         "mask_url": f"data:image/png;base64,{mask_b64}",
         "guidance_scale": guidance_scale,
         "num_inference_steps": steps,
+        "strength": strength,  # How much to replace (0=keep original, 1=fully replace)
     }
     if seed is not None:
         payload["seed"] = seed

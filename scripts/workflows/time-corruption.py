@@ -61,7 +61,11 @@ sys.stdout.reconfigure(line_buffering=True)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-PRESETS = ["ghost", "melt", "trails", "glitch", "full"]
+EFFECTS = ["ghost", "melt", "trails", "glitch", "full"]
+MODES = ["normal", "dissolve", "float"]
+# normal:   effects applied to subject (original behavior)
+# dissolve: ropes stay sharp, effects applied to body only (shibari default)
+# float:    subject stays sharp, effects applied to background only
 
 STEP_NAMES = {
     1: "Extract mask (BiRefNet)",
@@ -567,47 +571,381 @@ def effect_channel_shift(img_arr, mask_arr, intensity, direction_deg, output_dir
     return np.clip(result_f, 0, 255).astype(np.uint8)
 
 
-def apply_effects(img, mask, effect, intensity, direction_deg, seed, output_dir):
-    """Apply the requested effect preset and return the processed image."""
+# ---------------------------------------------------------------------------
+# Rope Detection — separate ropes from body within the subject mask
+# ---------------------------------------------------------------------------
+
+# HSV ranges for common rope colors
+ROPE_COLOR_RANGES = {
+    "red": {
+        # Red wraps around hue 0/360, so we need two ranges
+        "h_ranges": [(0, 15), (160, 180)],  # in OpenCV-style 0-180
+        "s_range": (60, 255),
+        "v_range": (40, 255),
+    },
+    "beige": {
+        "h_ranges": [(15, 35)],
+        "s_range": (30, 150),
+        "v_range": (120, 255),
+    },
+    "black": {
+        "h_ranges": [(0, 180)],
+        "s_range": (0, 80),
+        "v_range": (0, 60),
+    },
+    "white": {
+        "h_ranges": [(0, 180)],
+        "s_range": (0, 40),
+        "v_range": (200, 255),
+    },
+}
+
+
+def detect_rope_mask(img, subject_mask, rope_color="auto", output_dir=None):
+    """Detect ropes within the subject mask using color thresholding in HSV space.
+
+    Returns (body_mask, rope_mask) — both as PIL L-mode images.
+    body_mask = subject without ropes. rope_mask = just the ropes.
+    """
+    import colorsys
+
+    img_arr = np.array(img)
+    subj_arr = np.array(subject_mask)
+    if subj_arr.ndim == 3:
+        subj_arr = subj_arr[:, :, 0]
+    subj_binary = subj_arr > 127
+
+    # Convert to HSV (manually, not OpenCV — we don't have it)
+    r, g, b = img_arr[:, :, 0].astype(float), img_arr[:, :, 1].astype(float), img_arr[:, :, 2].astype(float)
+    r_n, g_n, b_n = r / 255.0, g / 255.0, b / 255.0
+
+    cmax = np.maximum(np.maximum(r_n, g_n), b_n)
+    cmin = np.minimum(np.minimum(r_n, g_n), b_n)
+    diff = cmax - cmin
+
+    # Hue (0-180 scale like OpenCV)
+    hue = np.zeros_like(r_n)
+    mask_r = (cmax == r_n) & (diff > 0)
+    mask_g = (cmax == g_n) & (diff > 0) & ~mask_r
+    mask_b = (cmax == b_n) & (diff > 0) & ~mask_r & ~mask_g
+    hue[mask_r] = (60 * ((g_n[mask_r] - b_n[mask_r]) / diff[mask_r]) + 360) % 360
+    hue[mask_g] = (60 * ((b_n[mask_g] - r_n[mask_g]) / diff[mask_g]) + 120) % 360
+    hue[mask_b] = (60 * ((r_n[mask_b] - g_n[mask_b]) / diff[mask_b]) + 240) % 360
+    hue = (hue / 2.0).astype(np.uint8)  # Scale to 0-180
+
+    # Saturation (0-255)
+    sat = np.zeros_like(r_n)
+    sat[cmax > 0] = (diff[cmax > 0] / cmax[cmax > 0]) * 255
+    sat = sat.astype(np.uint8)
+
+    # Value (0-255)
+    val = (cmax * 255).astype(np.uint8)
+
+    if rope_color == "auto":
+        # Try each color and see which gets the most pixels within the subject
+        best_color = "red"
+        best_count = 0
+        for color_name, ranges in ROPE_COLOR_RANGES.items():
+            rope_pixels = np.zeros_like(subj_binary, dtype=bool)
+            for h_lo, h_hi in ranges["h_ranges"]:
+                h_match = (hue >= h_lo) & (hue <= h_hi)
+                s_match = (sat >= ranges["s_range"][0]) & (sat <= ranges["s_range"][1])
+                v_match = (val >= ranges["v_range"][0]) & (val <= ranges["v_range"][1])
+                rope_pixels |= (h_match & s_match & v_match & subj_binary)
+            count = rope_pixels.sum()
+            if output_dir:
+                log(output_dir, f"Rope color '{color_name}': {count} pixels ({count/subj_binary.sum()*100:.1f}% of subject)")
+            if count > best_count and count > subj_binary.sum() * 0.02:  # At least 2% of subject
+                best_count = count
+                best_color = color_name
+        rope_color = best_color
+        if output_dir:
+            log(output_dir, f"Auto-detected rope color: {rope_color}")
+
+    # Apply the chosen color range
+    ranges = ROPE_COLOR_RANGES.get(rope_color, ROPE_COLOR_RANGES["red"])
+    rope_pixels = np.zeros_like(subj_binary, dtype=bool)
+    for h_lo, h_hi in ranges["h_ranges"]:
+        h_match = (hue >= h_lo) & (hue <= h_hi)
+        s_match = (sat >= ranges["s_range"][0]) & (sat <= ranges["s_range"][1])
+        v_match = (val >= ranges["v_range"][0]) & (val <= ranges["v_range"][1])
+        rope_pixels |= (h_match & s_match & v_match & subj_binary)
+
+    # Clean up the rope mask — dilate slightly to catch edges, then close gaps
+    rope_mask_pil = Image.fromarray((rope_pixels.astype(np.uint8) * 255))
+    # Close small gaps
+    rope_mask_pil = rope_mask_pil.filter(ImageFilter.MaxFilter(5))
+    rope_mask_pil = rope_mask_pil.filter(ImageFilter.MinFilter(3))
+    # Slight blur for soft edges
+    rope_mask_pil = rope_mask_pil.filter(ImageFilter.GaussianBlur(radius=2))
+
+    rope_arr = np.array(rope_mask_pil)
+    rope_binary = rope_arr > 127
+
+    # Body = subject minus ropes
+    body_binary = subj_binary & ~rope_binary
+    body_mask_pil = Image.fromarray((body_binary.astype(np.uint8) * 255))
+    # Soft edges on body mask
+    body_mask_pil = body_mask_pil.filter(ImageFilter.GaussianBlur(radius=2))
+
+    if output_dir:
+        rope_pct = rope_binary.sum() / max(subj_binary.sum(), 1) * 100
+        body_pct = body_binary.sum() / max(subj_binary.sum(), 1) * 100
+        log(output_dir, f"Rope mask: {rope_pct:.1f}% of subject, Body mask: {body_pct:.1f}% of subject")
+
+    return body_mask_pil, rope_mask_pil
+
+
+def effect_arc_ghosting(img_arr, mask_arr, intensity, direction_deg, rng, output_dir, arc_angle=30):
+    """Exponential-offset arc ghosting: copies at 3, 6, 12, 24, 48px along a curved path.
+
+    The mask controls which part of the image is ghosted (body without ropes).
+    Arc_angle controls how much the path curves over the sequence of copies.
+    """
+    log(output_dir, f"Applying arc ghosting (intensity={intensity:.2f}, dir={direction_deg}°, arc={arc_angle}°)")
+
+    h, w = img_arr.shape[:2]
+    result = img_arr.astype(np.float64)
+
+    mask_norm = mask_arr.astype(np.float64) / 255.0
+    mask_3ch = mask_norm[:, :, np.newaxis]
+    subject = img_arr.astype(np.float64) * mask_3ch
+
+    # Exponential offsets: 3, 6, 12, 24, 48
+    offsets = [3, 6, 12, 24, 48]
+    opacities = [0.6, 0.45, 0.3, 0.18, 0.08]
+
+    # Arc: each copy curves slightly more
+    n_copies = len(offsets)
+    arc_step = arc_angle / max(n_copies - 1, 1)
+
+    for i, (offset_px, opacity) in enumerate(zip(offsets, opacities)):
+        # Current angle along the arc
+        current_angle = direction_deg + arc_step * i
+        rad = math.radians(current_angle)
+        ox = int(round(math.cos(rad) * offset_px * intensity))
+        oy = int(round(math.sin(rad) * offset_px * intensity))
+
+        if ox == 0 and oy == 0:
+            continue
+
+        shifted_subject = np.zeros_like(subject)
+        shifted_mask = np.zeros_like(mask_norm)
+
+        src_y_start = max(0, -oy)
+        src_y_end = min(h, h - oy)
+        src_x_start = max(0, -ox)
+        src_x_end = min(w, w - ox)
+        dst_y_start = max(0, oy)
+        dst_y_end = min(h, h + oy)
+        dst_x_start = max(0, ox)
+        dst_x_end = min(w, w + ox)
+
+        copy_h = min(src_y_end - src_y_start, dst_y_end - dst_y_start)
+        copy_w = min(src_x_end - src_x_start, dst_x_end - dst_x_start)
+        if copy_h <= 0 or copy_w <= 0:
+            continue
+
+        shifted_subject[dst_y_start:dst_y_start+copy_h, dst_x_start:dst_x_start+copy_w] = \
+            subject[src_y_start:src_y_start+copy_h, src_x_start:src_x_start+copy_w]
+        shifted_mask[dst_y_start:dst_y_start+copy_h, dst_x_start:dst_x_start+copy_w] = \
+            mask_norm[src_y_start:src_y_start+copy_h, src_x_start:src_x_start+copy_w]
+
+        blend_mask = shifted_mask[:, :, np.newaxis] * opacity
+        result = result * (1 - blend_mask) + shifted_subject * blend_mask + result * blend_mask * (1 - opacity)
+
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def effect_dissolve(img_arr, subject_mask_arr, body_mask_arr, rope_mask_arr,
+                    intensity, direction_deg, seed, output_dir, arc_angle=30):
+    """Dissolve mode: body melts/ghosts with exponential arc, ropes stay sharp.
+
+    Combines arc ghosting + melt on body only. Ropes are composited back sharp.
+    """
+    log(output_dir, "Applying dissolve mode: body dissolves, ropes stay sharp")
+    rng = np.random.default_rng(seed)
+
+    h, w = img_arr.shape[:2]
+
+    # Save pristine ropes
+    rope_norm = rope_mask_arr.astype(np.float64) / 255.0
+    rope_3ch = rope_norm[:, :, np.newaxis]
+    pristine_ropes = img_arr.astype(np.float64) * rope_3ch
+
+    # Apply arc ghosting to body only
+    result = effect_arc_ghosting(img_arr, body_mask_arr, intensity, direction_deg, rng, output_dir, arc_angle)
+
+    # Apply melt to body only
+    result = effect_diffusion_melt(result, body_mask_arr, intensity * 0.5, direction_deg, output_dir)
+
+    # Apply subtle channel shift to body
+    result = effect_channel_shift(result, body_mask_arr, intensity * 0.4, direction_deg, output_dir)
+
+    # Paste ropes back sharp — overwrite wherever rope mask is active
+    result_f = result.astype(np.float64)
+    # Use a slightly dilated rope mask for clean edges
+    rope_paste_mask = Image.fromarray(rope_mask_arr)
+    rope_paste_mask = rope_paste_mask.filter(ImageFilter.GaussianBlur(radius=1))
+    rope_paste_norm = np.array(rope_paste_mask).astype(np.float64) / 255.0
+    rope_paste_3ch = rope_paste_norm[:, :, np.newaxis]
+
+    result_f = result_f * (1 - rope_paste_3ch) + img_arr.astype(np.float64) * rope_paste_3ch
+
+    return np.clip(result_f, 0, 255).astype(np.uint8)
+
+
+def effect_float(img_arr, subject_mask_arr, intensity, direction_deg, output_dir):
+    """Float mode: subject stays sharp, background dissolves.
+
+    The model is "in space" — background blurs, ghosts, fades.
+    Subject (body + ropes) remains perfectly sharp.
+    """
+    log(output_dir, "Applying float mode: subject sharp, world dissolves")
+
+    h, w = img_arr.shape[:2]
+
+    # Create inverted mask (background)
+    subj_norm = subject_mask_arr.astype(np.float64) / 255.0
+    bg_norm = 1.0 - subj_norm
+
+    # Heavy blur on background
+    pil_img = Image.fromarray(img_arr)
+    blur_radius = int(20 + intensity * 40)
+    blurred = np.array(pil_img.filter(ImageFilter.GaussianBlur(radius=blur_radius)), dtype=np.float64)
+
+    # Add motion trails to background
+    kernel_size = int(20 + intensity * 30)
+    kernel = np.zeros((kernel_size, kernel_size), dtype=np.float64)
+    cx, cy = kernel_size // 2, kernel_size // 2
+    rad = math.radians(direction_deg)
+    for i in range(kernel_size):
+        t = i - cx
+        kx = int(round(cx + t * math.cos(rad)))
+        ky = int(round(cy + t * math.sin(rad)))
+        if 0 <= kx < kernel_size and 0 <= ky < kernel_size:
+            kernel[ky, kx] = 1.0
+    ks = kernel.sum()
+    if ks > 0:
+        kernel /= ks
+    trailed = np.zeros_like(img_arr, dtype=np.float64)
+    for c in range(3):
+        trailed[:, :, c] = convolve(img_arr[:, :, c].astype(np.float64), kernel, mode='reflect')
+
+    # Blend blur + trails for background
+    bg_effect = blurred * 0.6 + trailed * 0.4
+
+    # Desaturate background slightly
+    bg_gray = np.mean(bg_effect, axis=2, keepdims=True)
+    desat_factor = 0.3 * intensity
+    bg_effect = bg_effect * (1 - desat_factor) + bg_gray * desat_factor
+
+    # Darken background slightly
+    bg_effect *= (1.0 - 0.2 * intensity)
+
+    # Composite: sharp subject over dissolved background
+    subj_3ch = subj_norm[:, :, np.newaxis]
+    # Soften the mask edge slightly for natural blending
+    soft_mask = Image.fromarray((subj_norm * 255).astype(np.uint8))
+    soft_mask = soft_mask.filter(ImageFilter.GaussianBlur(radius=3))
+    soft_norm = np.array(soft_mask).astype(np.float64) / 255.0
+    soft_3ch = soft_norm[:, :, np.newaxis]
+
+    result = img_arr.astype(np.float64) * soft_3ch + bg_effect * (1 - soft_3ch)
+
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def apply_effects(img, mask, effect, intensity, direction_deg, seed, output_dir, **kwargs):
+    """Apply the requested effect preset with the given mode.
+
+    Modes:
+      normal:   effects on subject mask (original behavior)
+      dissolve: detect ropes, apply effects to body only, paste ropes back sharp
+      float:    subject stays sharp, effects applied to background
+    """
     rng = np.random.default_rng(seed)
     img_arr = np.array(img)
     mask_arr = np.array(mask.resize(img.size, Image.LANCZOS))
-
-    # Ensure mask is single channel
     if mask_arr.ndim == 3:
         mask_arr = mask_arr[:, :, 0]
-
-    # Threshold the mask to clean it up
     mask_arr = np.where(mask_arr > 127, 255, 0).astype(np.uint8)
 
-    if effect == "ghost":
-        result = effect_ghosting(img_arr, mask_arr, intensity, direction_deg, rng, output_dir)
-    elif effect == "melt":
-        result = effect_diffusion_melt(img_arr, mask_arr, intensity, direction_deg, output_dir)
-    elif effect == "trails":
-        result = effect_motion_trails(img_arr, mask_arr, intensity, direction_deg, output_dir)
-    elif effect == "glitch":
-        result = effect_channel_shift(img_arr, mask_arr, intensity, direction_deg, output_dir)
-    elif effect == "full":
-        # Layer: channel shift -> ghosting -> motion trails -> light melt
-        log(output_dir, "Full preset: layering all effects...")
+    mode = kwargs.get("mode", "normal")
+    rope_color_arg = kwargs.get("rope_color", "auto")
+    arc_angle_arg = kwargs.get("arc_angle", 30)
 
-        # Channel shift at full requested intensity
-        result = effect_channel_shift(img_arr, mask_arr, intensity * 0.8, direction_deg, output_dir)
+    # --- Float mode: apply effects to BG, keep subject sharp ---
+    if mode == "float":
+        log(output_dir, f"Float mode: applying '{effect}' to background, subject stays sharp")
+        # Invert mask — effects on background, boosted since subject paste-back covers some
+        bg_mask_arr = 255 - mask_arr
+        boosted = min(1.0, intensity * 1.3)
+        result = _apply_single_effect(effect, img_arr, bg_mask_arr, boosted, direction_deg, rng, output_dir)
+        # Paste sharp subject back
+        subj_norm = mask_arr.astype(np.float64) / 255.0
+        soft_mask = Image.fromarray(mask_arr).filter(ImageFilter.GaussianBlur(radius=3))
+        soft_norm = np.array(soft_mask).astype(np.float64) / 255.0
+        soft_3ch = soft_norm[:, :, np.newaxis]
+        result_f = result.astype(np.float64) * (1 - soft_3ch) + img_arr.astype(np.float64) * soft_3ch
+        return Image.fromarray(np.clip(result_f, 0, 255).astype(np.uint8))
 
-        # Ghosting at slightly reduced intensity
-        result = effect_ghosting(result, mask_arr, intensity * 0.7, direction_deg, rng, output_dir)
+    # --- Dissolve mode: detect ropes, apply effects to body only, ropes stay sharp ---
+    if mode == "dissolve":
+        log(output_dir, f"Dissolve mode: applying '{effect}' to body, ropes stay sharp")
+        body_mask_pil, rope_mask_pil = detect_rope_mask(img, mask, rope_color_arg, output_dir)
+        body_arr = np.array(body_mask_pil.resize(img.size, Image.LANCZOS))
+        rope_arr = np.array(rope_mask_pil.resize(img.size, Image.LANCZOS))
+        if body_arr.ndim == 3:
+            body_arr = body_arr[:, :, 0]
+        if rope_arr.ndim == 3:
+            rope_arr = rope_arr[:, :, 0]
+        body_arr = np.where(body_arr > 127, 255, 0).astype(np.uint8)
+        rope_arr = np.where(rope_arr > 127, 255, 0).astype(np.uint8)
 
-        # Motion trails at moderate intensity
-        result = effect_motion_trails(result, mask_arr, intensity * 0.6, direction_deg, output_dir)
+        # Save masks for debugging
+        Image.fromarray(body_arr).save(os.path.join(output_dir, "01_body_mask.png"))
+        Image.fromarray(rope_arr).save(os.path.join(output_dir, "01_rope_mask.png"))
 
-        # Light melt — subtler
-        result = effect_diffusion_melt(result, mask_arr, intensity * 0.4, direction_deg, output_dir)
-    else:
-        log(output_dir, f"Unknown effect: {effect}", "ERROR")
-        return img
+        # In dissolve mode, effects only hit the body (small area) — boost intensity
+        boosted = min(1.0, intensity * 1.5)
+        # For ghost effect in dissolve mode, use arc ghosting (exponential offsets)
+        if effect == "ghost":
+            result = effect_arc_ghosting(img_arr, body_arr, boosted, direction_deg, rng, output_dir, arc_angle_arg)
+        else:
+            result = _apply_single_effect(effect, img_arr, body_arr, boosted, direction_deg, rng, output_dir)
 
+        # Paste ropes back sharp
+        rope_paste = Image.fromarray(rope_arr).filter(ImageFilter.GaussianBlur(radius=1))
+        rope_norm = np.array(rope_paste).astype(np.float64) / 255.0
+        rope_3ch = rope_norm[:, :, np.newaxis]
+        result_f = result.astype(np.float64) * (1 - rope_3ch) + img_arr.astype(np.float64) * rope_3ch
+        return Image.fromarray(np.clip(result_f, 0, 255).astype(np.uint8))
+
+    # --- Normal mode: effects on subject mask ---
+    result = _apply_single_effect(effect, img_arr, mask_arr, intensity, direction_deg, rng, output_dir)
     return Image.fromarray(result)
+
+
+def _apply_single_effect(effect, img_arr, mask_arr, intensity, direction_deg, rng, output_dir):
+    """Apply a single effect to the given mask area. Returns numpy array."""
+    if effect == "ghost":
+        return effect_ghosting(img_arr, mask_arr, intensity, direction_deg, rng, output_dir)
+    elif effect == "melt":
+        return effect_diffusion_melt(img_arr, mask_arr, intensity, direction_deg, output_dir)
+    elif effect == "trails":
+        return effect_motion_trails(img_arr, mask_arr, intensity, direction_deg, output_dir)
+    elif effect == "glitch":
+        return effect_channel_shift(img_arr, mask_arr, intensity, direction_deg, output_dir)
+    elif effect == "full":
+        log(output_dir, "Full preset: layering all effects...")
+        result = effect_channel_shift(img_arr, mask_arr, intensity * 0.8, direction_deg, output_dir)
+        result = effect_ghosting(result, mask_arr, intensity * 0.7, direction_deg, rng, output_dir)
+        result = effect_motion_trails(result, mask_arr, intensity * 0.6, direction_deg, output_dir)
+        result = effect_diffusion_melt(result, mask_arr, intensity * 0.4, direction_deg, output_dir)
+        return result
+    else:
+        return img_arr
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +1168,8 @@ def run_workflow(args):
     t0 = time.time()
     log(output_dir, f"--- Step 2/4: {STEP_NAMES[2]} ---")
 
-    result_img = apply_effects(original, mask, effect, intensity, direction, seed, output_dir)
+    result_img = apply_effects(original, mask, effect, intensity, direction, seed, output_dir,
+                               mode=args.mode, rope_color=args.rope_color, arc_angle=args.arc_angle)
     result_img.save(os.path.join(output_dir, "02_time_corrupted.jpg"), quality=95)
 
     timings[2] = time.time() - t0
@@ -945,22 +1284,34 @@ def main():
         description="Time Corruption — Temporal Decay Effects for Art Photography",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Presets:
-  ghost   — Multiple-exposure ghosting of the subject
+Effects:
+  ghost   — Multiple-exposure ghosting (arc offsets in dissolve mode)
   melt    — Diffusion melting / dissolving through a gradient
-  trails  — Directional motion blur trailing from the subject
+  trails  — Directional motion blur trailing
   glitch  — Chromatic aberration / channel shift
   full    — All effects layered together
 
+Modes:
+  normal   — Effects applied to subject (original behavior)
+  dissolve — Ropes stay sharp, effects on body only (shibari default)
+  float    — Subject stays sharp, background dissolves ("in space")
+
 Examples:
-  %(prog)s --source photo.jpg --effect ghost
-  %(prog)s --source photo.jpg --effect full --intensity 0.5
-  %(prog)s --source photo.jpg --effect melt --direction 90 --auto-correct
+  %(prog)s --source photo.jpg --effect ghost --mode dissolve
+  %(prog)s --source photo.jpg --effect melt --mode dissolve --intensity 0.8
+  %(prog)s --source photo.jpg --effect trails --mode float
+  %(prog)s --source photo.jpg --effect full --mode normal
         """,
     )
     parser.add_argument("--source", required=True, help="Input image path")
-    parser.add_argument("--effect", choices=PRESETS, default="full",
-                        help="Effect preset (default: full)")
+    parser.add_argument("--effect", choices=EFFECTS, default="ghost",
+                        help="Effect preset (default: ghost)")
+    parser.add_argument("--mode", choices=MODES, default="dissolve",
+                        help="Mode: normal (effects on subject), dissolve (ropes sharp, body dissolves), float (subject sharp, BG dissolves). Default: dissolve")
+    parser.add_argument("--rope-color", choices=["auto", "red", "beige", "black", "white"], default="auto",
+                        help="Rope color for dissolve mode detection (default: auto)")
+    parser.add_argument("--arc-angle", type=float, default=30,
+                        help="Arc curve angle for ghost effect in dissolve mode (default: 30 degrees)")
     parser.add_argument("--intensity", type=float, default=0.7,
                         help="Effect intensity 0.3-1.0 (default: 0.7)")
     parser.add_argument("--direction", type=float, default=0,

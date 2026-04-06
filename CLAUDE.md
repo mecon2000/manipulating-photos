@@ -72,6 +72,42 @@ Photo transformation pipeline for portrait/boudoir photography. Three tools: art
 - `--coverage 0.15-0.25` is the sweet spot. Higher = more dramatic but risks obscuring subject.
 - `--darken 0.4-0.6` keeps framing subtle. Lower = darker framing.
 
+### `scripts/workflows/time-corruption.py`
+**Temporal decay effects.** Simulates time corruption: ghosting (multiple exposure), motion trails, diffusion melting, chromatic aberration. Especially suited for shibari/movement photography.
+
+**Usage:**
+```bash
+./scripts/workflows/time-corruption.py --source photo.jpg --effect ghost --intensity 0.7
+./scripts/workflows/time-corruption.py --source photo.jpg --effect full --direction 45
+./scripts/workflows/time-corruption.py --source photo.jpg --effect melt --intensity 0.8
+```
+
+**5 presets:** ghost, melt, trails, glitch, full (combines all). Effects applied primarily to the subject (BiRefNet mask). PIL/numpy/scipy based — no API calls for effects.
+
+### `scripts/workflows/material-swap.py`
+**Material transformation.** Changes the subject's skin/body material to glass, marble, metal, etc. Uses BiRefNet for subject extraction + Tensor Art img2img for material transformation. Background stays pristine.
+
+**Usage:**
+```bash
+./scripts/workflows/material-swap.py --source photo.jpg --material "wet glass" --strength 0.4
+./scripts/workflows/material-swap.py --source photo.jpg --material "cracked glass" --auto-correct
+./scripts/workflows/material-swap.py --list-presets
+```
+
+**10 presets:** wet glass, cracked glass, oily glass, frosted glass, marble, liquid metal, porcelain, ice, gold, obsidian
+
+### `scripts/workflows/pose-geometry.py`
+**Geometric pose art.** Extracts subject silhouette and reconstructs as geometric art, then blends back with the original. "Art gallery" aesthetic. BiRefNet + local PIL/scipy processing.
+
+**Usage:**
+```bash
+./scripts/workflows/pose-geometry.py --source photo.jpg --geometry wireframe --blend-mode overlay
+./scripts/workflows/pose-geometry.py --source photo.jpg --geometry lowpoly --blend-opacity 0.6
+./scripts/workflows/pose-geometry.py --list-presets
+```
+
+**4 presets:** wireframe, lowpoly, blocks, contour. **4 blend modes:** overlay, multiply, screen, alpha.
+
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.
 

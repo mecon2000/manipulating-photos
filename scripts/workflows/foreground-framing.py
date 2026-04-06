@@ -150,7 +150,7 @@ def _get_fal_key():
     return key
 
 
-def _img_to_b64(img, fmt="JPEG", quality=90):
+def _img_to_b64_simple(img, fmt="JPEG", quality=90):
     buf = BytesIO()
     if img.mode == "RGBA" and fmt == "JPEG":
         img = img.convert("RGB")
@@ -159,9 +159,171 @@ def _img_to_b64(img, fmt="JPEG", quality=90):
 
 
 # ---------------------------------------------------------------------------
+# Subject detection for smart side selection
+# ---------------------------------------------------------------------------
+def run_fal_birefnet(image_path, output_dir):
+    """Extract foreground mask using BiRefNet."""
+    log(output_dir, "Detecting subject position (BiRefNet)...")
+    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
+    with open(image_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+    try:
+        response = requests.post("https://fal.run/fal-ai/birefnet", headers=headers,
+            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
+    except requests.RequestException as e:
+        log(output_dir, f"BiRefNet request failed: {e}", "WARN")
+        return None
+    if response.status_code != 200:
+        log(output_dir, f"BiRefNet failed ({response.status_code})", "WARN")
+        return None
+    data = response.json()
+    result_url = data["image"]["url"]
+    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw)
+    if result_img.mode == "RGBA":
+        return result_img.split()[3]
+    return result_img.convert("L")
+
+
+def detect_smart_sides(subject_mask, img_width, img_height, output_dir):
+    """Analyze subject position to pick 2 adjacent sides for L-shaped framing.
+
+    Returns a dict with: primary side (more coverage), secondary side (less coverage),
+    and coverage multipliers for each.
+
+    Logic:
+    - Subject right of center → frame LEFT (more lead room on left)
+    - Subject above center → frame BOTTOM
+    - Pick the 2 adjacent sides with the most space
+    - Primary side gets full coverage, secondary gets 60% coverage
+    """
+    mask_np = np.array(subject_mask)
+    # Threshold
+    binary = (mask_np > 127).astype(np.float32)
+
+    if binary.sum() < 100:
+        log(output_dir, "Subject mask too small for smart detection — falling back to auto", "WARN")
+        return None
+
+    # Find centroid
+    ys, xs = np.where(binary > 0)
+    cx = xs.mean() / img_width   # 0-1, 0=left, 1=right
+    cy = ys.mean() / img_height  # 0-1, 0=top, 1=bottom
+
+    log(output_dir, f"Subject centroid: x={cx:.2f}, y={cy:.2f} (0=left/top, 1=right/bottom)")
+
+    # Determine horizontal framing side (opposite to where subject is pushed)
+    # Subject is right → more space on left → frame left
+    h_side = "left" if cx > 0.5 else "right"
+    h_offset = abs(cx - 0.5)  # How far off-center (0=centered, 0.5=at edge)
+
+    # Determine vertical framing side
+    v_side = "top" if cy > 0.5 else "bottom"
+    v_offset = abs(cy - 0.5)
+
+    # Primary side = the one with more space (larger offset)
+    if h_offset >= v_offset:
+        primary, secondary = h_side, v_side
+        primary_mult, secondary_mult = 1.0, 0.6
+    else:
+        primary, secondary = v_side, h_side
+        primary_mult, secondary_mult = 1.0, 0.6
+
+    log(output_dir, f"Smart framing: primary={primary} (×{primary_mult}), secondary={secondary} (×{secondary_mult})")
+
+    return {
+        "primary": primary,
+        "secondary": secondary,
+        "primary_mult": primary_mult,
+        "secondary_mult": secondary_mult,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Scene-aware framing prompt via Gemini
+# ---------------------------------------------------------------------------
+_SCENE_PROMPT = """\
+You are a professional photographer planning a "shoot-through" foreground framing element for this photo.
+
+Look at the scene: the environment, setting, objects present, indoor/outdoor, lighting, mood.
+
+Suggest ONE specific foreground object that would look natural if it were very close to the camera lens \
+and heavily out of focus. This object should:
+1. Be something that BELONGS in this scene (e.g., leaves for outdoor, curtain for indoor, bottle for bathroom)
+2. Be dark or semi-transparent when blurred
+3. Add depth without distracting from the subject
+
+Respond ONLY with valid JSON:
+{
+  "object": "<the object, e.g. 'green leaves and small twigs', 'dark wooden doorframe', 'frosted glass bottle'>",
+  "prompt": "<inpainting prompt: 'out of focus [object] very close to camera, shallow depth of field, [details]'>",
+  "negative": "<what to avoid: 'sharp, in focus, text, face, person, [scene-specific]'>",
+  "reasoning": "<one sentence why this fits the scene>"
+}"""
+
+
+def suggest_framing_prompt(image_path, output_dir):
+    """Use Gemini to analyze the scene and suggest a contextual foreground element."""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        log(output_dir, "GOOGLE_API_KEY not set — cannot auto-detect framing", "WARN")
+        return None
+
+    try:
+        img = Image.open(image_path).convert("RGB")
+        img.thumbnail((1024, 1024), Image.LANCZOS)
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        payload = {
+            "contents": [{"parts": [
+                {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                {"text": _SCENE_PROMPT},
+            ]}],
+            "generationConfig": {
+                "temperature": 0.4,
+                "maxOutputTokens": 1024,
+                "responseMimeType": "application/json",
+            },
+        }
+
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+            json=payload, timeout=30)
+
+        if response.status_code != 200:
+            log(output_dir, f"Gemini scene analysis failed ({response.status_code})", "WARN")
+            return None
+
+        resp_json = response.json()
+        candidates = resp_json.get("candidates", [])
+        if not candidates:
+            return None
+
+        raw = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+        # Parse JSON
+        lines = [l for l in raw.split("\n") if not l.strip().startswith("```")]
+        raw = "\n".join(lines).strip()
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError:
+            start, end = raw.find("{"), raw.rfind("}")
+            if start == -1 or end <= start:
+                return None
+            result = json.loads(raw[start:end + 1])
+
+        log(output_dir, f"Scene analysis: {result.get('object', '?')} — {result.get('reasoning', '')}")
+        return result
+
+    except Exception as e:
+        log(output_dir, f"Scene analysis failed: {e}", "WARN")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Edge mask generation
 # ---------------------------------------------------------------------------
-def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.4):
+def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.4, smart_sides=None):
     """Create an organic-looking edge mask for framing.
 
     White = areas to inpaint (foreground framing).
@@ -169,32 +331,53 @@ def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.
 
     Args:
         coverage: fraction of image covered by framing (0.1-0.4)
-        sides: "left-right", "top-bottom", "all", or "auto" (picks based on aspect ratio)
+        sides: "left-right", "top-bottom", "all", "auto", or "smart"
         irregularity: how jagged the inner edge is (0=straight, 1=very jagged)
+        smart_sides: dict from detect_smart_sides() with primary/secondary sides + multipliers
     """
     mask = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(mask)
 
-    if sides == "auto":
-        aspect = width / height
-        if aspect > 1.3:
-            sides = "left-right"  # Landscape: frame from sides
-        elif aspect < 0.77:
-            sides = "top-bottom"  # Portrait: frame from top/bottom
-        else:
-            sides = "left-right"  # Square-ish: default to sides
+    # Smart mode: L-shaped framing on 2 adjacent sides
+    if smart_sides is not None:
+        edge_px_x = int(width * coverage)
+        edge_px_y = int(height * coverage)
+        rects = []
+        for role in ("primary", "secondary"):
+            side = smart_sides[role]
+            mult = smart_sides[f"{role}_mult"]
+            if side == "left":
+                w = int(edge_px_x * mult)
+                rects.append(("left", 0, 0, w, height))
+            elif side == "right":
+                w = int(edge_px_x * mult)
+                rects.append(("right", width - w, 0, width, height))
+            elif side == "top":
+                h = int(edge_px_y * mult)
+                rects.append(("top", 0, 0, width, h))
+            elif side == "bottom":
+                h = int(edge_px_y * mult)
+                rects.append(("bottom", 0, height - h, width, height))
+    else:
+        if sides == "auto":
+            aspect = width / height
+            if aspect > 1.3:
+                sides = "left-right"
+            elif aspect < 0.77:
+                sides = "top-bottom"
+            else:
+                sides = "left-right"
 
-    edge_px_x = int(width * coverage)
-    edge_px_y = int(height * coverage)
+        edge_px_x = int(width * coverage)
+        edge_px_y = int(height * coverage)
 
-    # Create base rectangles for each side
-    rects = []
-    if sides in ("left-right", "all"):
-        rects.append(("left", 0, 0, edge_px_x, height))
-        rects.append(("right", width - edge_px_x, 0, width, height))
-    if sides in ("top-bottom", "all"):
-        rects.append(("top", 0, 0, width, edge_px_y))
-        rects.append(("bottom", 0, height - edge_px_y, width, height))
+        rects = []
+        if sides in ("left-right", "all"):
+            rects.append(("left", 0, 0, edge_px_x, height))
+            rects.append(("right", width - edge_px_x, 0, width, height))
+        if sides in ("top-bottom", "all"):
+            rects.append(("top", 0, 0, width, edge_px_y))
+            rects.append(("bottom", 0, height - edge_px_y, width, height))
 
     for side, x1, y1, x2, y2 in rects:
         # Draw base rectangle
@@ -480,12 +663,12 @@ def _img_to_b64(img, max_size=None, fmt="JPEG", quality=85):
 def main():
     parser = argparse.ArgumentParser(description="Foreground Framing — add blurry foreground depth")
     parser.add_argument("--source", required=True, help="Input photo path")
-    parser.add_argument("--framing", required=False, help="Framing preset name (use --list-presets)")
+    parser.add_argument("--framing", default="auto", help="Framing preset name, or 'auto' for Gemini scene detection (default: auto)")
     parser.add_argument("--prompt", default=None, help="Custom framing prompt (overrides preset)")
     parser.add_argument("--negative", default=None, help="Custom negative prompt")
     parser.add_argument("--coverage", type=float, default=0.20, help="How much of the edge is framed (0.1-0.4, default: 0.20)")
-    parser.add_argument("--sides", choices=["left-right", "top-bottom", "all", "auto"], default="auto",
-                        help="Which sides to frame (default: auto based on aspect ratio)")
+    parser.add_argument("--sides", choices=["left-right", "top-bottom", "all", "auto", "smart"], default="smart",
+                        help="Which sides to frame (default: smart — L-shaped based on subject position)")
     parser.add_argument("--blur-radius", type=int, default=None, help="Gaussian blur radius for framing (default: auto based on image size)")
     parser.add_argument("--darken", type=float, default=0.55, help="Darken framing factor (0.0=black, 1.0=no darkening, default: 0.55)")
     parser.add_argument("--irregularity", type=float, default=0.5, help="Edge irregularity (0=straight, 1=very jagged, default: 0.5)")
@@ -512,11 +695,15 @@ def main():
         sys.exit(1)
 
     # Resolve prompt
+    framing_prompt = None
+    framing_negative = None
+    framing_name = None
+
     if args.prompt:
         framing_prompt = args.prompt
         framing_negative = args.negative or "sharp, in focus, text, face, person"
         framing_name = "Custom"
-    elif args.framing:
+    elif args.framing and args.framing != "auto":
         if args.framing not in FRAMING_PRESETS:
             print(f"ERROR: Unknown preset '{args.framing}'. Use --list-presets.")
             sys.exit(1)
@@ -524,8 +711,11 @@ def main():
         framing_prompt = preset["prompt"]
         framing_negative = args.negative or preset.get("negative", "")
         framing_name = args.framing
+    elif args.framing == "auto" or args.framing is None:
+        # Will be resolved after output_dir is created (needs Gemini)
+        framing_name = "auto"
     else:
-        print("ERROR: Must specify --framing <preset> or --prompt '<custom>'")
+        print("ERROR: Must specify --framing <preset>, --framing auto, or --prompt '<custom>'")
         sys.exit(1)
 
     # Derive names
@@ -538,7 +728,7 @@ def main():
             break
 
     timestamp = datetime.now(ISRAEL_TZ).strftime("%Y-%m-%d_%H-%M-%S")
-    framing_tag = framing_name.replace(" ", "_")[:20]
+    framing_tag = (framing_name or "auto").replace(" ", "_")[:20]
     suffix = random.randint(10, 99)
     folder_name = f"{model_name}_{source_basename}_{timestamp}_frame_{framing_tag}_{suffix}"
     folder_name = re.sub(r'[<>:"/\\|?*]', '_', folder_name)
@@ -568,12 +758,44 @@ def main():
     img_orig = Image.open(source).convert("RGB")
     img_orig.save(os.path.join(output_dir, "0_original.jpg"), "JPEG", quality=95)
 
+    # --- Step 0: Auto-detect framing prompt if needed ---
+    if framing_name == "auto":
+        log(output_dir, "--- Auto-detecting scene for framing prompt (Gemini) ---")
+        scene = suggest_framing_prompt(source, output_dir)
+        if scene and scene.get("prompt"):
+            framing_prompt = scene["prompt"]
+            framing_negative = args.negative or scene.get("negative", "sharp, in focus, text, face, person")
+            framing_name = scene.get("object", "auto")[:20]
+            log(output_dir, f"Auto framing: '{framing_name}' — {framing_prompt[:80]}")
+        else:
+            log(output_dir, "Scene detection failed — falling back to 'foliage' preset", "WARN")
+            preset = FRAMING_PRESETS["foliage"]
+            framing_prompt = preset["prompt"]
+            framing_negative = preset["negative"]
+            framing_name = "foliage (fallback)"
+
     # --- Step 1: Create edge mask ---
     t0 = time.time()
     log(output_dir, "--- Step 1/4: Create edge mask ---")
+
+    # Smart side detection using BiRefNet
+    smart_sides = None
+    if args.sides == "smart":
+        subject_mask = run_fal_birefnet(source, output_dir)
+        if subject_mask is not None:
+            # Resize mask to match image
+            if subject_mask.size != img_orig.size:
+                subject_mask = subject_mask.resize(img_orig.size, Image.LANCZOS)
+            subject_mask.save(os.path.join(output_dir, "1_subject_mask.png"))
+            smart_sides = detect_smart_sides(subject_mask, img_orig.width, img_orig.height, output_dir)
+        if smart_sides is None:
+            log(output_dir, "Smart detection failed — falling back to auto sides", "WARN")
+
     mask = create_edge_mask(img_orig.width, img_orig.height,
-                            coverage=args.coverage, sides=args.sides,
-                            irregularity=args.irregularity)
+                            coverage=args.coverage,
+                            sides=args.sides if args.sides != "smart" else "auto",
+                            irregularity=args.irregularity,
+                            smart_sides=smart_sides)
     mask.save(os.path.join(output_dir, "1_edge_mask.png"))
     mask_coverage = np.array(mask).mean() / 255.0
     log(output_dir, f"Edge mask coverage: {mask_coverage*100:.1f}% of image")

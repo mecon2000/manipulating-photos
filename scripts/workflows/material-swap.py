@@ -50,6 +50,12 @@ import numpy as np
 import requests
 from PIL import Image, ImageFilter, ImageOps, ImageStat, ImageEnhance
 
+# Shared masking module (sibling script)
+_scripts_dir = os.path.dirname(os.path.abspath(__file__))
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+from masking import build_mask, add_affect_args
+
 sys.stdout.reconfigure(line_buffering=True)
 
 # ---------------------------------------------------------------------------
@@ -118,47 +124,11 @@ def check_image_quality(img, label, output_dir):
 # ---------------------------------------------------------------------------
 # API Key Helpers
 # ---------------------------------------------------------------------------
-def _get_fal_key():
-    key = os.environ.get("FAL_API_KEY")
-    if not key:
-        raise EnvironmentError("FAL_API_KEY not set")
-    return key
-
-
 def _get_tensor_key():
     key = os.environ.get("TENSOR_API_KEY")
     if not key:
         raise EnvironmentError("TENSOR_API_KEY not set")
     return key
-
-
-# ---------------------------------------------------------------------------
-# BiRefNet Mask Extraction
-# ---------------------------------------------------------------------------
-def run_fal_birefnet(image_path, output_dir):
-    """Extract foreground mask using BiRefNet (high quality edges)."""
-    log(output_dir, "Extracting mask using BiRefNet...")
-    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
-    with open(image_path, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-    try:
-        response = requests.post("https://fal.run/fal-ai/birefnet", headers=headers,
-            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
-    except requests.RequestException as e:
-        log(output_dir, f"BiRefNet request failed: {e}", "ERROR")
-        return None
-    if response.status_code != 200:
-        log(output_dir, f"BiRefNet failed ({response.status_code}): {response.text}", "ERROR")
-        return None
-
-    data = response.json()
-    result_url = data["image"]["url"]
-    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw)
-    if result_img.mode == "RGBA":
-        return result_img.split()[3]
-    else:
-        return result_img.convert("L")
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +456,7 @@ def main():
                         help="Where to output results (default: local)")
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
     parser.add_argument("--list-presets", action="store_true", help="List all material presets and exit")
+    add_affect_args(parser)  # adds --affect (default: subject) and --exclude
     args = parser.parse_args()
 
     if args.list_presets:
@@ -556,6 +527,8 @@ def main():
     log(output_dir, f"Seed:           {seed}")
     log(output_dir, f"Max retries:    {args.max_retries}")
     log(output_dir, f"Auto-correct:   {args.auto_correct}")
+    log(output_dir, f"Affect:         {args.affect}")
+    log(output_dir, f"Exclude:        {args.exclude or '(none)'}")
     log(output_dir, f"Output dir:     {output_dir}")
     log(output_dir, "=" * 60)
 
@@ -571,14 +544,16 @@ def main():
         log(output_dir, "Could not save script copy (permission issue, non-critical)", "WARN")
 
     # -----------------------------------------------------------------------
-    # STEP 1: Extract subject mask using BiRefNet
+    # STEP 1: Extract subject mask using shared masking module
     # -----------------------------------------------------------------------
     t0 = time.time()
-    log(output_dir, "--- Step 1/4: Extract subject mask (BiRefNet) ---")
-    mask = run_fal_birefnet(source, output_dir)
-    if mask is None:
-        log(output_dir, "Mask extraction failed — cannot proceed", "ERROR")
-        sys.exit(1)
+    log(output_dir, f"--- Step 1/4: Extract mask (affect={args.affect}, exclude='{args.exclude}') ---")
+    mask, mask_info = build_mask(
+        source,
+        affect=args.affect,
+        exclude=args.exclude,
+        output_dir=output_dir,
+    )
 
     # Resize mask to match image if needed
     if mask.size != img_orig.size:
@@ -587,9 +562,9 @@ def main():
 
     mask.save(os.path.join(output_dir, "1_mask.png"))
 
-    mask_np = np.array(mask.convert("L"))
+    mask_np = np.array(mask)
     mask_coverage = (mask_np > 127).sum() / mask_np.size
-    log(output_dir, f"Mask coverage: {mask_coverage:.1%} of image")
+    log(output_dir, f"Mask coverage: {mask_coverage:.1%} of image (engine: {mask_info['engine']})")
 
     if mask_coverage < 0.03:
         log(output_dir, f"Mask covers only {mask_coverage:.1%} — could not find subject. Cannot proceed.", "ERROR")

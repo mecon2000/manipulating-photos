@@ -5,11 +5,15 @@ Time Corruption — Temporal Decay Effects for Art Photography
 Simulates "time decay" / "temporal corruption" on photos: frozen motion,
 image decomposition through time, ghosting, melting, motion trails, glitch.
 
-Effects are applied primarily to the subject (extracted via BiRefNet) for
-dramatic impact against a clean background.
+Effects are applied to a body-part target specified by --affect:
+  skin     — face-skin + body-skin (default; ropes/clothes excluded — shibari)
+  subject  — whole foreground subject (BiRefNet)
+  bg       — background only (subject stays sharp)
+  all      — entire image
+  face-skin, body-skin, hair, clothes, others  — MediaPipe fine-grained parts
 
 Presets:
-    ghost   — Multiple-exposure ghosting of the subject
+    ghost   — Multiple-exposure ghosting (arc offsets on skin targets)
     melt    — Diffusion melting / dissolving through a gradient
     trails  — Directional motion blur trailing from the subject
     glitch  — Chromatic aberration / channel shift
@@ -17,8 +21,10 @@ Presets:
 
 Usage:
     python time-corruption.py --source photo.jpg --effect ghost
-    python time-corruption.py --source photo.jpg --effect full --intensity 0.5
-    python time-corruption.py --source photo.jpg --effect melt --direction 90 --output-to local
+    python time-corruption.py --source photo.jpg --effect ghost --affect skin
+    python time-corruption.py --source photo.jpg --effect full --affect subject --intensity 0.5
+    python time-corruption.py --source photo.jpg --effect melt --affect bg --direction 90
+    python time-corruption.py --source photo.jpg --effect ghost --affect skin --exclude hands
 """
 
 import os
@@ -62,13 +68,21 @@ sys.stdout.reconfigure(line_buffering=True)
 # Constants
 # ---------------------------------------------------------------------------
 EFFECTS = ["ghost", "melt", "trails", "glitch", "full"]
-MODES = ["normal", "dissolve", "float"]
-# normal:   effects applied to subject (original behavior)
-# dissolve: ropes stay sharp, effects applied to body only (shibari default)
-# float:    subject stays sharp, effects applied to background only
+MODES = ["normal", "dissolve", "float"]  # kept for backward-compat deprecation mapping
+# Deprecated mode → affect mapping
+_MODE_TO_AFFECT = {
+    "normal":  "subject",
+    "dissolve": "skin",
+    "float":   "bg",
+}
+
+# Parts that need BiRefNet (API call, ~5s, excellent edges)
+BIREFNET_PARTS = {"bg", "subject"}
+# Parts that come from MediaPipe body-segment
+BODY_SEGMENT_PARTS = {"face-skin", "body-skin", "skin", "hair", "clothes", "others"}
 
 STEP_NAMES = {
-    1: "Extract mask (BiRefNet)",
+    1: "Build affect mask",
     2: "Apply time-corruption effects",
     3: "Quality evaluation (Gemini)",
     4: "Output / upload",
@@ -154,6 +168,105 @@ def extract_mask(image_path, output_dir):
         return mask
     log(output_dir, "BiRefNet failed, falling back to rembg", "WARN")
     return run_fal_rembg(image_path, output_dir)
+
+
+def _import_body_segment():
+    """Import functions from body-segment.py (sibling script)."""
+    import importlib.util
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    bs_path = os.path.join(script_dir, "body-segment.py")
+    if not os.path.exists(bs_path):
+        raise FileNotFoundError(f"body-segment.py not found at {bs_path}")
+    spec = importlib.util.spec_from_file_location("body_segment", bs_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def build_affect_mask(image_path, orig_img, affect_parts_str, exclude_parts_str, output_dir,
+                      rope_color="auto"):
+    """Build a mask for the requested --affect target.
+
+    Returns a PIL L-mode mask the same size as orig_img, where white (255) = apply effects.
+
+    affect_parts_str: comma-separated string, e.g. "skin", "subject", "bg", "face-skin,body-skin"
+    exclude_parts_str: comma-separated string for body-segment exclusions, e.g. "hands,ropes"
+
+    Masking engine selection:
+      - "all"                    -> full white mask (no masking needed)
+      - "bg" or "subject"        -> BiRefNet (excellent edges, API call)
+      - body-segment parts       -> MediaPipe multiclass segmentation (local, ~0.5s)
+    """
+    parts = {p.strip().lower() for p in affect_parts_str.split(",") if p.strip()}
+    exclude = {p.strip().lower() for p in exclude_parts_str.split(",") if p.strip()}
+
+    w, h = orig_img.size
+
+    # ── "all" shortcut ──────────────────────────────────────────────────────
+    if "all" in parts:
+        log(output_dir, "Affect=all: full-image mask (no segmentation needed)")
+        return Image.new("L", orig_img.size, 255)
+
+    # ── BiRefNet path (bg / subject) ────────────────────────────────────────
+    birefnet_parts = parts & BIREFNET_PARTS
+    segment_parts  = parts & BODY_SEGMENT_PARTS
+
+    if birefnet_parts and not segment_parts:
+        log(output_dir, f"Affect={','.join(birefnet_parts)}: using BiRefNet for mask extraction")
+        mask = extract_mask(image_path, output_dir)
+        if mask is None:
+            log(output_dir, "BiRefNet failed -- falling back to full-image mask", "WARN")
+            return Image.new("L", orig_img.size, 255)
+        mask = mask.resize(orig_img.size, Image.LANCZOS)
+        if "bg" in birefnet_parts:
+            log(output_dir, "Inverting mask for background target")
+            mask = ImageOps.invert(mask)
+        return mask
+
+    # ── MediaPipe body-segment path ─────────────────────────────────────────
+    if segment_parts:
+        log(output_dir, f"Affect={','.join(segment_parts)}: using MediaPipe body segmentation")
+        try:
+            bs = _import_body_segment()
+        except Exception as e:
+            log(output_dir, f"body-segment import failed: {e} -- falling back to BiRefNet subject mask", "WARN")
+            mask = extract_mask(image_path, output_dir)
+            if mask is None:
+                return Image.new("L", orig_img.size, 255)
+            return mask.resize(orig_img.size, Image.LANCZOS)
+
+        img_arr = np.array(orig_img)
+        try:
+            cat_mask = bs.segment_body(img_arr)
+        except Exception as e:
+            log(output_dir, f"MediaPipe segmentation failed: {e} -- falling back to BiRefNet", "WARN")
+            mask = extract_mask(image_path, output_dir)
+            if mask is None:
+                return Image.new("L", orig_img.size, 255)
+            return mask.resize(orig_img.size, Image.LANCZOS)
+
+        include_set = set(segment_parts)
+        # Expand "skin" shortcut
+        if "skin" in include_set:
+            include_set = (include_set - {"skin"}) | {"face-skin", "body-skin"}
+
+        float_mask, indiv = bs.build_mask(cat_mask, img_arr, include_set, exclude,
+                                          rope_color=rope_color, feather=0.5, cleanup="smooth")
+        # Convert float32 0-1 to uint8 0-255
+        mask_uint8 = (float_mask * 255).clip(0, 255).astype(np.uint8)
+        mask_pil = Image.fromarray(mask_uint8, "L")
+
+        # Log coverage
+        coverage = (float_mask > 0.5).sum() / (h * w) * 100
+        log(output_dir, f"Body-segment mask coverage: {coverage:.1f}%")
+        return mask_pil
+
+    # ── Fallback: unrecognised parts -- use BiRefNet subject ─────────────────
+    log(output_dir, f"Unknown affect parts {parts} -- falling back to BiRefNet subject mask", "WARN")
+    mask = extract_mask(image_path, output_dir)
+    if mask is None:
+        return Image.new("L", orig_img.size, 255)
+    return mask.resize(orig_img.size, Image.LANCZOS)
 
 
 # ---------------------------------------------------------------------------
@@ -863,12 +976,18 @@ def effect_float(img_arr, subject_mask_arr, intensity, direction_deg, output_dir
 
 
 def apply_effects(img, mask, effect, intensity, direction_deg, seed, output_dir, **kwargs):
-    """Apply the requested effect preset with the given mode.
+    """Apply the requested effect preset to the region defined by mask.
 
-    Modes:
-      normal:   effects on subject mask (original behavior)
-      dissolve: detect ropes, apply effects to body only, paste ropes back sharp
-      float:    subject stays sharp, effects applied to background
+    mask: PIL L-mode image — white (255) = apply effects here.
+    The mask is produced by build_affect_mask() which handles all targeting logic.
+
+    For skin/body-segment affect targets, intensity is boosted slightly because
+    the affected region is smaller than the full subject.
+    For arc ghosting (ghost effect on skin targets), uses exponential arc offsets.
+
+    kwargs:
+      arc_angle      — arc curve for ghost effect (default 30)
+      is_skin_target — True when affect contains skin/body-segment parts (enables arc ghosting + boost)
     """
     rng = np.random.default_rng(seed)
     img_arr = np.array(img)
@@ -877,60 +996,23 @@ def apply_effects(img, mask, effect, intensity, direction_deg, seed, output_dir,
         mask_arr = mask_arr[:, :, 0]
     mask_arr = np.where(mask_arr > 127, 255, 0).astype(np.uint8)
 
-    mode = kwargs.get("mode", "normal")
-    rope_color_arg = kwargs.get("rope_color", "auto")
     arc_angle_arg = kwargs.get("arc_angle", 30)
+    is_skin_target = kwargs.get("is_skin_target", False)
 
-    # --- Float mode: apply effects to BG, keep subject sharp ---
-    if mode == "float":
-        log(output_dir, f"Float mode: applying '{effect}' to background, subject stays sharp")
-        # Invert mask — effects on background, boosted since subject paste-back covers some
-        bg_mask_arr = 255 - mask_arr
-        boosted = min(1.0, intensity * 1.3)
-        result = _apply_single_effect(effect, img_arr, bg_mask_arr, boosted, direction_deg, rng, output_dir)
-        # Paste sharp subject back
-        subj_norm = mask_arr.astype(np.float64) / 255.0
-        soft_mask = Image.fromarray(mask_arr).filter(ImageFilter.GaussianBlur(radius=3))
-        soft_norm = np.array(soft_mask).astype(np.float64) / 255.0
-        soft_3ch = soft_norm[:, :, np.newaxis]
-        result_f = result.astype(np.float64) * (1 - soft_3ch) + img_arr.astype(np.float64) * soft_3ch
-        return Image.fromarray(np.clip(result_f, 0, 255).astype(np.uint8))
+    # Boost intensity when effects target a sub-region (skin, face, clothes, etc.)
+    # so the effect is as visible as if it were on the full subject
+    effective_intensity = min(1.0, intensity * 1.5) if is_skin_target else intensity
 
-    # --- Dissolve mode: detect ropes, apply effects to body only, ropes stay sharp ---
-    if mode == "dissolve":
-        log(output_dir, f"Dissolve mode: applying '{effect}' to body, ropes stay sharp")
-        body_mask_pil, rope_mask_pil = detect_rope_mask(img, mask, rope_color_arg, output_dir)
-        body_arr = np.array(body_mask_pil.resize(img.size, Image.LANCZOS))
-        rope_arr = np.array(rope_mask_pil.resize(img.size, Image.LANCZOS))
-        if body_arr.ndim == 3:
-            body_arr = body_arr[:, :, 0]
-        if rope_arr.ndim == 3:
-            rope_arr = rope_arr[:, :, 0]
-        body_arr = np.where(body_arr > 127, 255, 0).astype(np.uint8)
-        rope_arr = np.where(rope_arr > 127, 255, 0).astype(np.uint8)
+    if is_skin_target and effect == "ghost":
+        # Arc ghosting: exponential offsets give more visible body echoes
+        log(output_dir, f"Using arc ghosting for skin target (arc_angle={arc_angle_arg})")
+        result = effect_arc_ghosting(img_arr, mask_arr, effective_intensity, direction_deg,
+                                     rng, output_dir, arc_angle_arg)
+    else:
+        result = _apply_single_effect(effect, img_arr, mask_arr, effective_intensity,
+                                      direction_deg, rng, output_dir)
 
-        # Save masks for debugging
-        Image.fromarray(body_arr).save(os.path.join(output_dir, "01_body_mask.png"))
-        Image.fromarray(rope_arr).save(os.path.join(output_dir, "01_rope_mask.png"))
-
-        # In dissolve mode, effects only hit the body (small area) — boost intensity
-        boosted = min(1.0, intensity * 1.5)
-        # For ghost effect in dissolve mode, use arc ghosting (exponential offsets)
-        if effect == "ghost":
-            result = effect_arc_ghosting(img_arr, body_arr, boosted, direction_deg, rng, output_dir, arc_angle_arg)
-        else:
-            result = _apply_single_effect(effect, img_arr, body_arr, boosted, direction_deg, rng, output_dir)
-
-        # Paste ropes back sharp
-        rope_paste = Image.fromarray(rope_arr).filter(ImageFilter.GaussianBlur(radius=1))
-        rope_norm = np.array(rope_paste).astype(np.float64) / 255.0
-        rope_3ch = rope_norm[:, :, np.newaxis]
-        result_f = result.astype(np.float64) * (1 - rope_3ch) + img_arr.astype(np.float64) * rope_3ch
-        return Image.fromarray(np.clip(result_f, 0, 255).astype(np.uint8))
-
-    # --- Normal mode: effects on subject mask ---
-    result = _apply_single_effect(effect, img_arr, mask_arr, intensity, direction_deg, rng, output_dir)
-    return Image.fromarray(result)
+    return Image.fromarray(np.clip(result, 0, 255).astype(np.uint8))
 
 
 def _apply_single_effect(effect, img_arr, mask_arr, intensity, direction_deg, rng, output_dir):
@@ -1040,6 +1122,7 @@ def _print_summary(args, output_dir, effect, intensity, direction, seed, timings
         "  Config:",
         f"    Source:         {args.source}",
         f"    Effect:         {effect}",
+        f"    Affect:         {args.affect}",
         f"    Intensity:      {intensity}",
         f"    Direction:      {direction} deg",
         f"    Seed:           {seed}",
@@ -1129,11 +1212,22 @@ def run_workflow(args):
     timings = {}
     quality_report = {}
 
+    # Resolve --affect (and handle deprecated --mode)
+    affect = args.affect
+    exclude = args.exclude
+
+    # Determine is_skin_target: True when affect contains body-segment parts
+    affect_parts = {p.strip().lower() for p in affect.split(",") if p.strip()}
+    is_skin_target = bool(affect_parts & BODY_SEGMENT_PARTS)
+
     # Log config
     log(output_dir, "=" * 60)
     log(output_dir, "TIME CORRUPTION — Start")
     log(output_dir, f"Source:         {args.source}")
     log(output_dir, f"Effect:         {effect}")
+    log(output_dir, f"Affect:         {affect}")
+    if exclude:
+        log(output_dir, f"Exclude:        {exclude}")
     log(output_dir, f"Intensity:      {intensity}")
     log(output_dir, f"Direction:      {direction} deg")
     log(output_dir, f"Seed:           {seed}")
@@ -1147,15 +1241,18 @@ def run_workflow(args):
     original.save(os.path.join(output_dir, "00_original.jpg"), quality=95)
     log(output_dir, f"Loaded source: {original.size[0]}x{original.size[1]}")
 
-    # --- Step 1: Extract mask ---
+    # --- Step 1: Build affect mask ---
     t0 = time.time()
     log(output_dir, f"--- Step 1/4: {STEP_NAMES[1]} ---")
-    mask = extract_mask(args.source, output_dir)
+    log(output_dir, f"Building mask for affect='{affect}' (exclude='{exclude}')")
+
+    mask = build_affect_mask(args.source, original, affect, exclude, output_dir,
+                             rope_color=args.rope_color)
     if mask is None:
-        log(output_dir, "FATAL: Could not extract mask", "ERROR")
+        log(output_dir, "FATAL: Could not build mask", "ERROR")
         sys.exit(1)
 
-    # Resize mask to match source
+    # Resize mask to match source (build_affect_mask should already return correct size, but be safe)
     mask = mask.resize(original.size, Image.LANCZOS)
     mask.save(os.path.join(output_dir, "01_mask.png"))
 
@@ -1175,7 +1272,7 @@ def run_workflow(args):
     log(output_dir, f"--- Step 2/4: {STEP_NAMES[2]} ---")
 
     result_img = apply_effects(original, mask, effect, intensity, direction, seed, output_dir,
-                               mode=args.mode, rope_color=args.rope_color, arc_angle=args.arc_angle)
+                               arc_angle=args.arc_angle, is_skin_target=is_skin_target)
     result_img.save(os.path.join(output_dir, "02_time_corrupted.jpg"), quality=95)
 
     timings[2] = time.time() - t0
@@ -1193,7 +1290,8 @@ def run_workflow(args):
     if not qc["ok"]:
         log(output_dir, f"Quality gate failed: {qc['reason']}. Reducing intensity and retrying.", "WARN")
         reduced_intensity = max(0.3, intensity * 0.6)
-        result_img = apply_effects(original, mask, effect, reduced_intensity, direction, seed, output_dir)
+        result_img = apply_effects(original, mask, effect, reduced_intensity, direction, seed, output_dir,
+                                   arc_angle=args.arc_angle, is_skin_target=is_skin_target)
         result_img.save(os.path.join(output_dir, "02_time_corrupted_retry.jpg"), quality=95)
         final_path = os.path.join(output_dir, "02_time_corrupted_retry.jpg")
         qc = check_image_quality(result_img, "time_corrupted_retry", output_dir)
@@ -1226,7 +1324,9 @@ def run_workflow(args):
                 current_direction = corrections["direction"]
                 args.direction = current_direction
 
-            result_img = apply_effects(original, mask, effect, current_intensity, current_direction, seed + corrections_done, output_dir)
+            result_img = apply_effects(original, mask, effect, current_intensity, current_direction,
+                                       seed + corrections_done, output_dir,
+                                       arc_angle=args.arc_angle, is_skin_target=is_skin_target)
             retry_path = os.path.join(output_dir, f"02_time_corrupted_correction_{corrections_done}.jpg")
             result_img.save(retry_path, quality=95)
             final_path = retry_path
@@ -1291,33 +1391,67 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Effects:
-  ghost   — Multiple-exposure ghosting (arc offsets in dissolve mode)
+  ghost   — Multiple-exposure ghosting (arc offsets when targeting skin)
   melt    — Diffusion melting / dissolving through a gradient
   trails  — Directional motion blur trailing
   glitch  — Chromatic aberration / channel shift
   full    — All effects layered together
 
-Modes:
-  normal   — Effects applied to subject (original behavior)
-  dissolve — Ropes stay sharp, effects on body only (shibari default)
-  float    — Subject stays sharp, background dissolves ("in space")
+Affect targets (--affect):
+  BiRefNet engine (API, ~5s, best edges):
+    subject        — whole subject / foreground
+    bg             — background only (subject stays sharp)
+
+  MediaPipe body-segment engine (local, ~0.5s):
+    skin           — face-skin + body-skin (= old dissolve mode; ropes/clothes excluded)
+    face-skin      — face only
+    body-skin      — neck, shoulders, torso, arms
+    hair           — hair
+    clothes        — clothing, accessories
+    others         — miscellaneous foreground items
+
+  Compound (comma-separated):
+    face-skin,body-skin   — same as skin
+    hair,clothes          — everything except bare skin
+
+  Special:
+    all            — entire image, no masking
+
+Exclude (--exclude, body-segment targets only):
+  hands, ropes, hair, clothes, others, background
 
 Examples:
-  %(prog)s --source photo.jpg --effect ghost --mode dissolve
-  %(prog)s --source photo.jpg --effect melt --mode dissolve --intensity 0.8
-  %(prog)s --source photo.jpg --effect trails --mode float
-  %(prog)s --source photo.jpg --effect full --mode normal
+  %(prog)s --source photo.jpg --effect ghost --affect skin
+  %(prog)s --source photo.jpg --effect melt --affect skin --intensity 0.8
+  %(prog)s --source photo.jpg --effect ghost --affect bg
+  %(prog)s --source photo.jpg --effect full --affect subject
+  %(prog)s --source photo.jpg --effect ghost --affect skin --exclude hands
+  %(prog)s --source photo.jpg --effect glitch --affect all
+
+Deprecated (still works, prints warning):
+  --mode dissolve  =>  --affect skin
+  --mode normal    =>  --affect subject
+  --mode float     =>  --affect bg
         """,
     )
     parser.add_argument("--source", required=True, help="Input image path")
     parser.add_argument("--effect", choices=EFFECTS, default="ghost",
                         help="Effect preset (default: ghost)")
-    parser.add_argument("--mode", choices=MODES, default="dissolve",
-                        help="Mode: normal (effects on subject), dissolve (ropes sharp, body dissolves), float (subject sharp, BG dissolves). Default: dissolve")
-    parser.add_argument("--rope-color", choices=["auto", "red", "beige", "black", "white"], default="auto",
-                        help="Rope color for dissolve mode detection (default: auto)")
+    parser.add_argument("--affect", default="skin",
+                        help="Body parts to apply effects to. Comma-separated list: "
+                             "subject, bg, skin, face-skin, body-skin, hair, clothes, others, all. "
+                             "Default: skin (= face-skin + body-skin, ropes/clothes excluded — shibari default)")
+    parser.add_argument("--exclude", default="",
+                        help="Comma-separated body-segment parts to exclude from the affect mask "
+                             "(e.g. hands,ropes). Only applies when --affect uses body-segment parts.")
     parser.add_argument("--arc-angle", type=float, default=30,
-                        help="Arc curve angle for ghost effect in dissolve mode (default: 30 degrees)")
+                        help="Arc curve angle for ghost effect on skin targets (default: 30 degrees)")
+    # Deprecated --mode flag (kept for backward compatibility)
+    parser.add_argument("--mode", choices=MODES, default=None,
+                        help="DEPRECATED: use --affect instead. "
+                             "normal => subject, dissolve => skin, float => bg")
+    parser.add_argument("--rope-color", choices=["auto", "red", "beige", "black", "white"], default="auto",
+                        help="Rope color hint for HSV detection when using --exclude ropes (default: auto)")
     parser.add_argument("--intensity", type=float, default=0.7,
                         help="Effect intensity 0.3-1.0 (default: 0.7)")
     parser.add_argument("--direction", type=float, default=0,
@@ -1335,6 +1469,16 @@ Examples:
 
     args = parser.parse_args()
 
+    # Handle deprecated --mode flag
+    if args.mode is not None:
+        mapped = _MODE_TO_AFFECT.get(args.mode, "skin")
+        print(f"WARNING: --mode is deprecated. Use --affect {mapped} instead. "
+              f"(--mode {args.mode} => --affect {mapped})")
+        # Only override --affect if user didn't also explicitly set --affect
+        # (if both are set, --affect takes precedence)
+        if args.affect == "skin":  # still at default
+            args.affect = mapped
+
     # Validate
     if not os.path.isfile(args.source):
         print(f"ERROR: Source file not found: {args.source}")
@@ -1342,6 +1486,15 @@ Examples:
 
     if not (0.3 <= args.intensity <= 1.0):
         print(f"ERROR: Intensity must be between 0.3 and 1.0 (got {args.intensity})")
+        sys.exit(1)
+
+    # Validate --affect parts
+    affect_parts = {p.strip().lower() for p in args.affect.split(",") if p.strip()}
+    valid_affect = BIREFNET_PARTS | BODY_SEGMENT_PARTS | {"all"}
+    unknown = affect_parts - valid_affect
+    if unknown:
+        print(f"ERROR: Unknown --affect parts: {', '.join(sorted(unknown))}")
+        print(f"Valid parts: {', '.join(sorted(valid_affect))}")
         sys.exit(1)
 
     run_workflow(args)

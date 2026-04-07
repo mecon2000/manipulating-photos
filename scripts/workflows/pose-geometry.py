@@ -21,19 +21,12 @@ Usage:
 import os
 import sys
 
-# Auto-load env vars from ~/sol/.env if not already set
-_env_file = os.path.expanduser("~/sol/.env")
-if os.path.isfile(_env_file):
-    with open(_env_file) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if _line and not _line.startswith("#") and "=" in _line:
-                _key, _val = _line.split("=", 1)
-                os.environ.setdefault(_key.strip(), _val.strip())
+# Ensure masking.py (sibling) is importable
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from masking import build_mask, add_affect_args
 
 import re
 import json
-import time
 import base64
 import random
 import shutil
@@ -49,7 +42,7 @@ except ImportError:
 
 import numpy as np
 import requests
-from PIL import Image, ImageFilter, ImageOps, ImageStat, ImageDraw, ImageEnhance, ImageChops
+from PIL import Image, ImageFilter, ImageStat, ImageDraw, ImageEnhance
 from scipy.ndimage import sobel
 from scipy.spatial import Delaunay
 
@@ -249,73 +242,6 @@ def evaluate_with_gemini(img, output_dir, original_img=None):
     except Exception as e:
         log(output_dir, f"Gemini evaluation failed: {e}", "WARN")
         return None
-
-
-# ---------------------------------------------------------------------------
-# API Wrappers
-# ---------------------------------------------------------------------------
-def _get_fal_key():
-    key = os.environ.get("FAL_API_KEY")
-    if not key:
-        raise EnvironmentError("FAL_API_KEY not set")
-    return key
-
-
-def run_fal_birefnet(image_path, output_dir):
-    """Extract foreground mask using BiRefNet (high quality edges)."""
-    log(output_dir, "Extracting mask using BiRefNet (high quality)...")
-    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
-    with open(image_path, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-    try:
-        response = requests.post("https://fal.run/fal-ai/birefnet", headers=headers,
-            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
-    except requests.RequestException as e:
-        log(output_dir, f"BiRefNet request failed: {e}", "ERROR")
-        return None
-    if response.status_code != 200:
-        log(output_dir, f"BiRefNet failed ({response.status_code}): {response.text}", "ERROR")
-        return None
-
-    data = response.json()
-    result_url = data["image"]["url"]
-    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw)
-    if result_img.mode == "RGBA":
-        return result_img.split()[3]
-    else:
-        return result_img.convert("L")
-
-
-def run_fal_rembg(image_path, output_dir):
-    """Extract foreground mask using Fal.ai rembg (fallback)."""
-    log(output_dir, "Extracting mask using rembg...")
-    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
-    with open(image_path, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-    try:
-        response = requests.post("https://fal.run/fal-ai/rembg", headers=headers,
-            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
-    except requests.RequestException as e:
-        log(output_dir, f"rembg request failed: {e}", "ERROR")
-        return None
-    if response.status_code != 200:
-        log(output_dir, f"rembg failed ({response.status_code}): {response.text}", "ERROR")
-        return None
-
-    mask_url = response.json()["image"]["url"]
-    mask_img = Image.open(requests.get(mask_url, stream=True, timeout=30).raw).split()[3]
-    return mask_img
-
-
-def extract_mask(image_path, output_dir):
-    """Extract foreground mask. Tries BiRefNet first, falls back to rembg."""
-    mask = run_fal_birefnet(image_path, output_dir)
-    if mask is not None:
-        return mask
-    log(output_dir, "BiRefNet failed, falling back to rembg", "WARN")
-    return run_fal_rembg(image_path, output_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -863,13 +789,14 @@ def run_workflow(args):
     img_orig.save(os.path.join(output_dir, "0_original.jpg"), quality=95)
 
     # -----------------------------------------------------------------------
-    # Step 1: Extract subject mask (fal.ai BiRefNet)
+    # Step 1: Extract subject mask
     # -----------------------------------------------------------------------
     log(output_dir, "--- Step 1: Extract subject mask ---")
-    mask = extract_mask(args.source, output_dir)
-    if mask is None:
-        log(output_dir, "FATAL: Could not extract mask", "ERROR")
-        sys.exit(1)
+    affect = getattr(args, "affect", "subject")
+    exclude = getattr(args, "exclude", "")
+    mask, mask_info = build_mask(args.source, affect=affect, exclude=exclude,
+                                 output_dir=output_dir)
+    log(output_dir, f"Mask engine: {mask_info['engine']}, coverage: {mask_info['coverage_pct']}%")
 
     # Ensure mask matches image size
     if mask.size != img_orig.size:
@@ -1090,6 +1017,9 @@ def main():
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
 
     parser.add_argument("--list-presets", action="store_true", help="List all geometry presets and exit")
+
+    # Mask targeting (--affect / --exclude) via shared masking module
+    add_affect_args(parser)
 
     args = parser.parse_args()
 

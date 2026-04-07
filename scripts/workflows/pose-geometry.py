@@ -915,13 +915,16 @@ def run_workflow(args):
     # -----------------------------------------------------------------------
     log(output_dir, "--- Step 6: Output ---")
 
-    # Save the finals folder
-    finals_dir = os.path.join(output_dir, "finals")
+    # Copy final to shared finals/ folder
+    if args.local_output_dir:
+        finals_dir = os.path.join(args.local_output_dir, "finals")
+    else:
+        finals_dir = os.path.join(output_dir, "finals")
     os.makedirs(finals_dir, exist_ok=True)
-    final_output_name = f"{model_name}_{photo_name}_geo_{current_geometry}_{current_blend}.jpg"
-    final_dest = os.path.join(finals_dir, final_output_name)
+    finals_name = os.path.basename(output_dir) + ".jpg"
+    final_dest = os.path.join(finals_dir, finals_name)
     current_final.save(final_dest, quality=95)
-    log(output_dir, f"Final saved: {final_dest}")
+    log(output_dir, f"Final copied to: {final_dest}")
 
     # Save metadata
     metadata = {

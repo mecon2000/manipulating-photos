@@ -1,10 +1,10 @@
 # OpenClaw Scripts
 
-Photo transformation pipeline for portrait/boudoir photography. Three tools: art stylization, lighting re-imagination, and foreground depth framing.
+Photo transformation pipeline for portrait/boudoir photography. Seven tools with unified `--affect`/`--exclude` masking.
 
 ## Environment
 
-- **Python venv**: `~/openclaw-venv/` (numpy, Pillow, requests, anthropic)
+- **Python venv**: `~/openclaw-venv/` (numpy, Pillow, requests, anthropic, mediapipe, fal_client)
 - **API keys**: `~/sol/.env` (FAL_API_KEY, TENSOR_API_KEY, GOOGLE_API_KEY, ANTHROPIC_API_KEY)
 - **Photos**: `~/.openclaw/workspace/_photos/` — subfolders per model name, each has `Processed/` and/or `Unprocessed/`
 - **Shared folder** (visible from Windows): `~/.openclaw/workspace/shared/`
@@ -12,6 +12,32 @@ Photo transformation pipeline for portrait/boudoir photography. Three tools: art
 - **Style guide**: `scripts/workflows/style-guide.json` — per-category strength recommendations
 - **Favorites**: `~/.openclaw/workspace/shared/favorites/favorites.json` — liked outputs with full reconstruction commands
 - **Impasto experiments**: `~/.openclaw/workspace/shared/impasto_experiments/` — shelved stroke direction research with examples
+- **MediaPipe models**: `~/openclaw-venv/mediapipe_models/` — selfie_multiclass.tflite, hand_landmarker.task, pose_landmarker.task
+
+## Unified Masking (`--affect` / `--exclude`)
+
+All tools share `scripts/workflows/masking.py` for mask building. Two masking engines, auto-selected:
+
+**BiRefNet** (fal.ai API, ~5s, excellent edges — especially hair):
+- `--affect subject` — whole person vs background
+- `--affect bg` — background only (inverted subject mask)
+
+**MediaPipe body-segment** (local, ~0.5s, 6 categories):
+- `--affect skin` — face-skin + body-skin (default for shibari — ropes auto-excluded)
+- `--affect face-skin` / `--affect body-skin` / `--affect hair` / `--affect clothes` / `--affect others`
+- Any comma-separated combination: `--affect face-skin,body-skin,hair`
+
+**Special:**
+- `--affect all` — full image, no masking
+- `--exclude hands` — subtract detected hands (MediaPipe hand landmarker)
+- `--exclude ropes` — subtract ropes via HSV detection (aggressive, may eat skin — usually not needed since MediaPipe auto-classifies ropes as clothes)
+
+**Defaults per tool:**
+- time-corruption: `skin` (shibari-safe, ropes untouched)
+- relighting: `subject` (IC-Light needs full subject on black)
+- material-swap: `subject` (transform entire subject)
+- pose-geometry: `subject` (silhouette-based effects)
+- foreground-framing: not applicable (uses subject mask for avoidance, not effect application)
 
 ## Active Scripts
 

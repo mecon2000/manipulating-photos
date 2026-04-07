@@ -48,6 +48,10 @@ import numpy as np
 import requests
 from PIL import Image, ImageFilter, ImageOps, ImageStat, ImageEnhance
 
+# Shared masking module (BiRefNet / body-segment)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from masking import build_mask, add_affect_args
+
 sys.stdout.reconfigure(line_buffering=True)
 
 # ---------------------------------------------------------------------------
@@ -192,49 +196,11 @@ def _get_fal_key():
     return key
 
 
-def run_fal_birefnet(image_path, output_dir):
-    """Extract foreground mask using BiRefNet."""
-    log(output_dir, "Extracting mask using BiRefNet...")
-    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
-    with open(image_path, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-    try:
-        response = requests.post("https://fal.run/fal-ai/birefnet", headers=headers,
-            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
-    except requests.RequestException as e:
-        log(output_dir, f"BiRefNet request failed: {e}", "ERROR")
-        return None
-    if response.status_code != 200:
-        log(output_dir, f"BiRefNet failed ({response.status_code}): {response.text}", "ERROR")
-        return None
-    data = response.json()
-    result_url = data["image"]["url"]
-    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw)
-    if result_img.mode == "RGBA":
-        return result_img.split()[3]
-    else:
-        return result_img.convert("L")
-
-
-def extract_subject_on_black(image_path, output_dir):
-    """Extract subject with transparent/black background for IC-Light input."""
-    mask = run_fal_birefnet(image_path, output_dir)
-    if mask is None:
-        return None, None
-
-    img = Image.open(image_path).convert("RGB")
-    # Resize mask to match image if needed
-    if mask.size != img.size:
-        mask = mask.resize(img.size, Image.LANCZOS)
-
-    mask_coverage = np.array(mask).mean() / 255.0
-    log(output_dir, f"Mask coverage: {mask_coverage*100:.1f}% of image")
-
-    # Create subject on black background (what IC-Light expects for foreground conditioning)
+def extract_subject_on_black(img, mask):
+    """Composite subject onto black background for IC-Light input."""
     subject_on_black = Image.new("RGB", img.size, (0, 0, 0))
     subject_on_black.paste(img, mask=mask)
-
-    return subject_on_black, mask
+    return subject_on_black
 
 
 def run_iclight(subject_img, prompt, negative_prompt, output_dir, seed=None,
@@ -439,6 +405,7 @@ def main():
     parser.add_argument("--output-to", choices=["local", "gdrive", "both"], default="local")
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
     parser.add_argument("--list-presets", action="store_true", help="List all lighting presets and exit")
+    add_affect_args(parser)
     args = parser.parse_args()
 
     if args.list_presets:
@@ -507,6 +474,9 @@ def main():
     log(output_dir, f"Steps:          {args.steps}")
     log(output_dir, f"Seed:           {seed}")
     log(output_dir, f"HR Fix:         {not args.no_hr}")
+    log(output_dir, f"Affect:         {args.affect}")
+    if args.exclude:
+        log(output_dir, f"Exclude:        {args.exclude}")
     log(output_dir, f"Output dir:     {output_dir}")
     log(output_dir, "=" * 60)
 
@@ -517,10 +487,12 @@ def main():
     # --- Step 1: Extract subject ---
     t0 = time.time()
     log(output_dir, "--- Step 1/4: Extract subject ---")
-    subject_on_black, mask = extract_subject_on_black(source, output_dir)
-    if subject_on_black is None:
+    mask, mask_info = build_mask(img_orig, affect=args.affect, exclude=args.exclude, output_dir=output_dir)
+    if mask is None:
         log(output_dir, "Subject extraction failed — cannot proceed", "ERROR")
         sys.exit(1)
+    log(output_dir, f"Mask: engine={mask_info['engine']}, coverage={mask_info['coverage_pct']}%")
+    subject_on_black = extract_subject_on_black(img_orig, mask)
     subject_on_black.save(os.path.join(output_dir, "1_subject_on_black.jpg"), "JPEG", quality=95)
     mask.save(os.path.join(output_dir, "1_mask.png"))
     timings["extract"] = time.time() - t0

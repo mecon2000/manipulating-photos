@@ -47,7 +47,7 @@ Photo transformation pipeline for portrait/boudoir photography. Three tools: art
 ./scripts/workflows/relighting.py --list-presets
 ```
 
-**All flags:** `--source`, `--lighting` (preset name), `--prompt` (custom, overrides preset), `--negative`, `--lowres-denoise` (default 0.85), `--highres-denoise` (default 0.5, lower = more faithful), `--guidance-scale` (default 2.5), `--steps` (default 28), `--seed`, `--no-hr`, `--auto-correct`, `--max-corrections`, `--output-to`, `--local-output-dir`, `--list-presets`
+**All flags:** `--source`, `--lighting` (preset name), `--prompt` (custom, overrides preset), `--negative`, `--lowres-denoise` (default 0.85), `--highres-denoise` (default 0.5, lower = more faithful), `--guidance-scale` (default 2.5), `--steps` (default 28), `--seed`, `--no-hr`, `--bg-blend` (0.0-1.0, blend original BG back), `--bg-blend-blur` (mask blur px, 0=hard edge), `--auto-correct`, `--max-corrections`, `--output-to`, `--local-output-dir`, `--list-presets`
 
 **20 presets:** Dramatic Rim, Spotlight, Low Key, High Key, Neon Gels, Teal & Orange, Red Drama, Golden Hour, Window Light, Overcast Soft, Candlelight, Butterfly, Split Light, Beauty Dish, Underwater Caustics, Moonlight, Neon Signs, Firelight, Laser
 
@@ -61,7 +61,7 @@ Photo transformation pipeline for portrait/boudoir photography. Three tools: art
 ./scripts/workflows/foreground-framing.py --list-presets
 ```
 
-**All flags:** `--source`, `--framing` (preset name), `--prompt` (custom, overrides preset), `--negative`, `--coverage` (0.1-0.4, default 0.20), `--sides` (left-right/top-bottom/all/auto), `--blur-radius` (auto based on image size), `--darken` (0.0-1.0, default 0.55), `--irregularity` (0-1, default 0.5), `--guidance-scale` (default 9.0), `--steps` (default 30), `--seed`, `--auto-correct`, `--output-to`, `--local-output-dir`, `--list-presets`
+**All flags:** `--source`, `--framing` (preset or "auto" for Gemini scene detection, default auto), `--prompt` (custom), `--negative`, `--coverage` (0.1-0.4, default 0.20), `--sides` (left-right/top-bottom/all/auto/smart, default smart — L-shaped based on subject position), `--blur-radius` (auto, capped at 60px), `--darken` (0.0-1.0, default 0.55), `--irregularity` (0-1, default 0.5), `--guidance-scale` (default 9.0), `--steps` (default 30), `--seed`, `--auto-correct`, `--output-to`, `--local-output-dir`, `--list-presets`
 
 **10 presets:** foliage, warm foliage, doorframe, curtain, dark curtain, flowers, fairy lights, metal, smoke, brick
 
@@ -82,7 +82,13 @@ Photo transformation pipeline for portrait/boudoir photography. Three tools: art
 ./scripts/workflows/time-corruption.py --source photo.jpg --effect melt --intensity 0.8
 ```
 
-**5 presets:** ghost, melt, trails, glitch, full (combines all). Effects applied primarily to the subject (BiRefNet mask). PIL/numpy/scipy based — no API calls for effects.
+**5 effects:** ghost, melt, trails, glitch, full (combines all). PIL/numpy/scipy based — no API calls for effects.
+
+**3 modes:** `--mode dissolve` (default, ropes stay sharp, body gets effect — best for shibari), `--mode float` (subject sharp, BG dissolves — "in space" feeling), `--mode normal` (effects on full subject).
+
+**Shibari flags:** `--rope-color` (auto/red/beige/black/white), `--arc-angle` (ghost arc curve, default 30°)
+
+Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for visible, artistic body echoes while ropes stay perfectly sharp.
 
 ### `scripts/workflows/material-swap.py`
 **Material transformation.** Changes the subject's skin/body material to glass, marble, metal, etc. Uses BiRefNet for subject extraction + Tensor Art img2img for material transformation. Background stays pristine.
@@ -123,6 +129,46 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 
 ### `scripts/workflows/styles.json`
 111 art styles with names and prompt additions. Loaded automatically by the stylization script. Use `--list-styles` to see all available styles.
+
+## Lessons Learned (from testing, April 2026)
+
+### What works well — do more of this
+- **Bioluminescent + underwater photos** — natural fit, consistently scores 9. The style matches the water context.
+- **Colored gel relighting on shibari** — neon gels, pink+cyan, amber+violet. Very photographic, dramatic.
+- **Ghost dissolve** (time-corruption, dissolve mode) — body echoes along arc while ropes stay sharp. Powerful for shibari.
+- **BG blend in relighting** (`--bg-blend 0.4-0.5`) — keeps the original scene context, prevents "pasted on BG" look.
+- **Oil Impasto with posterize+downscale** — chunky visible brush strokes. posterize 3 + downscale 768.
+- **Style matching to scene context** — underwater style for pool photos, doorframe framing for indoor, etc.
+- **Combining tools** — e.g., ghost dissolve → relight with window light. Layer effects for unique results.
+
+### What went wrong repeatedly — avoid these pitfalls
+- **Pixel values not scaled to image size.** Absolute pixel offsets (5px, 15px) are invisible on 2048px images. ALWAYS scale effects to percentage of image dimensions (1-5% of short edge). This was fixed 3+ times.
+- **Gemini JSON parsing.** maxOutputTokens too low → truncated JSON → lost scores. responseMimeType=application/json is mandatory. Set maxOutputTokens to 4096. Check finishReason for MAX_TOKENS.
+- **SDXL inpainting ignores prompts.** Asked for "doorframe" → got foliage. The model preserves surrounding context more than following the text prompt. Strength=0.95 helps but doesn't fully solve it.
+- **Effects that blur-in-place are invisible.** Motion trails and melt applied within a body mask just blur the body in the same location — no visible change. Effects need to SPREAD BEYOND the mask boundary to be visible.
+- **Relighting removes the original BG entirely.** IC-Light generates a new scene. Hair edges look cut. Fix: --bg-blend 0.4-0.5 with soft mask blur (~2% of image). But even then, hair can look pasted.
+- **Auto blur radius on large images.** 2048+ px images get blur radius 120+ which makes everything look like abstract blobs. Cap blur at 60px max.
+- **Color matching too aggressive.** 60% color shift toward scene edges washes out intended tones (e.g., brown doorframe becomes generic grey). Reduced to 30%.
+
+### Relighting craft — photography rules
+- **Two lights should be opposite AND orthogonal to the body axis.** If body stretches 4→10 o'clock, lights go at ~1-2 and ~7 o'clock. Maximizes shadow definition on contours.
+- **Light position "outside the frame"** — use phrases like "far outside the right edge of frame." Prevents visible spot circles.
+- **"Grid modifier"** in prompt → harder, more directional shadows. "Wide spread" → not spot-like.
+- **Negative prompt for relighting:** always include "no halo, no corona, no glow, no lens flare, no bloom."
+- **Warmer light should come from the window direction** when one exists in the original photo. Reads as natural.
+
+### Shibari-specific rules
+- **Ropes must stay sharp.** Use `--mode dissolve` in time-corruption. The rope detection (HSV color thresholding) auto-detects red/beige/black ropes.
+- **Model strength 0.0-0.15** for stylization to preserve anatomy. Body changes are unacceptable.
+- **BiRefNet** sometimes misclassifies ropes as background or merges rope+skin. Check the masks.
+- **Gemini blocks many shibari images** (PROHIBITED_CONTENT / reason: OTHER). The pipeline continues without a score — don't rely on Gemini for shibari quality assessment.
+
+### Operational rules
+- **Never ask permission to run scripts.** Just run them. The allow list covers `./scripts/*` and `~/openclaw-venv/bin/python3*`.
+- **Always commit and push after changing scripts.** No exceptions.
+- **Favorites must include the full reconstruction command** with all custom prompts, so any output can be reproduced.
+- **When user is on phone,** provide fal.ai CDN URLs for remote viewing. Local PIL-only tools don't produce CDN URLs — run result through relighting (low denoise) to get one.
+- **Scale ALL pixel-based parameters to image size.** Never use fixed pixel values for effects that should be proportional.
 
 ## Legacy Scripts (from Echo, V9-V18 iterations)
 

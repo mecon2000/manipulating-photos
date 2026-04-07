@@ -430,6 +430,8 @@ def main():
     parser.add_argument("--steps", type=int, default=28, help="Inference steps (default: 28)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     parser.add_argument("--no-hr", action="store_true", help="Disable high-res fix")
+    parser.add_argument("--bg-blend", type=float, default=0.0,
+                        help="Blend original BG back at this opacity (0.0=fully relit BG, 0.5=50%% original BG, 1.0=original BG). Default: 0.0")
     parser.add_argument("--auto-correct", action="store_true", help="Enable Gemini evaluation + auto-correction loop")
     parser.add_argument("--max-corrections", type=int, default=2, help="Max auto-correction rounds (default: 2)")
     parser.add_argument("--output-to", choices=["local", "gdrive", "both"], default="local")
@@ -538,6 +540,23 @@ def main():
     if relit.size != img_orig.size:
         log(output_dir, f"Resizing relit {relit.size} -> {img_orig.size}")
         relit = relit.resize(img_orig.size, Image.LANCZOS)
+
+    relit.save(os.path.join(output_dir, "2_relit_raw.jpg"), "JPEG", quality=95)
+
+    # Blend original BG back if requested
+    if args.bg_blend > 0 and mask is not None:
+        log(output_dir, f"Blending original BG back at {args.bg_blend*100:.0f}% opacity")
+        # Where mask is LOW (background), blend original back
+        mask_soft = mask.filter(ImageFilter.GaussianBlur(radius=5))
+        mask_arr = np.array(mask_soft).astype(np.float64) / 255.0
+        # Invert: 1 = background, 0 = subject
+        bg_weight = (1.0 - mask_arr) * args.bg_blend
+        bg_weight_3ch = bg_weight[:, :, np.newaxis]
+        relit_arr = np.array(relit).astype(np.float64)
+        orig_arr = np.array(img_orig).astype(np.float64)
+        blended = relit_arr * (1 - bg_weight_3ch) + orig_arr * bg_weight_3ch
+        relit = Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8))
+        relit.save(os.path.join(output_dir, "2_relit_bg_blended.jpg"), "JPEG", quality=95)
 
     relit.save(os.path.join(output_dir, "2_relit.jpg"), "JPEG", quality=95)
     quality = check_image_quality(relit, "relit", output_dir)

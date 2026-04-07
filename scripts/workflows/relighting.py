@@ -432,6 +432,8 @@ def main():
     parser.add_argument("--no-hr", action="store_true", help="Disable high-res fix")
     parser.add_argument("--bg-blend", type=float, default=0.0,
                         help="Blend original BG back at this opacity (0.0=fully relit BG, 0.5=50%% original BG, 1.0=original BG). Default: 0.0")
+    parser.add_argument("--bg-blend-blur", type=int, default=None,
+                        help="Mask blur radius for BG blend edge (default: auto 2%% of image, 0=no feathering)")
     parser.add_argument("--auto-correct", action="store_true", help="Enable Gemini evaluation + auto-correction loop")
     parser.add_argument("--max-corrections", type=int, default=2, help="Max auto-correction rounds (default: 2)")
     parser.add_argument("--output-to", choices=["local", "gdrive", "both"], default="local")
@@ -547,9 +549,15 @@ def main():
     if args.bg_blend > 0 and mask is not None:
         log(output_dir, f"Blending original BG back at {args.bg_blend*100:.0f}% opacity")
         # Where mask is LOW (background), blend original back
-        # Heavy blur on mask edge for natural hair/edge blending
-        blur_r = max(10, int(min(img_orig.width, img_orig.height) * 0.02))
-        mask_soft = mask.filter(ImageFilter.GaussianBlur(radius=blur_r))
+        # Blur on mask edge for blending — configurable, 0 = hard edge
+        if args.bg_blend_blur is not None:
+            blur_r = args.bg_blend_blur
+        else:
+            blur_r = max(10, int(min(img_orig.width, img_orig.height) * 0.02))
+        if blur_r > 0:
+            mask_soft = mask.filter(ImageFilter.GaussianBlur(radius=blur_r))
+        else:
+            mask_soft = mask
         log(output_dir, f"BG blend mask blur: {blur_r}px")
         mask_arr = np.array(mask_soft).astype(np.float64) / 255.0
         # Invert: 1 = background, 0 = subject

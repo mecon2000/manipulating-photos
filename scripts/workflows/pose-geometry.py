@@ -56,6 +56,7 @@ GEOMETRY_PRESETS = {
     "lowpoly":   "Delaunay triangulation with sampled colors — faceted crystal/polygon portrait",
     "blocks":    "Rectangular grid mosaic — geometric pixelation with average-color blocks",
     "contour":   "Topographic contour lines at multiple brightness levels — elevation map portrait",
+    "crystal":   "Edge-aware Delaunay — dense triangles at contours that 'shatter' along edges, sparse in flat areas",
 }
 
 BLEND_MODES = ["overlay", "multiply", "screen", "alpha"]
@@ -460,6 +461,150 @@ def generate_lowpoly(img_orig, mask, output_dir, num_points=800, seed=None):
         draw.polygon(triangle_pts, fill=avg_color, outline=avg_color)
 
     log(output_dir, f"Lowpoly: drew {len(tri.simplices)} triangles")
+    return result
+
+
+def generate_crystal(img_orig, mask, output_dir, num_points=2000, saturation=1.3, seed=None):
+    """Edge-aware Delaunay: dense triangles at contours, sparse in flat areas.
+
+    Unlike lowpoly which scatters points uniformly, crystal places most vertices
+    ON detected edges so triangles naturally break along contours — creating a
+    shattered/crystalline effect where triangles 'jump out' of the silhouette.
+    """
+    log(output_dir, f"Generating crystal geometry (target ~{num_points} points, sat={saturation})...")
+
+    if seed is not None:
+        np.random.seed(seed)
+
+    img_np = np.array(img_orig)
+    mask_np = np.array(mask)
+    gray = np.array(img_orig.convert("L"), dtype=np.float64)
+    w, h = img_orig.size
+
+    # --- Edge detection on the FULL image (not just mask) ---
+    # Use multiple thresholds: strong edges get more points
+    edges_strong = detect_edges(gray, threshold=40)
+    edges_medium = detect_edges(gray, threshold=20)
+    edges_weak = detect_edges(gray, threshold=10)
+
+    # Restrict to mask area (with some bleed for the "jumping out" effect)
+    mask_dilated = np.array(mask.filter(ImageFilter.MaxFilter(
+        max(3, int(min(w, h) * 0.02)) | 1)))  # dilate 2% of short edge
+    mask_zone = mask_dilated > 64  # generous zone
+
+    strong_pts = get_edge_points(edges_strong & mask_zone)
+    medium_pts = get_edge_points(edges_medium & mask_zone & ~edges_strong)
+    weak_pts = get_edge_points(edges_weak & mask_zone & ~edges_medium)
+
+    log(output_dir, f"Crystal edges: {len(strong_pts)} strong, {len(medium_pts)} medium, {len(weak_pts)} weak")
+
+    # Allocate points: 50% strong edges, 25% medium, 10% weak, 15% random interior
+    n_strong = int(num_points * 0.50)
+    n_medium = int(num_points * 0.25)
+    n_weak = int(num_points * 0.10)
+    n_interior = int(num_points * 0.15)
+
+    points = []
+
+    # Sample from strong edges (densest)
+    if len(strong_pts) > n_strong:
+        idx = np.random.choice(len(strong_pts), n_strong, replace=False)
+        points.append(strong_pts[idx])
+    elif len(strong_pts) > 0:
+        points.append(strong_pts)
+
+    # Sample from medium edges
+    if len(medium_pts) > n_medium:
+        idx = np.random.choice(len(medium_pts), n_medium, replace=False)
+        points.append(medium_pts[idx])
+    elif len(medium_pts) > 0:
+        points.append(medium_pts)
+
+    # Sample from weak edges (sparser)
+    if len(weak_pts) > n_weak:
+        idx = np.random.choice(len(weak_pts), n_weak, replace=False)
+        points.append(weak_pts[idx])
+    elif len(weak_pts) > 0:
+        points.append(weak_pts)
+
+    # Random interior points for flat areas (prevents huge triangles)
+    ys_mask, xs_mask = np.where(mask_np > 127)
+    if len(ys_mask) > n_interior:
+        idx = np.random.choice(len(ys_mask), n_interior, replace=False)
+        points.append(np.column_stack((ys_mask[idx], xs_mask[idx])))
+
+    # Add image corners and edge points for complete coverage
+    corners = np.array([[0, 0], [0, w-1], [h-1, 0], [h-1, w-1]])
+    # Add points along image borders
+    border_n = 20
+    border_pts = []
+    for i in range(border_n):
+        t = i / border_n
+        border_pts.extend([
+            [0, int(t * (w-1))], [h-1, int(t * (w-1))],
+            [int(t * (h-1)), 0], [int(t * (h-1)), w-1],
+        ])
+    points.append(corners)
+    points.append(np.array(border_pts))
+
+    if not points:
+        log(output_dir, "No points found for crystal — returning blank", "WARN")
+        return Image.new("RGB", (w, h), (0, 0, 0))
+
+    all_points = np.vstack(points)
+    all_points = np.unique(all_points, axis=0)
+
+    # Clamp to image bounds
+    all_points[:, 0] = np.clip(all_points[:, 0], 0, h - 1)
+    all_points[:, 1] = np.clip(all_points[:, 1], 0, w - 1)
+
+    log(output_dir, f"Crystal: triangulating {len(all_points)} points...")
+
+    try:
+        tri = Delaunay(all_points)
+    except Exception as e:
+        log(output_dir, f"Delaunay triangulation failed: {e}", "WARN")
+        return Image.new("RGB", (w, h), (0, 0, 0))
+
+    # Draw ALL triangles (full image, no mask skip)
+    result = Image.new("RGB", (w, h), (0, 0, 0))
+    draw = ImageDraw.Draw(result)
+
+    for simplex in tri.simplices:
+        triangle_pts = [(int(all_points[i][1]), int(all_points[i][0])) for i in simplex]
+
+        # Centroid
+        cy = int(np.mean([all_points[i][0] for i in simplex]))
+        cx = int(np.mean([all_points[i][1] for i in simplex]))
+        cy = max(0, min(h - 1, cy))
+        cx = max(0, min(w - 1, cx))
+
+        # Sample average color from a patch around centroid
+        # Larger patch for bigger triangles
+        verts_y = [all_points[i][0] for i in simplex]
+        verts_x = [all_points[i][1] for i in simplex]
+        tri_size = max(max(verts_y) - min(verts_y), max(verts_x) - min(verts_x))
+        patch_r = max(2, int(tri_size * 0.15))
+
+        y_lo = max(0, cy - patch_r)
+        y_hi = min(h, cy + patch_r + 1)
+        x_lo = max(0, cx - patch_r)
+        x_hi = min(w, cx + patch_r + 1)
+        patch = img_np[y_lo:y_hi, x_lo:x_hi]
+        if patch.size > 0:
+            avg_color = tuple(int(c) for c in patch.mean(axis=(0, 1)))
+        else:
+            avg_color = (128, 128, 128)
+
+        draw.polygon(triangle_pts, fill=avg_color, outline=avg_color)
+
+    log(output_dir, f"Crystal: drew {len(tri.simplices)} triangles")
+
+    # Boost saturation for bolder look
+    if saturation != 1.0:
+        result = ImageEnhance.Color(result).enhance(saturation)
+        result = ImageEnhance.Contrast(result).enhance(1.0 + (saturation - 1.0) * 0.3)
+
     return result
 
 
@@ -976,6 +1121,8 @@ def _generate_geometry(img_orig, mask, preset, output_dir, line_color="auto", bl
         return generate_blocks(img_orig, mask, output_dir, block_size=block_size, seed=seed)
     elif preset == "contour":
         return generate_contour(img_orig, mask, output_dir, seed=seed)
+    elif preset == "crystal":
+        return generate_crystal(img_orig, mask, output_dir, seed=seed)
     else:
         raise ValueError(f"Unknown geometry preset: {preset}")
 

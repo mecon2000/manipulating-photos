@@ -114,6 +114,27 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 
 **4 presets:** wireframe, lowpoly, blocks, contour. **4 blend modes:** overlay, multiply, screen, alpha.
 
+### `scripts/workflows/body-segment.py`
+**Fine-grained body part segmentation.** Uses MediaPipe multiclass selfie segmentation to separate body into face-skin, body-skin, hair, clothes, and others. Can also detect and subtract hands (MediaPipe hand landmarker) and ropes (HSV thresholding). Runs locally — no API calls.
+
+**Usage:**
+```bash
+./scripts/workflows/body-segment.py --source photo.jpg --include face-skin,body-skin --exclude hands
+./scripts/workflows/body-segment.py --source photo.jpg --include skin --exclude hands,ropes
+./scripts/workflows/body-segment.py --source photo.jpg --include hair
+./scripts/workflows/body-segment.py --source photo.jpg --include all --exclude background
+```
+
+**All flags:** `--source`, `--include` (comma-separated: face-skin, body-skin, hair, clothes, others, skin, all), `--exclude` (comma-separated: hands, ropes, hair, clothes, others, background), `--rope-color` (auto/red/beige/black/white), `--feather` (edge blur % of short edge, default 0.5), `--cleanup` (close/open/smooth/none), `--debug` (save individual masks), `--bg-color` (black/white/transparent), `--output-to`, `--local-output-dir`
+
+**Categories (from MediaPipe):** background, hair, body-skin, face-skin, clothes, others. Ropes/blindfolds/gags are auto-classified as clothes/others (not skin), so they're excluded from skin masks without needing HSV detection.
+
+**Tips:**
+- For shibari: `--include skin --exclude hands` is usually enough — ropes are already excluded by the segmenter
+- HSV rope detection (`--exclude ropes`) is aggressive and may eat skin — only use when ropes are misclassified as skin
+- Hand detection works well for subtracting another person's hands touching the subject
+- `--debug` saves individual mask PNGs for each category
+
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.
 

@@ -62,6 +62,14 @@ import requests
 from PIL import Image, ImageFilter, ImageOps, ImageStat, ImageDraw, ImageEnhance
 from scipy.ndimage import convolve
 
+# Shared masking module (same directory)
+import importlib.util as _ilu
+_masking_spec = _ilu.spec_from_file_location(
+    "masking", os.path.join(os.path.dirname(os.path.abspath(__file__)), "masking.py")
+)
+masking = _ilu.module_from_spec(_masking_spec)
+_masking_spec.loader.exec_module(masking)
+
 sys.stdout.reconfigure(line_buffering=True)
 
 # ---------------------------------------------------------------------------
@@ -78,7 +86,7 @@ _MODE_TO_AFFECT = {
 
 # Parts that need BiRefNet (API call, ~5s, excellent edges)
 BIREFNET_PARTS = {"bg", "subject"}
-# Parts that come from MediaPipe body-segment
+# Parts that come from MediaPipe body-segment (includes "skin" shortcut)
 BODY_SEGMENT_PARTS = {"face-skin", "body-skin", "skin", "hair", "clothes", "others"}
 
 STEP_NAMES = {
@@ -104,169 +112,8 @@ def log(output_dir, message, level="INFO"):
 
 
 # ---------------------------------------------------------------------------
-# API helpers
+# API helpers (kept for non-masking API calls, e.g. Gemini)
 # ---------------------------------------------------------------------------
-def _get_fal_key():
-    key = os.environ.get("FAL_API_KEY")
-    if not key:
-        raise EnvironmentError("FAL_API_KEY not set")
-    return key
-
-
-def run_fal_birefnet(image_path, output_dir):
-    """Extract foreground mask using BiRefNet (high quality edges)."""
-    log(output_dir, "Extracting mask using BiRefNet...")
-    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
-    with open(image_path, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-    try:
-        response = requests.post("https://fal.run/fal-ai/birefnet", headers=headers,
-            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
-    except requests.RequestException as e:
-        log(output_dir, f"BiRefNet request failed: {e}", "ERROR")
-        return None
-    if response.status_code != 200:
-        log(output_dir, f"BiRefNet failed ({response.status_code}): {response.text}", "ERROR")
-        return None
-
-    data = response.json()
-    result_url = data["image"]["url"]
-    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw)
-    if result_img.mode == "RGBA":
-        return result_img.split()[3]
-    else:
-        return result_img.convert("L")
-
-
-def run_fal_rembg(image_path, output_dir):
-    """Fallback mask extraction using rembg."""
-    log(output_dir, "Extracting mask using rembg (fallback)...")
-    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
-    with open(image_path, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-    try:
-        response = requests.post("https://fal.run/fal-ai/rembg", headers=headers,
-            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
-    except requests.RequestException as e:
-        log(output_dir, f"rembg request failed: {e}", "ERROR")
-        return None
-    if response.status_code != 200:
-        log(output_dir, f"rembg failed ({response.status_code}): {response.text}", "ERROR")
-        return None
-
-    mask_url = response.json()["image"]["url"]
-    mask_img = Image.open(requests.get(mask_url, stream=True, timeout=30).raw).split()[3]
-    return mask_img
-
-
-def extract_mask(image_path, output_dir):
-    """Extract foreground mask. Tries BiRefNet first, falls back to rembg."""
-    mask = run_fal_birefnet(image_path, output_dir)
-    if mask is not None:
-        return mask
-    log(output_dir, "BiRefNet failed, falling back to rembg", "WARN")
-    return run_fal_rembg(image_path, output_dir)
-
-
-def _import_body_segment():
-    """Import functions from body-segment.py (sibling script)."""
-    import importlib.util
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    bs_path = os.path.join(script_dir, "body-segment.py")
-    if not os.path.exists(bs_path):
-        raise FileNotFoundError(f"body-segment.py not found at {bs_path}")
-    spec = importlib.util.spec_from_file_location("body_segment", bs_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def build_affect_mask(image_path, orig_img, affect_parts_str, exclude_parts_str, output_dir,
-                      rope_color="auto"):
-    """Build a mask for the requested --affect target.
-
-    Returns a PIL L-mode mask the same size as orig_img, where white (255) = apply effects.
-
-    affect_parts_str: comma-separated string, e.g. "skin", "subject", "bg", "face-skin,body-skin"
-    exclude_parts_str: comma-separated string for body-segment exclusions, e.g. "hands,ropes"
-
-    Masking engine selection:
-      - "all"                    -> full white mask (no masking needed)
-      - "bg" or "subject"        -> BiRefNet (excellent edges, API call)
-      - body-segment parts       -> MediaPipe multiclass segmentation (local, ~0.5s)
-    """
-    parts = {p.strip().lower() for p in affect_parts_str.split(",") if p.strip()}
-    exclude = {p.strip().lower() for p in exclude_parts_str.split(",") if p.strip()}
-
-    w, h = orig_img.size
-
-    # ── "all" shortcut ──────────────────────────────────────────────────────
-    if "all" in parts:
-        log(output_dir, "Affect=all: full-image mask (no segmentation needed)")
-        return Image.new("L", orig_img.size, 255)
-
-    # ── BiRefNet path (bg / subject) ────────────────────────────────────────
-    birefnet_parts = parts & BIREFNET_PARTS
-    segment_parts  = parts & BODY_SEGMENT_PARTS
-
-    if birefnet_parts and not segment_parts:
-        log(output_dir, f"Affect={','.join(birefnet_parts)}: using BiRefNet for mask extraction")
-        mask = extract_mask(image_path, output_dir)
-        if mask is None:
-            log(output_dir, "BiRefNet failed -- falling back to full-image mask", "WARN")
-            return Image.new("L", orig_img.size, 255)
-        mask = mask.resize(orig_img.size, Image.LANCZOS)
-        if "bg" in birefnet_parts:
-            log(output_dir, "Inverting mask for background target")
-            mask = ImageOps.invert(mask)
-        return mask
-
-    # ── MediaPipe body-segment path ─────────────────────────────────────────
-    if segment_parts:
-        log(output_dir, f"Affect={','.join(segment_parts)}: using MediaPipe body segmentation")
-        try:
-            bs = _import_body_segment()
-        except Exception as e:
-            log(output_dir, f"body-segment import failed: {e} -- falling back to BiRefNet subject mask", "WARN")
-            mask = extract_mask(image_path, output_dir)
-            if mask is None:
-                return Image.new("L", orig_img.size, 255)
-            return mask.resize(orig_img.size, Image.LANCZOS)
-
-        img_arr = np.array(orig_img)
-        try:
-            cat_mask = bs.segment_body(img_arr)
-        except Exception as e:
-            log(output_dir, f"MediaPipe segmentation failed: {e} -- falling back to BiRefNet", "WARN")
-            mask = extract_mask(image_path, output_dir)
-            if mask is None:
-                return Image.new("L", orig_img.size, 255)
-            return mask.resize(orig_img.size, Image.LANCZOS)
-
-        include_set = set(segment_parts)
-        # Expand "skin" shortcut
-        if "skin" in include_set:
-            include_set = (include_set - {"skin"}) | {"face-skin", "body-skin"}
-
-        float_mask, indiv = bs.build_mask(cat_mask, img_arr, include_set, exclude,
-                                          rope_color=rope_color, feather=0.5, cleanup="smooth")
-        # Convert float32 0-1 to uint8 0-255
-        mask_uint8 = (float_mask * 255).clip(0, 255).astype(np.uint8)
-        mask_pil = Image.fromarray(mask_uint8, "L")
-
-        # Log coverage
-        coverage = (float_mask > 0.5).sum() / (h * w) * 100
-        log(output_dir, f"Body-segment mask coverage: {coverage:.1f}%")
-        return mask_pil
-
-    # ── Fallback: unrecognised parts -- use BiRefNet subject ─────────────────
-    log(output_dir, f"Unknown affect parts {parts} -- falling back to BiRefNet subject mask", "WARN")
-    mask = extract_mask(image_path, output_dir)
-    if mask is None:
-        return Image.new("L", orig_img.size, 255)
-    return mask.resize(orig_img.size, Image.LANCZOS)
 
 
 # ---------------------------------------------------------------------------
@@ -687,130 +534,6 @@ def effect_channel_shift(img_arr, mask_arr, intensity, direction_deg, output_dir
     return np.clip(result_f, 0, 255).astype(np.uint8)
 
 
-# ---------------------------------------------------------------------------
-# Rope Detection — separate ropes from body within the subject mask
-# ---------------------------------------------------------------------------
-
-# HSV ranges for common rope colors
-ROPE_COLOR_RANGES = {
-    "red": {
-        # Red wraps around hue 0/360, so we need two ranges
-        "h_ranges": [(0, 15), (160, 180)],  # in OpenCV-style 0-180
-        "s_range": (60, 255),
-        "v_range": (40, 255),
-    },
-    "beige": {
-        "h_ranges": [(15, 35)],
-        "s_range": (30, 150),
-        "v_range": (120, 255),
-    },
-    "black": {
-        "h_ranges": [(0, 180)],
-        "s_range": (0, 80),
-        "v_range": (0, 60),
-    },
-    "white": {
-        "h_ranges": [(0, 180)],
-        "s_range": (0, 40),
-        "v_range": (200, 255),
-    },
-}
-
-
-def detect_rope_mask(img, subject_mask, rope_color="auto", output_dir=None):
-    """Detect ropes within the subject mask using color thresholding in HSV space.
-
-    Returns (body_mask, rope_mask) — both as PIL L-mode images.
-    body_mask = subject without ropes. rope_mask = just the ropes.
-    """
-    import colorsys
-
-    img_arr = np.array(img)
-    subj_arr = np.array(subject_mask)
-    if subj_arr.ndim == 3:
-        subj_arr = subj_arr[:, :, 0]
-    subj_binary = subj_arr > 127
-
-    # Convert to HSV (manually, not OpenCV — we don't have it)
-    r, g, b = img_arr[:, :, 0].astype(float), img_arr[:, :, 1].astype(float), img_arr[:, :, 2].astype(float)
-    r_n, g_n, b_n = r / 255.0, g / 255.0, b / 255.0
-
-    cmax = np.maximum(np.maximum(r_n, g_n), b_n)
-    cmin = np.minimum(np.minimum(r_n, g_n), b_n)
-    diff = cmax - cmin
-
-    # Hue (0-180 scale like OpenCV)
-    hue = np.zeros_like(r_n)
-    mask_r = (cmax == r_n) & (diff > 0)
-    mask_g = (cmax == g_n) & (diff > 0) & ~mask_r
-    mask_b = (cmax == b_n) & (diff > 0) & ~mask_r & ~mask_g
-    hue[mask_r] = (60 * ((g_n[mask_r] - b_n[mask_r]) / diff[mask_r]) + 360) % 360
-    hue[mask_g] = (60 * ((b_n[mask_g] - r_n[mask_g]) / diff[mask_g]) + 120) % 360
-    hue[mask_b] = (60 * ((r_n[mask_b] - g_n[mask_b]) / diff[mask_b]) + 240) % 360
-    hue = (hue / 2.0).astype(np.uint8)  # Scale to 0-180
-
-    # Saturation (0-255)
-    sat = np.zeros_like(r_n)
-    sat[cmax > 0] = (diff[cmax > 0] / cmax[cmax > 0]) * 255
-    sat = sat.astype(np.uint8)
-
-    # Value (0-255)
-    val = (cmax * 255).astype(np.uint8)
-
-    if rope_color == "auto":
-        # Try each color and see which gets the most pixels within the subject
-        best_color = "red"
-        best_count = 0
-        for color_name, ranges in ROPE_COLOR_RANGES.items():
-            rope_pixels = np.zeros_like(subj_binary, dtype=bool)
-            for h_lo, h_hi in ranges["h_ranges"]:
-                h_match = (hue >= h_lo) & (hue <= h_hi)
-                s_match = (sat >= ranges["s_range"][0]) & (sat <= ranges["s_range"][1])
-                v_match = (val >= ranges["v_range"][0]) & (val <= ranges["v_range"][1])
-                rope_pixels |= (h_match & s_match & v_match & subj_binary)
-            count = rope_pixels.sum()
-            if output_dir:
-                log(output_dir, f"Rope color '{color_name}': {count} pixels ({count/subj_binary.sum()*100:.1f}% of subject)")
-            if count > best_count and count > subj_binary.sum() * 0.02:  # At least 2% of subject
-                best_count = count
-                best_color = color_name
-        rope_color = best_color
-        if output_dir:
-            log(output_dir, f"Auto-detected rope color: {rope_color}")
-
-    # Apply the chosen color range
-    ranges = ROPE_COLOR_RANGES.get(rope_color, ROPE_COLOR_RANGES["red"])
-    rope_pixels = np.zeros_like(subj_binary, dtype=bool)
-    for h_lo, h_hi in ranges["h_ranges"]:
-        h_match = (hue >= h_lo) & (hue <= h_hi)
-        s_match = (sat >= ranges["s_range"][0]) & (sat <= ranges["s_range"][1])
-        v_match = (val >= ranges["v_range"][0]) & (val <= ranges["v_range"][1])
-        rope_pixels |= (h_match & s_match & v_match & subj_binary)
-
-    # Clean up the rope mask — dilate slightly to catch edges, then close gaps
-    rope_mask_pil = Image.fromarray((rope_pixels.astype(np.uint8) * 255))
-    # Close small gaps
-    rope_mask_pil = rope_mask_pil.filter(ImageFilter.MaxFilter(5))
-    rope_mask_pil = rope_mask_pil.filter(ImageFilter.MinFilter(3))
-    # Slight blur for soft edges
-    rope_mask_pil = rope_mask_pil.filter(ImageFilter.GaussianBlur(radius=2))
-
-    rope_arr = np.array(rope_mask_pil)
-    rope_binary = rope_arr > 127
-
-    # Body = subject minus ropes
-    body_binary = subj_binary & ~rope_binary
-    body_mask_pil = Image.fromarray((body_binary.astype(np.uint8) * 255))
-    # Soft edges on body mask
-    body_mask_pil = body_mask_pil.filter(ImageFilter.GaussianBlur(radius=2))
-
-    if output_dir:
-        rope_pct = rope_binary.sum() / max(subj_binary.sum(), 1) * 100
-        body_pct = body_binary.sum() / max(subj_binary.sum(), 1) * 100
-        log(output_dir, f"Rope mask: {rope_pct:.1f}% of subject, Body mask: {body_pct:.1f}% of subject")
-
-    return body_mask_pil, rope_mask_pil
-
 
 def effect_arc_ghosting(img_arr, mask_arr, intensity, direction_deg, rng, output_dir, arc_angle=30):
     """Exponential-offset arc ghosting: copies at 3, 6, 12, 24, 48px along a curved path.
@@ -875,104 +598,6 @@ def effect_arc_ghosting(img_arr, mask_arr, intensity, direction_deg, rng, output
 
     return np.clip(result, 0, 255).astype(np.uint8)
 
-
-def effect_dissolve(img_arr, subject_mask_arr, body_mask_arr, rope_mask_arr,
-                    intensity, direction_deg, seed, output_dir, arc_angle=30):
-    """Dissolve mode: body melts/ghosts with exponential arc, ropes stay sharp.
-
-    Combines arc ghosting + melt on body only. Ropes are composited back sharp.
-    """
-    log(output_dir, "Applying dissolve mode: body dissolves, ropes stay sharp")
-    rng = np.random.default_rng(seed)
-
-    h, w = img_arr.shape[:2]
-
-    # Save pristine ropes
-    rope_norm = rope_mask_arr.astype(np.float64) / 255.0
-    rope_3ch = rope_norm[:, :, np.newaxis]
-    pristine_ropes = img_arr.astype(np.float64) * rope_3ch
-
-    # Apply arc ghosting to body only
-    result = effect_arc_ghosting(img_arr, body_mask_arr, intensity, direction_deg, rng, output_dir, arc_angle)
-
-    # Apply melt to body only
-    result = effect_diffusion_melt(result, body_mask_arr, intensity * 0.5, direction_deg, output_dir)
-
-    # Apply subtle channel shift to body
-    result = effect_channel_shift(result, body_mask_arr, intensity * 0.4, direction_deg, output_dir)
-
-    # Paste ropes back sharp — overwrite wherever rope mask is active
-    result_f = result.astype(np.float64)
-    # Use a slightly dilated rope mask for clean edges
-    rope_paste_mask = Image.fromarray(rope_mask_arr)
-    rope_paste_mask = rope_paste_mask.filter(ImageFilter.GaussianBlur(radius=1))
-    rope_paste_norm = np.array(rope_paste_mask).astype(np.float64) / 255.0
-    rope_paste_3ch = rope_paste_norm[:, :, np.newaxis]
-
-    result_f = result_f * (1 - rope_paste_3ch) + img_arr.astype(np.float64) * rope_paste_3ch
-
-    return np.clip(result_f, 0, 255).astype(np.uint8)
-
-
-def effect_float(img_arr, subject_mask_arr, intensity, direction_deg, output_dir):
-    """Float mode: subject stays sharp, background dissolves.
-
-    The model is "in space" — background blurs, ghosts, fades.
-    Subject (body + ropes) remains perfectly sharp.
-    """
-    log(output_dir, "Applying float mode: subject sharp, world dissolves")
-
-    h, w = img_arr.shape[:2]
-
-    # Create inverted mask (background)
-    subj_norm = subject_mask_arr.astype(np.float64) / 255.0
-    bg_norm = 1.0 - subj_norm
-
-    # Heavy blur on background
-    pil_img = Image.fromarray(img_arr)
-    blur_radius = int(20 + intensity * 40)
-    blurred = np.array(pil_img.filter(ImageFilter.GaussianBlur(radius=blur_radius)), dtype=np.float64)
-
-    # Add motion trails to background
-    kernel_size = int(20 + intensity * 30)
-    kernel = np.zeros((kernel_size, kernel_size), dtype=np.float64)
-    cx, cy = kernel_size // 2, kernel_size // 2
-    rad = math.radians(direction_deg)
-    for i in range(kernel_size):
-        t = i - cx
-        kx = int(round(cx + t * math.cos(rad)))
-        ky = int(round(cy + t * math.sin(rad)))
-        if 0 <= kx < kernel_size and 0 <= ky < kernel_size:
-            kernel[ky, kx] = 1.0
-    ks = kernel.sum()
-    if ks > 0:
-        kernel /= ks
-    trailed = np.zeros_like(img_arr, dtype=np.float64)
-    for c in range(3):
-        trailed[:, :, c] = convolve(img_arr[:, :, c].astype(np.float64), kernel, mode='reflect')
-
-    # Blend blur + trails for background
-    bg_effect = blurred * 0.6 + trailed * 0.4
-
-    # Desaturate background slightly
-    bg_gray = np.mean(bg_effect, axis=2, keepdims=True)
-    desat_factor = 0.3 * intensity
-    bg_effect = bg_effect * (1 - desat_factor) + bg_gray * desat_factor
-
-    # Darken background slightly
-    bg_effect *= (1.0 - 0.2 * intensity)
-
-    # Composite: sharp subject over dissolved background
-    subj_3ch = subj_norm[:, :, np.newaxis]
-    # Soften the mask edge slightly for natural blending
-    soft_mask = Image.fromarray((subj_norm * 255).astype(np.uint8))
-    soft_mask = soft_mask.filter(ImageFilter.GaussianBlur(radius=3))
-    soft_norm = np.array(soft_mask).astype(np.float64) / 255.0
-    soft_3ch = soft_norm[:, :, np.newaxis]
-
-    result = img_arr.astype(np.float64) * soft_3ch + bg_effect * (1 - soft_3ch)
-
-    return np.clip(result, 0, 255).astype(np.uint8)
 
 
 def apply_effects(img, mask, effect, intensity, direction_deg, seed, output_dir, **kwargs):
@@ -1246,13 +871,13 @@ def run_workflow(args):
     log(output_dir, f"--- Step 1/4: {STEP_NAMES[1]} ---")
     log(output_dir, f"Building mask for affect='{affect}' (exclude='{exclude}')")
 
-    mask = build_affect_mask(args.source, original, affect, exclude, output_dir,
-                             rope_color=args.rope_color)
-    if mask is None:
-        log(output_dir, "FATAL: Could not build mask", "ERROR")
-        sys.exit(1)
+    mask, mask_info = masking.build_mask(
+        original, affect=affect, exclude=exclude,
+        output_dir=output_dir, rope_color=args.rope_color,
+    )
+    log(output_dir, f"Mask engine: {mask_info['engine']}")
 
-    # Resize mask to match source (build_affect_mask should already return correct size, but be safe)
+    # Resize mask to match source (build_mask should already return correct size, but be safe)
     mask = mask.resize(original.size, Image.LANCZOS)
     mask.save(os.path.join(output_dir, "01_mask.png"))
 
@@ -1437,13 +1062,9 @@ Deprecated (still works, prints warning):
     parser.add_argument("--source", required=True, help="Input image path")
     parser.add_argument("--effect", choices=EFFECTS, default="ghost",
                         help="Effect preset (default: ghost)")
-    parser.add_argument("--affect", default="skin",
-                        help="Body parts to apply effects to. Comma-separated list: "
-                             "subject, bg, skin, face-skin, body-skin, hair, clothes, others, all. "
-                             "Default: skin (= face-skin + body-skin, ropes/clothes excluded — shibari default)")
-    parser.add_argument("--exclude", default="",
-                        help="Comma-separated body-segment parts to exclude from the affect mask "
-                             "(e.g. hands,ropes). Only applies when --affect uses body-segment parts.")
+    masking.add_affect_args(parser)
+    # Override the masking default: time-corruption defaults to "skin" (shibari-safe)
+    parser.set_defaults(affect="skin")
     parser.add_argument("--arc-angle", type=float, default=30,
                         help="Arc curve angle for ghost effect on skin targets (default: 30 degrees)")
     # Deprecated --mode flag (kept for backward compatibility)

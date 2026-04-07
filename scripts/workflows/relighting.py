@@ -547,7 +547,10 @@ def main():
     if args.bg_blend > 0 and mask is not None:
         log(output_dir, f"Blending original BG back at {args.bg_blend*100:.0f}% opacity")
         # Where mask is LOW (background), blend original back
-        mask_soft = mask.filter(ImageFilter.GaussianBlur(radius=5))
+        # Heavy blur on mask edge for natural hair/edge blending
+        blur_r = max(10, int(min(img_orig.width, img_orig.height) * 0.02))
+        mask_soft = mask.filter(ImageFilter.GaussianBlur(radius=blur_r))
+        log(output_dir, f"BG blend mask blur: {blur_r}px")
         mask_arr = np.array(mask_soft).astype(np.float64) / 255.0
         # Invert: 1 = background, 0 = subject
         bg_weight = (1.0 - mask_arr) * args.bg_blend

@@ -899,9 +899,10 @@ def match_element_colors(original, element_img, element_alpha, edge_mask, darken
 def composite_element(original, element_img, element_alpha, subject_mask, edge_mask, output_dir):
     """Composite the foreground element over the original photo.
 
-    The element only appears where:
-      - edge_mask is white (edge regions)
-      - subject_mask is black (not covering the subject)
+    Uses the element's own alpha (from black BG extraction) as the natural shape.
+    Only subtracts the subject mask to protect the model.
+    The old edge_mask parameter is accepted but ignored — the element's strip
+    placement already constrains it to the correct edges.
     """
     w, h = original.size
 
@@ -912,23 +913,36 @@ def composite_element(original, element_img, element_alpha, subject_mask, edge_m
         element_alpha = element_alpha.resize((w, h), Image.LANCZOS)
     if subject_mask.size != (w, h):
         subject_mask = subject_mask.resize((w, h), Image.LANCZOS)
-    if edge_mask.size != (w, h):
-        edge_mask = edge_mask.resize((w, h), Image.LANCZOS)
 
-    # Combine masks: element_alpha AND edge_mask AND NOT subject_mask
     alpha_arr = np.array(element_alpha).astype(np.float32) / 255.0
-    edge_arr = np.array(edge_mask).astype(np.float32) / 255.0
     subject_arr = np.array(subject_mask).astype(np.float32) / 255.0
 
-    # Invert subject mask (we want to place element where subject is NOT)
-    not_subject = 1.0 - subject_arr
+    # Protect subject — element never covers the model
+    # Dilate subject mask slightly for clean separation
+    subject_dilated = np.array(
+        subject_mask.filter(ImageFilter.MaxFilter(max(3, int(min(w, h) * 0.01)) | 1))
+    ).astype(np.float32) / 255.0
+    not_subject = 1.0 - subject_dilated
 
-    # Combine: element visible where it has alpha AND we want framing AND subject is absent
-    final_alpha = alpha_arr * edge_arr * not_subject
+    # Element shape comes from its own alpha — no blobby edge mask needed
+    # Add a soft fade from edges inward so element doesn't have hard cutoffs
+    # toward the center of the image
+    fade_dist = int(min(w, h) * 0.15)  # fade over 15% of short edge
+    yy, xx = np.mgrid[0:h, 0:w]
+    # Distance from nearest edge (0 at edge, increases inward)
+    dist_from_edge = np.minimum(
+        np.minimum(yy, h - 1 - yy),
+        np.minimum(xx, w - 1 - xx)
+    ).astype(np.float32)
+    # Gradient: 1.0 at edge, fading to 0.0 at fade_dist pixels inward
+    edge_fade = np.clip(1.0 - dist_from_edge / max(fade_dist, 1), 0, 1)
+
+    # Combine: element alpha * edge fade * not-subject
+    final_alpha = alpha_arr * edge_fade * not_subject
     final_alpha = np.clip(final_alpha, 0, 1)
 
-    # Soften the composite mask edges
-    soft_blur = max(3, int(min(w, h) * 0.005))
+    # Soften composite edges
+    soft_blur = max(3, int(min(w, h) * 0.008))
     final_alpha_img = Image.fromarray((final_alpha * 255).astype(np.uint8), "L")
     final_alpha_img = final_alpha_img.filter(ImageFilter.GaussianBlur(radius=soft_blur))
 

@@ -57,6 +57,7 @@ GEOMETRY_PRESETS = {
     "blocks":    "Rectangular grid mosaic — geometric pixelation with average-color blocks",
     "contour":   "Topographic contour lines at multiple brightness levels — elevation map portrait",
     "crystal":   "Edge-aware Delaunay — dense triangles at contours that 'shatter' along edges, sparse in flat areas",
+    "shatter":   "Gradient-straddling Delaunay — triangle edges FOLLOW contrast boundaries (light/shadow lines)",
 }
 
 BLEND_MODES = ["overlay", "multiply", "screen", "alpha"]
@@ -621,6 +622,190 @@ def generate_crystal(img_orig, mask, output_dir, num_points=2000, saturation=1.3
     return result
 
 
+def generate_shatter(img_orig, mask, output_dir, num_points=1500, saturation=1.3, seed=None):
+    """Gradient-straddling Delaunay: triangle edges follow contrast boundaries.
+
+    Instead of placing vertices ON edges (like crystal), places vertex PAIRS
+    on each side of gradient transitions. This forces Delaunay edges to run
+    ALONG contrast boundaries (shadow/light lines, contour edges) rather than
+    crossing them randomly.
+
+    Also uses gradient magnitude as continuous density map (not binary edges)
+    for more natural vertex distribution.
+    """
+    log(output_dir, f"Generating shatter geometry (target ~{num_points} points, sat={saturation})...")
+
+    rng = np.random.default_rng(seed if seed is not None else 42)
+
+    img_np = np.array(img_orig)
+    mask_np = np.array(mask)
+    gray = np.array(img_orig.convert("L"), dtype=np.float64)
+    w, h = img_orig.size
+    short_edge = min(w, h)
+
+    # --- Compute gradient magnitude and direction ---
+    gx = sobel(gray, axis=1)  # horizontal gradient
+    gy = sobel(gray, axis=0)  # vertical gradient
+    magnitude = np.hypot(gx, gy)
+    # Normalize magnitude to 0-1
+    mag_max = magnitude.max()
+    if mag_max > 0:
+        mag_norm = magnitude / mag_max
+    else:
+        mag_norm = magnitude
+
+    # Gradient direction (perpendicular to edge direction)
+    # atan2 gives the direction OF the gradient (perpendicular to the edge)
+    direction = np.arctan2(gy, gx)  # radians
+
+    # --- Mask zone (dilated for edge bleed) ---
+    dilate_r = max(3, int(short_edge * 0.02)) | 1
+    mask_dilated = np.array(mask.filter(ImageFilter.MaxFilter(dilate_r)))
+    mask_zone = mask_dilated > 64
+
+    # --- Sample gradient-straddling vertex pairs ---
+    # Use magnitude as probability density: higher gradient = more likely to get vertices
+    # But we place PAIRS offset perpendicular to the gradient direction
+
+    # Create probability map from gradient magnitude within mask
+    prob_map = mag_norm * mask_zone.astype(np.float64)
+    # Add small base probability for flat areas (prevents huge triangles)
+    prob_map = prob_map + 0.02 * mask_zone.astype(np.float64)
+    prob_sum = prob_map.sum()
+    if prob_sum == 0:
+        log(output_dir, "No gradient found in mask zone — falling back to crystal", "WARN")
+        return generate_crystal(img_orig, mask, output_dir, num_points=num_points, seed=seed)
+
+    prob_flat = prob_map.flatten() / prob_sum
+
+    # Sample candidate positions weighted by gradient magnitude
+    n_pairs = num_points // 2  # each sample becomes a pair
+    indices = rng.choice(h * w, size=n_pairs, replace=False, p=prob_flat)
+    sample_ys = indices // w
+    sample_xs = indices % w
+
+    # For each sampled position, create a pair straddling the gradient
+    # Offset perpendicular to gradient direction (= along the edge)
+    # Actually we want offset ALONG gradient direction (perpendicular to edge)
+    # so the Delaunay edge between the pair runs along the edge
+    straddle_dist = max(3, int(short_edge * 0.008))  # distance from center to each vertex
+
+    points = []
+    for sy, sx in zip(sample_ys, sample_xs):
+        mag_here = mag_norm[sy, sx]
+        dir_here = direction[sy, sx]
+
+        # Offset along gradient direction (perpendicular to the edge)
+        # This places one vertex on the bright side, one on the dark side
+        dy = np.cos(dir_here) * straddle_dist
+        dx = np.sin(dir_here) * straddle_dist
+
+        # Scale straddle distance inversely with gradient magnitude
+        # Strong edges: tight straddling. Weak edges: wider spread
+        scale = 0.5 + (1.0 - mag_here) * 1.0
+        dy *= scale
+        dx *= scale
+
+        y1 = int(np.clip(sy - dy, 0, h - 1))
+        x1 = int(np.clip(sx - dx, 0, w - 1))
+        y2 = int(np.clip(sy + dy, 0, h - 1))
+        x2 = int(np.clip(sx + dx, 0, w - 1))
+
+        points.append([y1, x1])
+        points.append([y2, x2])
+
+    # Add sparse random interior points for flat areas
+    ys_mask, xs_mask = np.where(mask_np > 127)
+    n_interior = num_points // 6
+    if len(ys_mask) > n_interior:
+        idx = rng.choice(len(ys_mask), n_interior, replace=False)
+        for i in idx:
+            points.append([ys_mask[i], xs_mask[i]])
+
+    # Add mask boundary points
+    mask_boundary = np.array(mask.filter(ImageFilter.FIND_EDGES))
+    by, bx = np.where(mask_boundary > 127)
+    n_bnd = min(150, num_points // 8)
+    if len(by) > n_bnd:
+        idx = rng.choice(len(by), n_bnd, replace=False)
+        for i in idx:
+            points.append([by[i], bx[i]])
+
+    # Add image corners and borders
+    for corner in [[0, 0], [0, w-1], [h-1, 0], [h-1, w-1]]:
+        points.append(corner)
+    for i in range(20):
+        t = i / 20
+        points.extend([
+            [0, int(t * (w-1))], [h-1, int(t * (w-1))],
+            [int(t * (h-1)), 0], [int(t * (h-1)), w-1],
+        ])
+
+    all_points = np.array(points)
+    all_points = np.unique(all_points, axis=0)
+    all_points[:, 0] = np.clip(all_points[:, 0], 0, h - 1)
+    all_points[:, 1] = np.clip(all_points[:, 1], 0, w - 1)
+
+    log(output_dir, f"Shatter: triangulating {len(all_points)} points ({n_pairs} straddling pairs)...")
+
+    try:
+        tri = Delaunay(all_points)
+    except Exception as e:
+        log(output_dir, f"Delaunay triangulation failed: {e}", "WARN")
+        return Image.new("RGB", (w, h), (0, 0, 0))
+
+    # Draw triangles — each gets flat color from centroid + facet jitter
+    result = Image.new("RGB", (w, h), (0, 0, 0))
+    draw = ImageDraw.Draw(result)
+
+    for simplex in tri.simplices:
+        triangle_pts = [(int(all_points[i][1]), int(all_points[i][0])) for i in simplex]
+
+        cy = int(np.mean([all_points[i][0] for i in simplex]))
+        cx = int(np.mean([all_points[i][1] for i in simplex]))
+        cy = max(0, min(h - 1, cy))
+        cx = max(0, min(w - 1, cx))
+
+        # Sample color — use small patch to get ONE consistent color per triangle
+        verts_y = [all_points[i][0] for i in simplex]
+        verts_x = [all_points[i][1] for i in simplex]
+        tri_size = max(max(verts_y) - min(verts_y), max(verts_x) - min(verts_x))
+        # Smaller patch = more faithful to the exact centroid color
+        # This prevents triangles from averaging across the contrast boundary
+        patch_r = max(1, int(tri_size * 0.08))
+
+        y_lo = max(0, cy - patch_r)
+        y_hi = min(h, cy + patch_r + 1)
+        x_lo = max(0, cx - patch_r)
+        x_hi = min(w, cx + patch_r + 1)
+        patch = img_np[y_lo:y_hi, x_lo:x_hi]
+        if patch.size > 0:
+            r, g, b = [float(c) for c in patch.mean(axis=(0, 1))]
+        else:
+            r, g, b = 128., 128., 128.
+
+        # Saturation boost
+        grey = (r + g + b) / 3.0
+        r = grey + (r - grey) * 1.3
+        g = grey + (g - grey) * 1.3
+        b = grey + (b - grey) * 1.3
+
+        # 3D facet jitter
+        jitter = rng.uniform(0.78, 1.22)
+        r, g, b = [max(0, min(255, c * jitter)) for c in [r, g, b]]
+
+        color = (int(r), int(g), int(b))
+        draw.polygon(triangle_pts, fill=color, outline=color)
+
+    log(output_dir, f"Shatter: drew {len(tri.simplices)} triangles")
+
+    if saturation != 1.0:
+        result = ImageEnhance.Color(result).enhance(saturation)
+        result = ImageEnhance.Contrast(result).enhance(1.0 + (saturation - 1.0) * 0.3)
+
+    return result
+
+
 def generate_blocks(img_orig, mask, output_dir, block_size=30, seed=None):
     """Generate block mosaic: grid of rectangles with average color."""
     log(output_dir, f"Generating blocks geometry (block_size={block_size}px)...")
@@ -1136,6 +1321,8 @@ def _generate_geometry(img_orig, mask, preset, output_dir, line_color="auto", bl
         return generate_contour(img_orig, mask, output_dir, seed=seed)
     elif preset == "crystal":
         return generate_crystal(img_orig, mask, output_dir, num_points=num_points or 2000, seed=seed)
+    elif preset == "shatter":
+        return generate_shatter(img_orig, mask, output_dir, num_points=num_points or 1500, seed=seed)
     else:
         raise ValueError(f"Unknown geometry preset: {preset}")
 

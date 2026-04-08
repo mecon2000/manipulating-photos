@@ -4,10 +4,16 @@ Foreground Framing Workflow
 
 Adds blurry foreground elements to the edges of a photo, simulating the
 "shoot-through" technique (shooting through foliage, doorframes, fabric, etc.)
-at shallow depth of field (f/1.4-2.8, 35-50mm lens).
+at shallow depth of field.
 
-Creates 3D depth: sharp subject in the middle, blurry abstract foreground
-framing the edges. The foreground color palette is matched to the photo.
+Pipeline:
+  1. Analyze photo (EXIF, scene via Gemini, subject mask, depth map)
+  2. Generate foreground element via text-to-image (Flux Schnell on black BG)
+  3. Extract element alpha from black background
+  4. Depth-aware DOF blur (physically-based circle of confusion)
+  5. Color match + darken
+  6. Composite over original (respecting subject mask + edge mask)
+  7. Evaluate + output
 
 Usage:
     python foreground-framing.py --source photo.jpg --framing "foliage"
@@ -30,6 +36,7 @@ if os.path.isfile(_env_file):
 
 import re
 import json
+import math
 import time
 import uuid
 import random
@@ -49,60 +56,64 @@ import numpy as np
 import requests
 from PIL import Image, ImageFilter, ImageOps, ImageStat, ImageDraw, ImageEnhance
 
+# Use shared masking module
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from masking import build_mask
+
 sys.stdout.reconfigure(line_buffering=True)
 
 # ---------------------------------------------------------------------------
-# Framing Presets
+# Framing Presets — generation-style prompts (element on black background)
 # ---------------------------------------------------------------------------
 FRAMING_PRESETS = {
     "foliage": {
-        "prompt": "out of focus green leaves and branches very close to camera, soft bokeh foliage, natural organic shapes, dappled light through leaves",
-        "negative": "sharp, in focus, text, face, person, hand",
+        "prompt": "green oak leaves and small twigs with dappled light, natural organic shapes, lush vegetation, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, colorful background, bright background, white background",
         "description": "Blurry green leaves/branches framing the shot",
     },
     "warm foliage": {
-        "prompt": "out of focus warm autumn leaves close to camera, golden brown orange foliage bokeh, soft organic shapes, warm tones",
-        "negative": "sharp, in focus, text, face, person, green",
+        "prompt": "warm autumn leaves in golden brown and orange tones, dried twigs, fall foliage, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, green, bright background, white background",
         "description": "Warm autumn-toned blurry leaves",
     },
     "doorframe": {
-        "prompt": "out of focus dark wooden doorframe very close to camera, warm wood grain texture, architectural framing element, shallow depth of field",
-        "negative": "sharp, in focus, text, face, person, hand",
+        "prompt": "dark wooden doorframe edge with warm wood grain texture, architectural element, aged wood, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, bright background, white background, full door",
         "description": "Dark wooden doorframe edges",
     },
     "curtain": {
-        "prompt": "out of focus sheer curtain fabric very close to camera, soft translucent white fabric, flowing textile, shallow depth of field, dreamy",
-        "negative": "sharp, in focus, text, face, person, opaque",
+        "prompt": "sheer white curtain fabric, soft translucent flowing textile, delicate draping, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, opaque, bright background, colorful",
         "description": "Soft sheer curtain fabric",
     },
     "dark curtain": {
-        "prompt": "out of focus dark velvet curtain fabric very close to camera, rich dark textile, heavy draping, theatrical, shallow depth of field",
-        "negative": "sharp, in focus, text, face, person, bright",
+        "prompt": "dark velvet curtain fabric, rich heavy draping textile, theatrical deep tones, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, bright, white, colorful background",
         "description": "Dark velvet curtain draping",
     },
     "flowers": {
-        "prompt": "out of focus colorful flower petals very close to camera, soft bokeh blossoms, delicate petals, shallow depth of field, romantic",
-        "negative": "sharp, in focus, text, face, person, stem",
+        "prompt": "colorful flower petals and blossoms, soft delicate petals in pink and white, romantic floral arrangement, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, stems, bright background, white background",
         "description": "Blurry flower petals framing",
     },
     "fairy lights": {
-        "prompt": "out of focus warm fairy lights bokeh circles very close to camera, golden bokeh balls, string lights, warm glowing orbs, shallow depth of field",
-        "negative": "sharp, in focus, text, face, person",
+        "prompt": "warm golden fairy lights, string of glowing bokeh orbs, warm light circles, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, daylight, bright background",
         "description": "Warm bokeh light circles",
     },
     "metal": {
-        "prompt": "out of focus dark iron railing or metal bars very close to camera, industrial metal framing, shallow depth of field, dark tones",
-        "negative": "sharp, in focus, text, face, person, bright",
+        "prompt": "dark iron railing and metal bars, industrial metalwork, aged dark metal with patina, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, bright, shiny, chrome, white background",
         "description": "Dark metal railing/bars",
     },
     "smoke": {
-        "prompt": "out of focus wispy smoke or haze very close to camera, ethereal fog, atmospheric mist, shallow depth of field, mysterious",
-        "negative": "sharp, in focus, text, face, person, fire",
+        "prompt": "wispy tendrils of white and grey smoke, ethereal fog wisps, atmospheric haze, delicate swirling patterns, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, colorful, bright background, fire",
         "description": "Ethereal smoke/haze framing",
     },
     "brick": {
-        "prompt": "out of focus red brick wall very close to camera, warm masonry texture, urban architectural element, shallow depth of field",
-        "negative": "sharp, in focus, text, face, person",
+        "prompt": "red brick wall corner edge, warm masonry texture, urban architectural element, rough textured bricks, against solid black background, isolated object, no other objects",
+        "negative": "person, face, text, bright background, white background, full wall",
         "description": "Blurry brick wall edge",
     },
 }
@@ -158,69 +169,195 @@ def _img_to_b64_simple(img, fmt="JPEG", quality=90):
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def _img_to_b64(img, max_size=None, fmt="JPEG", quality=85):
+    """Encode image to base64. Optionally downscale."""
+    img_out = img.copy()
+    if max_size:
+        img_out.thumbnail((max_size, max_size), Image.LANCZOS)
+    if img_out.mode == "RGBA" and fmt == "JPEG":
+        img_out = img_out.convert("RGB")
+    buf = BytesIO()
+    img_out.save(buf, format=fmt, quality=quality)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# EXIF extraction
+# ---------------------------------------------------------------------------
+# EXIF tag IDs
+_EXIF_FOCAL_LENGTH = 37386
+_EXIF_FNUMBER = 33437
+_EXIF_LENS_MODEL = 42036
+_EXIF_EXPOSURE_TIME = 33434
+_EXIF_ISO = 34855
+
+
+def extract_exif(image_path, output_dir):
+    """Extract photographic EXIF data from source image.
+
+    Returns dict with focal_length_mm, aperture, lens_model, exposure_time, iso.
+    Uses defaults (50mm, f/2.0) if EXIF is missing.
+    """
+    defaults = {
+        "focal_length_mm": 50.0,
+        "aperture": 2.0,
+        "lens_model": None,
+        "exposure_time": None,
+        "iso": None,
+    }
+
+    try:
+        img = Image.open(image_path)
+        exif_data = img.getexif()
+        if not exif_data:
+            log(output_dir, "No EXIF data found — using defaults (50mm f/2.0)")
+            return defaults
+
+        result = dict(defaults)
+
+        # Focal length
+        fl = exif_data.get(_EXIF_FOCAL_LENGTH)
+        if fl is not None:
+            # May be IFDRational or tuple
+            if hasattr(fl, 'numerator'):
+                result["focal_length_mm"] = float(fl.numerator) / float(fl.denominator) if fl.denominator else 50.0
+            elif isinstance(fl, tuple):
+                result["focal_length_mm"] = float(fl[0]) / float(fl[1]) if fl[1] else 50.0
+            else:
+                result["focal_length_mm"] = float(fl)
+
+        # Aperture (f-number)
+        fn = exif_data.get(_EXIF_FNUMBER)
+        if fn is not None:
+            if hasattr(fn, 'numerator'):
+                result["aperture"] = float(fn.numerator) / float(fn.denominator) if fn.denominator else 2.0
+            elif isinstance(fn, tuple):
+                result["aperture"] = float(fn[0]) / float(fn[1]) if fn[1] else 2.0
+            else:
+                result["aperture"] = float(fn)
+
+        # Lens model
+        lm = exif_data.get(_EXIF_LENS_MODEL)
+        if lm is not None:
+            result["lens_model"] = str(lm)
+
+        # Exposure time
+        et = exif_data.get(_EXIF_EXPOSURE_TIME)
+        if et is not None:
+            if hasattr(et, 'numerator'):
+                result["exposure_time"] = f"{et.numerator}/{et.denominator}" if et.denominator else str(et)
+            elif isinstance(et, tuple):
+                result["exposure_time"] = f"{et[0]}/{et[1]}" if et[1] else str(et[0])
+            else:
+                result["exposure_time"] = str(et)
+
+        # ISO
+        iso = exif_data.get(_EXIF_ISO)
+        if iso is not None:
+            result["iso"] = int(iso)
+
+        log(output_dir, f"EXIF: focal={result['focal_length_mm']:.1f}mm f/{result['aperture']:.1f}"
+            f" lens={result['lens_model'] or 'unknown'}"
+            f" exposure={result['exposure_time'] or 'unknown'}"
+            f" ISO={result['iso'] or 'unknown'}")
+
+        return result
+
+    except Exception as e:
+        log(output_dir, f"EXIF extraction failed: {e} — using defaults", "WARN")
+        return defaults
+
+
+# ---------------------------------------------------------------------------
+# Depth estimation via fal.ai Depth Anything V2
+# ---------------------------------------------------------------------------
+def run_depth_estimation(image_path, output_dir):
+    """Get depth map from fal.ai Depth Anything V2.
+
+    Returns PIL L-mode image (depth map) or None on failure.
+    """
+    log(output_dir, "Running depth estimation (Depth Anything V2)...")
+    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
+
+    with open(image_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    try:
+        response = requests.post(
+            "https://fal.run/fal-ai/depth-anything-v2",
+            headers=headers,
+            json={"image_url": f"data:image/jpeg;base64,{img_b64}"},
+            timeout=120,
+        )
+    except requests.RequestException as e:
+        log(output_dir, f"Depth estimation request failed: {e}", "ERROR")
+        return None
+
+    if response.status_code != 200:
+        log(output_dir, f"Depth estimation failed ({response.status_code}): {response.text[:300]}", "ERROR")
+        return None
+
+    data = response.json()
+    depth_url = data.get("image", {}).get("url")
+    if not depth_url:
+        log(output_dir, f"Depth estimation returned no image URL. Keys: {list(data.keys())}", "ERROR")
+        return None
+
+    log(output_dir, f"Depth map CDN URL: {depth_url}")
+    depth_img = Image.open(requests.get(depth_url, stream=True, timeout=30).raw).convert("L")
+    log(output_dir, f"Depth map size: {depth_img.size[0]}x{depth_img.size[1]}")
+    return depth_img
+
+
+def get_focus_distance_from_depth(depth_map, subject_mask, output_dir):
+    """Sample depth at subject centroid to determine focus plane.
+
+    Returns normalised depth value 0-1 (0=near, 1=far in depth map).
+    """
+    depth_arr = np.array(depth_map).astype(np.float32) / 255.0
+    mask_arr = np.array(subject_mask.resize(depth_map.size, Image.LANCZOS))
+    binary = mask_arr > 127
+
+    if binary.sum() < 100:
+        log(output_dir, "Subject mask too small for depth sampling — using center", "WARN")
+        cy, cx = depth_arr.shape[0] // 2, depth_arr.shape[1] // 2
+    else:
+        ys, xs = np.where(binary)
+        cy, cx = int(ys.mean()), int(xs.mean())
+
+    # Sample a small region around centroid for stability
+    r = max(5, min(depth_arr.shape) // 40)
+    y0, y1 = max(0, cy - r), min(depth_arr.shape[0], cy + r)
+    x0, x1 = max(0, cx - r), min(depth_arr.shape[1], cx + r)
+    focus_depth = float(np.mean(depth_arr[y0:y1, x0:x1]))
+
+    log(output_dir, f"Focus plane depth: {focus_depth:.3f} (sampled at centroid [{cx}, {cy}])")
+    return focus_depth
+
+
 # ---------------------------------------------------------------------------
 # Subject detection for smart side selection
 # ---------------------------------------------------------------------------
-def run_fal_birefnet(image_path, output_dir):
-    """Extract foreground mask using BiRefNet."""
-    log(output_dir, "Detecting subject position (BiRefNet)...")
-    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
-    with open(image_path, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-    try:
-        response = requests.post("https://fal.run/fal-ai/birefnet", headers=headers,
-            json={"image_url": f"data:image/jpeg;base64,{img_b64}"}, timeout=180)
-    except requests.RequestException as e:
-        log(output_dir, f"BiRefNet request failed: {e}", "WARN")
-        return None
-    if response.status_code != 200:
-        log(output_dir, f"BiRefNet failed ({response.status_code})", "WARN")
-        return None
-    data = response.json()
-    result_url = data["image"]["url"]
-    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw)
-    if result_img.mode == "RGBA":
-        return result_img.split()[3]
-    return result_img.convert("L")
-
-
 def detect_smart_sides(subject_mask, img_width, img_height, output_dir):
-    """Analyze subject position to pick 2 adjacent sides for L-shaped framing.
-
-    Returns a dict with: primary side (more coverage), secondary side (less coverage),
-    and coverage multipliers for each.
-
-    Logic:
-    - Subject right of center → frame LEFT (more lead room on left)
-    - Subject above center → frame BOTTOM
-    - Pick the 2 adjacent sides with the most space
-    - Primary side gets full coverage, secondary gets 60% coverage
-    """
+    """Analyze subject position to pick 2 adjacent sides for L-shaped framing."""
     mask_np = np.array(subject_mask)
-    # Threshold
     binary = (mask_np > 127).astype(np.float32)
 
     if binary.sum() < 100:
         log(output_dir, "Subject mask too small for smart detection — falling back to auto", "WARN")
         return None
 
-    # Find centroid
     ys, xs = np.where(binary > 0)
-    cx = xs.mean() / img_width   # 0-1, 0=left, 1=right
-    cy = ys.mean() / img_height  # 0-1, 0=top, 1=bottom
+    cx = xs.mean() / img_width
+    cy = ys.mean() / img_height
 
     log(output_dir, f"Subject centroid: x={cx:.2f}, y={cy:.2f} (0=left/top, 1=right/bottom)")
 
-    # Determine horizontal framing side (opposite to where subject is pushed)
-    # Subject is right → more space on left → frame left
     h_side = "left" if cx > 0.5 else "right"
-    h_offset = abs(cx - 0.5)  # How far off-center (0=centered, 0.5=at edge)
-
-    # Determine vertical framing side
+    h_offset = abs(cx - 0.5)
     v_side = "top" if cy > 0.5 else "bottom"
     v_offset = abs(cy - 0.5)
 
-    # Primary side = the one with more space (larger offset)
     if h_offset >= v_offset:
         primary, secondary = h_side, v_side
         primary_mult, secondary_mult = 1.0, 0.6
@@ -228,7 +365,7 @@ def detect_smart_sides(subject_mask, img_width, img_height, output_dir):
         primary, secondary = v_side, h_side
         primary_mult, secondary_mult = 1.0, 0.6
 
-    log(output_dir, f"Smart framing: primary={primary} (×{primary_mult}), secondary={secondary} (×{secondary_mult})")
+    log(output_dir, f"Smart framing: primary={primary} (x{primary_mult}), secondary={secondary} (x{secondary_mult})")
 
     return {
         "primary": primary,
@@ -244,7 +381,8 @@ def detect_smart_sides(subject_mask, img_width, img_height, output_dir):
 _SCENE_PROMPT = """\
 You are a professional photographer planning a "shoot-through" foreground framing element for this photo.
 
-Look at the scene: the environment, setting, objects present, indoor/outdoor, lighting, mood.
+Look at the scene: the environment, setting, objects present, indoor/outdoor, lighting direction, \
+color temperature, and mood.
 
 Suggest ONE specific foreground object that would look natural if it were very close to the camera lens \
 and heavily out of focus. This object should:
@@ -252,11 +390,16 @@ and heavily out of focus. This object should:
 2. Be dark or semi-transparent when blurred
 3. Add depth without distracting from the subject
 
+Also describe the scene lighting direction (e.g., "warm light from upper left") and color temperature \
+(e.g., "warm/golden", "cool/blue", "neutral").
+
 Respond ONLY with valid JSON:
 {
   "object": "<the object, e.g. 'green leaves and small twigs', 'dark wooden doorframe', 'frosted glass bottle'>",
-  "prompt": "<inpainting prompt: 'out of focus [object] very close to camera, shallow depth of field, [details]'>",
-  "negative": "<what to avoid: 'sharp, in focus, text, face, person, [scene-specific]'>",
+  "prompt": "<generation prompt: '[object] against solid black background, isolated object, no other objects, [details]'>",
+  "negative": "<what to avoid: 'person, face, text, bright background, [scene-specific]'>",
+  "lighting_direction": "<e.g. 'warm light from upper left'>",
+  "color_temperature": "<e.g. 'warm golden'>",
   "reasoning": "<one sentence why this fits the scene>"
 }"""
 
@@ -301,7 +444,6 @@ def suggest_framing_prompt(image_path, output_dir):
             return None
 
         raw = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
-        # Parse JSON
         lines = [l for l in raw.split("\n") if not l.strip().startswith("```")]
         raw = "\n".join(lines).strip()
         try:
@@ -313,6 +455,8 @@ def suggest_framing_prompt(image_path, output_dir):
             result = json.loads(raw[start:end + 1])
 
         log(output_dir, f"Scene analysis: {result.get('object', '?')} — {result.get('reasoning', '')}")
+        if result.get("lighting_direction"):
+            log(output_dir, f"Scene lighting: {result['lighting_direction']}, temperature: {result.get('color_temperature', '?')}")
         return result
 
     except Exception as e:
@@ -326,19 +470,12 @@ def suggest_framing_prompt(image_path, output_dir):
 def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.4, smart_sides=None):
     """Create an organic-looking edge mask for framing.
 
-    White = areas to inpaint (foreground framing).
-    Black = areas to keep (subject region).
-
-    Args:
-        coverage: fraction of image covered by framing (0.1-0.4)
-        sides: "left-right", "top-bottom", "all", "auto", or "smart"
-        irregularity: how jagged the inner edge is (0=straight, 1=very jagged)
-        smart_sides: dict from detect_smart_sides() with primary/secondary sides + multipliers
+    White = areas where foreground element should appear.
+    Black = areas to keep clear (subject region).
     """
     mask = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(mask)
 
-    # Smart mode: L-shaped framing on 2 adjacent sides
     if smart_sides is not None:
         edge_px_x = int(width * coverage)
         edge_px_y = int(height * coverage)
@@ -380,13 +517,10 @@ def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.
             rects.append(("bottom", 0, height - edge_px_y, width, height))
 
     for side, x1, y1, x2, y2 in rects:
-        # Draw base rectangle
         draw.rectangle([x1, y1, x2, y2], fill=255)
 
-    # Add irregular inner edge by drawing random black circles along the border
-    # This makes the framing look organic, not like a perfect rectangle
     if irregularity > 0:
-        np.random.seed(42)  # Reproducible but organic
+        np.random.seed(42)
         num_blobs = int(30 * (1 + irregularity))
         blob_size_range = (int(min(width, height) * 0.02), int(min(width, height) * 0.08 * (1 + irregularity)))
 
@@ -405,10 +539,8 @@ def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.
                 elif side == "bottom":
                     cx = np.random.randint(0, width)
                     cy = y1 + np.random.randint(-r, r)
-                # Erase (black) circles to create irregular edge
                 draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=0)
 
-        # Also add some white blobs extending inward for organic feel
         for side, x1, y1, x2, y2 in rects:
             for _ in range(num_blobs // 3):
                 r = np.random.randint(blob_size_range[0], max(blob_size_range[1] // 2, blob_size_range[0] + 1))
@@ -426,9 +558,7 @@ def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.
                     cy = y1 - np.random.randint(0, r * 2)
                 draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
 
-    # Soften the mask edges
     mask = mask.filter(ImageFilter.GaussianBlur(radius=max(width, height) * 0.015))
-    # Re-threshold to keep it mostly binary but with soft edges
     mask = mask.point(lambda p: 255 if p > 100 else (int(p * 2.55) if p > 40 else 0))
     mask = mask.filter(ImageFilter.GaussianBlur(radius=max(width, height) * 0.01))
 
@@ -436,31 +566,260 @@ def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.
 
 
 # ---------------------------------------------------------------------------
-# Color matching
+# Text-to-image generation via fal.ai Flux Schnell
 # ---------------------------------------------------------------------------
-def match_framing_colors(original, inpainted, mask, darken=0.6):
-    """Match the inpainted framing's color palette to the original photo's edges.
+def generate_element(prompt, negative_prompt, width, height, output_dir,
+                     seed=None, scene_context=None, smart_sides=None, exif_info=None):
+    """Generate a foreground element on a black background using Flux Schnell.
 
-    Samples colors from the original's border regions and shifts the inpainted
-    areas to match. Also darkens the framing to keep focus on the subject.
+    Returns PIL RGB image or None on failure.
+    """
+    # Build the full prompt with side placement, scene context, and camera info
+    side_desc = ""
+    if smart_sides:
+        sides = []
+        for role in ("primary", "secondary"):
+            sides.append(smart_sides[role])
+        side_desc = f", entering from the {' and '.join(sides)} edge of the frame"
+
+    scene_desc = ""
+    if scene_context:
+        lighting = scene_context.get("lighting_direction", "")
+        temperature = scene_context.get("color_temperature", "")
+        if lighting or temperature:
+            parts = []
+            if lighting:
+                parts.append(lighting)
+            if temperature:
+                parts.append(f"{temperature} tones")
+            scene_desc = f", matching {' with '.join(parts)}"
+
+    camera_desc = ""
+    if exif_info:
+        fl = exif_info.get("focal_length_mm", 50)
+        ap = exif_info.get("aperture", 2.0)
+        camera_desc = f", as seen through a {fl:.0f}mm f/{ap:.1f} lens"
+
+    full_prompt = f"{prompt}{side_desc}{scene_desc}{camera_desc}"
+
+    log(output_dir, f"Generating element: '{full_prompt[:120]}...'")
+
+    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
+
+    payload = {
+        "prompt": full_prompt,
+        "image_size": {"width": width, "height": height},
+        "num_images": 1,
+    }
+    if seed is not None:
+        payload["seed"] = seed
+    if negative_prompt:
+        # Flux Schnell does not have a dedicated negative prompt field but
+        # we append negative guidance to the prompt itself
+        payload["prompt"] = full_prompt + f". NOT: {negative_prompt}"
+
+    try:
+        response = requests.post(
+            "https://fal.run/fal-ai/flux/schnell",
+            headers=headers,
+            json=payload,
+            timeout=120,
+        )
+    except requests.RequestException as e:
+        log(output_dir, f"Element generation request failed: {e}", "ERROR")
+        return None
+
+    if response.status_code != 200:
+        log(output_dir, f"Element generation failed ({response.status_code}): {response.text[:300]}", "ERROR")
+        return None
+
+    data = response.json()
+    images = data.get("images", [])
+    if not images:
+        log(output_dir, f"Element generation returned no images. Keys: {list(data.keys())}", "ERROR")
+        return None
+
+    result_url = images[0].get("url") if isinstance(images[0], dict) else images[0]
+    if not result_url:
+        log(output_dir, "Element generation returned no image URL", "ERROR")
+        return None
+
+    log(output_dir, f"Element CDN URL: {result_url}")
+    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw).convert("RGB")
+    log(output_dir, f"Generated element: {result_img.size[0]}x{result_img.size[1]}")
+    return result_img
+
+
+# ---------------------------------------------------------------------------
+# Extract alpha from black background
+# ---------------------------------------------------------------------------
+def extract_element_alpha(element_img, output_dir, threshold=20, feather_px=None):
+    """Extract alpha mask from an element generated on a black background.
+
+    Pixels brighter than threshold are considered part of the element.
+    Returns L-mode PIL Image (alpha mask).
+    """
+    gray = element_img.convert("L")
+    arr = np.array(gray).astype(np.float32)
+
+    # Create soft alpha: ramp from 0 at threshold to 255 at threshold+40
+    alpha = np.clip((arr - threshold) * (255.0 / 40.0), 0, 255).astype(np.uint8)
+
+    alpha_img = Image.fromarray(alpha, "L")
+
+    # Feather edges for smooth blending
+    if feather_px is None:
+        short_edge = min(element_img.size)
+        feather_px = max(3, int(short_edge * 0.01))
+
+    if feather_px > 0:
+        alpha_img = alpha_img.filter(ImageFilter.GaussianBlur(radius=feather_px))
+
+    coverage = np.mean(np.array(alpha_img) > 30) * 100
+    log(output_dir, f"Element alpha: {coverage:.1f}% non-zero (threshold={threshold}, feather={feather_px}px)")
+
+    return alpha_img
+
+
+# ---------------------------------------------------------------------------
+# Depth-aware DOF blur
+# ---------------------------------------------------------------------------
+def calculate_dof_blur(focal_length_mm, aperture, focus_distance_m, fg_distance_m,
+                       image_width, sensor_width_mm=36.0):
+    """Calculate physically-based defocus blur radius in pixels.
+
+    Uses circle of confusion formula:
+      CoC = |f^2 * (D_focus - D_fg)| / (D_fg * (D_focus - f) * N)
+
+    where f=focal length, N=f-number, D=distances in meters.
+
+    Returns blur radius in pixels (capped at 80).
+    """
+    f = focal_length_mm / 1000.0  # Convert to meters
+    N = aperture
+    D_focus = max(focus_distance_m, f + 0.001)  # Must be > focal length
+    D_fg = max(fg_distance_m, f + 0.001)
+
+    # Circle of confusion in meters
+    numerator = abs(f * f * (D_focus - D_fg))
+    denominator = D_fg * (D_focus - f) * N
+
+    if denominator < 1e-10:
+        coc_m = 0.001  # Fallback
+    else:
+        coc_m = numerator / denominator
+
+    # Convert CoC from meters to pixels
+    coc_px = coc_m * (image_width / (sensor_width_mm / 1000.0))
+
+    # Cap to prevent abstract blobs
+    blur_px = int(min(80, max(5, coc_px)))
+
+    return blur_px, coc_m * 1000  # Return (blur_px, coc_mm)
+
+
+def apply_dof_blur(element_img, element_alpha, depth_map, focus_depth,
+                   exif_info, output_dir, blur_override=None):
+    """Apply depth-aware defocus blur to the foreground element.
+
+    The blur varies across the element based on the depth map — parts closer
+    to camera get more blur.
+
+    Returns blurred RGB image.
+    """
+    focal_length = exif_info.get("focal_length_mm", 50.0)
+    aperture = exif_info.get("aperture", 2.0)
+
+    # Estimate real-world distances from normalised depth
+    # Depth map: 0=near, 1=far (or vice versa depending on model)
+    # For foreground framing, the element is very close (~0.3-0.5m)
+    fg_distance_m = 0.35  # Foreground element is very close to lens
+
+    # Map focus_depth (0-1) to approximate real distance (1-10m range)
+    # Higher depth value = farther away
+    focus_distance_m = 1.0 + focus_depth * 9.0  # 1m to 10m
+
+    base_blur, coc_mm = calculate_dof_blur(
+        focal_length, aperture, focus_distance_m, fg_distance_m,
+        element_img.width,
+    )
+
+    if blur_override is not None:
+        base_blur = blur_override
+
+    log(output_dir, f"DOF blur: focal={focal_length:.0f}mm f/{aperture:.1f} "
+        f"focus={focus_distance_m:.1f}m fg={fg_distance_m:.1f}m "
+        f"CoC={coc_mm:.2f}mm blur={base_blur}px")
+
+    # Resize depth map to match element
+    depth_resized = depth_map.resize(element_img.size, Image.LANCZOS)
+    depth_arr = np.array(depth_resized).astype(np.float32) / 255.0
+
+    # The element is in the foreground, so parts with lower depth values
+    # (closer to camera) should get MORE blur. We modulate blur radius
+    # based on how far each pixel is from the focus plane.
+    # For simplicity and quality, apply blur in 3 passes at different radii
+    alpha_arr = np.array(element_alpha).astype(np.float32) / 255.0
+
+    # Determine depth range within the element area
+    element_pixels = alpha_arr > 0.1
+    if element_pixels.sum() > 0:
+        mean_depth = float(np.mean(depth_arr[element_pixels]))
+    else:
+        mean_depth = 0.2
+
+    # Distance from focus plane determines blur strength
+    # Foreground is closer than focus → large blur
+    depth_diff = abs(focus_depth - mean_depth)
+    # Scale: further from focus = more blur
+    blur_scale = max(0.5, min(2.0, 0.5 + depth_diff * 3.0))
+
+    final_blur = int(min(80, max(5, base_blur * blur_scale)))
+    log(output_dir, f"Depth-modulated blur: mean_element_depth={mean_depth:.2f} "
+        f"focus_depth={focus_depth:.2f} scale={blur_scale:.2f} final={final_blur}px")
+
+    # Apply multi-pass blur for smoother result
+    blurred = element_img.copy()
+    # First pass: main DOF blur
+    blurred = blurred.filter(ImageFilter.GaussianBlur(radius=final_blur))
+    # Second lighter pass for extra softness (mimics lens aberration)
+    extra = max(1, final_blur // 4)
+    blurred = blurred.filter(ImageFilter.GaussianBlur(radius=extra))
+
+    return blurred, final_blur
+
+
+# ---------------------------------------------------------------------------
+# Color matching for generated element
+# ---------------------------------------------------------------------------
+def match_element_colors(original, element_img, element_alpha, edge_mask, darken, output_dir):
+    """Shift the generated element's colors toward the original photo's edge tones.
+
+    Also applies darkening to keep the framing subtle.
+    Returns color-matched + darkened RGB image.
     """
     # Sample average color from original's edge regions
-    edge_mask = create_edge_mask(original.width, original.height, coverage=0.15, sides="all", irregularity=0)
-    edge_stat = ImageStat.Stat(original, mask=edge_mask)
-    target_mean = edge_stat.mean[:3]  # RGB
+    sample_mask = create_edge_mask(original.width, original.height,
+                                   coverage=0.15, sides="all", irregularity=0)
+    edge_stat = ImageStat.Stat(original, mask=sample_mask)
+    target_mean = edge_stat.mean[:3]
 
-    # Get current mean of inpainted areas
-    inpaint_stat = ImageStat.Stat(inpainted, mask=mask)
-    current_mean = inpaint_stat.mean[:3]
+    # Get mean of element (only where alpha > 0)
+    alpha_arr = np.array(element_alpha)
+    element_mask_pil = Image.fromarray((alpha_arr > 30).astype(np.uint8) * 255, "L")
 
-    # Calculate shift
-    result = inpainted.copy()
+    try:
+        elem_stat = ImageStat.Stat(element_img, mask=element_mask_pil)
+        current_mean = elem_stat.mean[:3]
+    except Exception:
+        current_mean = [128, 128, 128]
+
+    # Shift channels 30% toward scene edge colors
+    result = element_img.copy()
     r, g, b = result.split()
 
     def shift_channel(ch, current, target):
         diff = target - current
-        # Light blend toward scene colors — keep most of the generated character
-        # (was 0.6 but that washed out doorframe/wood tones into generic scene colors)
         shift = int(diff * 0.3)
         return ch.point(lambda p: max(0, min(255, p + shift)))
 
@@ -469,74 +828,63 @@ def match_framing_colors(original, inpainted, mask, darken=0.6):
     b = shift_channel(b, current_mean[2], target_mean[2])
     result = Image.merge("RGB", (r, g, b))
 
-    # Darken the framing to keep it subtle
-    darkened = ImageEnhance.Brightness(result).enhance(darken)
+    log(output_dir, f"Color shift: element [{current_mean[0]:.0f},{current_mean[1]:.0f},{current_mean[2]:.0f}] "
+        f"-> scene [{target_mean[0]:.0f},{target_mean[1]:.0f},{target_mean[2]:.0f}] (30% blend)")
 
-    # Only apply darkening in the masked area
-    soft_mask = mask.convert("L")
-    final = original.copy()
-    final.paste(darkened, mask=soft_mask)
+    # Darken
+    result = ImageEnhance.Brightness(result).enhance(darken)
+    log(output_dir, f"Darkened element by factor {darken:.2f}")
 
-    return final
+    return result
 
 
 # ---------------------------------------------------------------------------
-# Inpainting via fal.ai
+# Composite
 # ---------------------------------------------------------------------------
-def run_inpaint(image, mask, prompt, negative_prompt, output_dir,
-                guidance_scale=9.0, steps=30, seed=None, strength=0.95):
-    """Inpaint masked areas with text-guided content using fal.ai SDXL inpainting."""
-    log(output_dir, f"Inpainting: '{prompt[:80]}...' (guidance={guidance_scale}, steps={steps}, strength={strength})")
+def composite_element(original, element_img, element_alpha, subject_mask, edge_mask, output_dir):
+    """Composite the foreground element over the original photo.
 
-    headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
+    The element only appears where:
+      - edge_mask is white (edge regions)
+      - subject_mask is black (not covering the subject)
+    """
+    w, h = original.size
 
-    img_b64 = _img_to_b64_simple(image)
-    mask_b64 = _img_to_b64_simple(mask.convert("RGB"), fmt="PNG", quality=100)
+    # Ensure all images are same size
+    if element_img.size != (w, h):
+        element_img = element_img.resize((w, h), Image.LANCZOS)
+    if element_alpha.size != (w, h):
+        element_alpha = element_alpha.resize((w, h), Image.LANCZOS)
+    if subject_mask.size != (w, h):
+        subject_mask = subject_mask.resize((w, h), Image.LANCZOS)
+    if edge_mask.size != (w, h):
+        edge_mask = edge_mask.resize((w, h), Image.LANCZOS)
 
-    payload = {
-        "model_name": "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
-        "prompt": prompt,
-        "negative_prompt": negative_prompt or "sharp, in focus, text, watermark",
-        "image_url": f"data:image/jpeg;base64,{img_b64}",
-        "mask_url": f"data:image/png;base64,{mask_b64}",
-        "guidance_scale": guidance_scale,
-        "num_inference_steps": steps,
-        "strength": strength,  # How much to replace (0=keep original, 1=fully replace)
-    }
-    if seed is not None:
-        payload["seed"] = seed
+    # Combine masks: element_alpha AND edge_mask AND NOT subject_mask
+    alpha_arr = np.array(element_alpha).astype(np.float32) / 255.0
+    edge_arr = np.array(edge_mask).astype(np.float32) / 255.0
+    subject_arr = np.array(subject_mask).astype(np.float32) / 255.0
 
-    try:
-        response = requests.post("https://fal.run/fal-ai/inpaint", headers=headers,
-                                 json=payload, timeout=300)
-    except requests.RequestException as e:
-        log(output_dir, f"Inpainting request failed: {e}", "ERROR")
-        return None
+    # Invert subject mask (we want to place element where subject is NOT)
+    not_subject = 1.0 - subject_arr
 
-    if response.status_code != 200:
-        log(output_dir, f"Inpainting failed ({response.status_code}): {response.text[:300]}", "ERROR")
-        return None
+    # Combine: element visible where it has alpha AND we want framing AND subject is absent
+    final_alpha = alpha_arr * edge_arr * not_subject
+    final_alpha = np.clip(final_alpha, 0, 1)
 
-    data = response.json()
-    log(output_dir, f"Inpaint response keys: {list(data.keys())}")
+    # Soften the composite mask edges
+    soft_blur = max(3, int(min(w, h) * 0.005))
+    final_alpha_img = Image.fromarray((final_alpha * 255).astype(np.uint8), "L")
+    final_alpha_img = final_alpha_img.filter(ImageFilter.GaussianBlur(radius=soft_blur))
 
-    # fal-ai/inpaint may return "image" (singular) or "images" (plural)
-    images = data.get("images", [])
-    if not images and "image" in data:
-        images = [data["image"]]
-    if not images:
-        log(output_dir, f"Inpainting returned no images. Response: {json.dumps(data)[:500]}", "ERROR")
-        return None
+    # Composite
+    result = original.copy()
+    result.paste(element_img, mask=final_alpha_img)
 
-    result_url = images[0].get("url") if isinstance(images[0], dict) else images[0]
-    if not result_url:
-        log(output_dir, "Inpainting returned no image URL", "ERROR")
-        return None
+    composite_coverage = np.mean(np.array(final_alpha_img) > 30) * 100
+    log(output_dir, f"Composite coverage: {composite_coverage:.1f}% of image")
 
-    log(output_dir, f"Inpaint CDN URL: {result_url}")
-    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw).convert("RGB")
-    log(output_dir, f"Inpaint result: {result_img.size[0]}x{result_img.size[1]}")
-    return result_img
+    return result, final_alpha_img
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +945,7 @@ def evaluate_with_gemini(img, output_dir, original_img=None):
         response = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
             json=payload, timeout=60)
+
         if response.status_code != 200:
             log(output_dir, f"Gemini API error ({response.status_code}): {response.text[:200]}", "WARN")
             return None
@@ -647,18 +996,6 @@ def evaluate_with_gemini(img, output_dir, original_img=None):
         return None
 
 
-def _img_to_b64(img, max_size=None, fmt="JPEG", quality=85):
-    """Encode image to base64. Optionally downscale."""
-    img_out = img.copy()
-    if max_size:
-        img_out.thumbnail((max_size, max_size), Image.LANCZOS)
-    if img_out.mode == "RGBA" and fmt == "JPEG":
-        img_out = img_out.convert("RGB")
-    buf = BytesIO()
-    img_out.save(buf, format=fmt, quality=quality)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-
 # ---------------------------------------------------------------------------
 # Main Workflow
 # ---------------------------------------------------------------------------
@@ -671,11 +1008,11 @@ def main():
     parser.add_argument("--coverage", type=float, default=0.20, help="How much of the edge is framed (0.1-0.4, default: 0.20)")
     parser.add_argument("--sides", choices=["left-right", "top-bottom", "all", "auto", "smart"], default="smart",
                         help="Which sides to frame (default: smart — L-shaped based on subject position)")
-    parser.add_argument("--blur-radius", type=int, default=None, help="Gaussian blur radius for framing (default: auto based on image size)")
+    parser.add_argument("--blur-radius", type=int, default=None, help="Override DOF blur radius (default: auto from EXIF + depth)")
     parser.add_argument("--darken", type=float, default=0.55, help="Darken framing factor (0.0=black, 1.0=no darkening, default: 0.55)")
     parser.add_argument("--irregularity", type=float, default=0.5, help="Edge irregularity (0=straight, 1=very jagged, default: 0.5)")
-    parser.add_argument("--guidance-scale", type=float, default=9.0, help="Inpainting guidance scale (default: 9.0)")
-    parser.add_argument("--steps", type=int, default=30, help="Inpainting steps (default: 30)")
+    parser.add_argument("--focal-length", type=float, default=None, help="Override focal length in mm (default: from EXIF or 50mm)")
+    parser.add_argument("--aperture", type=float, default=None, help="Override aperture f-number (default: from EXIF or f/2.0)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--auto-correct", action="store_true", help="Enable Gemini evaluation")
     parser.add_argument("--output-to", choices=["local", "gdrive", "both"], default="local")
@@ -703,7 +1040,7 @@ def main():
 
     if args.prompt:
         framing_prompt = args.prompt
-        framing_negative = args.negative or "sharp, in focus, text, face, person"
+        framing_negative = args.negative or "person, face, text, bright background, white background"
         framing_name = "Custom"
     elif args.framing and args.framing != "auto":
         if args.framing not in FRAMING_PRESETS:
@@ -714,7 +1051,6 @@ def main():
         framing_negative = args.negative or preset.get("negative", "")
         framing_name = args.framing
     elif args.framing == "auto" or args.framing is None:
-        # Will be resolved after output_dir is created (needs Gemini)
         framing_name = "auto"
     else:
         print("ERROR: Must specify --framing <preset>, --framing auto, or --prompt '<custom>'")
@@ -742,7 +1078,6 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
-    blur_radius = args.blur_radius
     timings = {}
 
     log(output_dir, "=" * 60)
@@ -760,14 +1095,30 @@ def main():
     img_orig = Image.open(source).convert("RGB")
     img_orig.save(os.path.join(output_dir, "0_original.jpg"), "JPEG", quality=95)
 
-    # --- Step 0: Auto-detect framing prompt if needed ---
+    # ========================================================================
+    # Step 1: Analyze photo (EXIF, scene, subject mask, depth map)
+    # ========================================================================
+    t0 = time.time()
+    log(output_dir, "--- Step 1/6: Analyze photo ---")
+
+    # 1a. EXIF extraction
+    exif_info = extract_exif(source, output_dir)
+    if args.focal_length is not None:
+        exif_info["focal_length_mm"] = args.focal_length
+        log(output_dir, f"Focal length overridden to {args.focal_length:.0f}mm")
+    if args.aperture is not None:
+        exif_info["aperture"] = args.aperture
+        log(output_dir, f"Aperture overridden to f/{args.aperture:.1f}")
+
+    # 1b. Auto-detect framing prompt if needed
+    scene_context = None
     if framing_name == "auto":
-        log(output_dir, "--- Auto-detecting scene for framing prompt (Gemini) ---")
-        scene = suggest_framing_prompt(source, output_dir)
-        if scene and scene.get("prompt"):
-            framing_prompt = scene["prompt"]
-            framing_negative = args.negative or scene.get("negative", "sharp, in focus, text, face, person")
-            framing_name = scene.get("object", "auto")[:20]
+        log(output_dir, "Auto-detecting scene for framing prompt (Gemini)...")
+        scene_context = suggest_framing_prompt(source, output_dir)
+        if scene_context and scene_context.get("prompt"):
+            framing_prompt = scene_context["prompt"]
+            framing_negative = args.negative or scene_context.get("negative", "person, face, text, bright background")
+            framing_name = scene_context.get("object", "auto")[:20]
             log(output_dir, f"Auto framing: '{framing_name}' — {framing_prompt[:80]}")
         else:
             log(output_dir, "Scene detection failed — falling back to 'foliage' preset", "WARN")
@@ -776,85 +1127,136 @@ def main():
             framing_negative = preset["negative"]
             framing_name = "foliage (fallback)"
 
-    # --- Step 1: Create edge mask ---
-    t0 = time.time()
-    log(output_dir, "--- Step 1/4: Create edge mask ---")
+    # 1c. Subject mask via shared masking module (BiRefNet)
+    log(output_dir, "Extracting subject mask (BiRefNet via masking module)...")
+    subject_mask, mask_info = build_mask(
+        source, affect="subject", exclude="", output_dir=output_dir,
+    )
+    subject_mask.save(os.path.join(output_dir, "1_subject_mask.png"))
+    log(output_dir, f"Subject mask: {mask_info['engine']}, coverage={mask_info['coverage_pct']:.1f}%")
 
-    # Smart side detection using BiRefNet
+    # 1d. Smart side detection
     smart_sides = None
     if args.sides == "smart":
-        subject_mask = run_fal_birefnet(source, output_dir)
-        if subject_mask is not None:
-            # Resize mask to match image
-            if subject_mask.size != img_orig.size:
-                subject_mask = subject_mask.resize(img_orig.size, Image.LANCZOS)
-            subject_mask.save(os.path.join(output_dir, "1_subject_mask.png"))
-            smart_sides = detect_smart_sides(subject_mask, img_orig.width, img_orig.height, output_dir)
+        smart_sides = detect_smart_sides(subject_mask, img_orig.width, img_orig.height, output_dir)
         if smart_sides is None:
             log(output_dir, "Smart detection failed — falling back to auto sides", "WARN")
 
-    mask = create_edge_mask(img_orig.width, img_orig.height,
-                            coverage=args.coverage,
-                            sides=args.sides if args.sides != "smart" else "auto",
-                            irregularity=args.irregularity,
-                            smart_sides=smart_sides)
-    mask.save(os.path.join(output_dir, "1_edge_mask.png"))
-    mask_coverage = np.array(mask).mean() / 255.0
-    log(output_dir, f"Edge mask coverage: {mask_coverage*100:.1f}% of image")
-    timings["mask"] = time.time() - t0
-    log(output_dir, f"Step 1 done ({timings['mask']:.1f}s)")
+    # 1e. Depth estimation
+    depth_map = run_depth_estimation(source, output_dir)
+    focus_depth = 0.5  # default mid-range
+    if depth_map is not None:
+        if depth_map.size != img_orig.size:
+            depth_map = depth_map.resize(img_orig.size, Image.LANCZOS)
+        depth_map.save(os.path.join(output_dir, "1_depth.png"))
+        focus_depth = get_focus_distance_from_depth(depth_map, subject_mask, output_dir)
+    else:
+        log(output_dir, "Depth estimation failed — using default focus depth 0.5", "WARN")
+        # Create a flat depth map as fallback
+        depth_map = Image.new("L", img_orig.size, 128)
 
-    # --- Step 2: Inpaint foreground elements ---
+    timings["analyze"] = time.time() - t0
+    log(output_dir, f"Step 1 done ({timings['analyze']:.1f}s)")
+
+    # ========================================================================
+    # Step 2: Generate foreground element
+    # ========================================================================
     t0 = time.time()
-    log(output_dir, "--- Step 2/4: Inpaint foreground ---")
-    inpainted = run_inpaint(img_orig, mask, framing_prompt, framing_negative,
-                            output_dir, guidance_scale=args.guidance_scale,
-                            steps=args.steps, seed=seed)
-    if inpainted is None:
-        log(output_dir, "Inpainting failed — cannot proceed", "ERROR")
+    log(output_dir, "--- Step 2/6: Generate foreground element ---")
+
+    element_raw = generate_element(
+        framing_prompt, framing_negative,
+        img_orig.width, img_orig.height, output_dir,
+        seed=seed, scene_context=scene_context,
+        smart_sides=smart_sides, exif_info=exif_info,
+    )
+    if element_raw is None:
+        log(output_dir, "Element generation failed — cannot proceed", "ERROR")
         sys.exit(1)
 
-    # Resize if needed
-    if inpainted.size != img_orig.size:
-        log(output_dir, f"Resizing inpainted {inpainted.size} -> {img_orig.size}")
-        inpainted = inpainted.resize(img_orig.size, Image.LANCZOS)
+    if element_raw.size != img_orig.size:
+        log(output_dir, f"Resizing element {element_raw.size} -> {img_orig.size}")
+        element_raw = element_raw.resize(img_orig.size, Image.LANCZOS)
 
-    inpainted.save(os.path.join(output_dir, "2_inpainted_raw.jpg"), "JPEG", quality=95)
-    timings["inpaint"] = time.time() - t0
-    log(output_dir, f"Step 2 done ({timings['inpaint']:.1f}s)")
+    element_raw.save(os.path.join(output_dir, "2_element_raw.jpg"), "JPEG", quality=95)
+    timings["generate"] = time.time() - t0
+    log(output_dir, f"Step 2 done ({timings['generate']:.1f}s)")
 
-    # --- Step 3: Blur + color match + composite ---
+    # ========================================================================
+    # Step 3: Extract element alpha
+    # ========================================================================
     t0 = time.time()
-    log(output_dir, "--- Step 3/4: Blur + color match + composite ---")
+    log(output_dir, "--- Step 3/6: Extract element alpha ---")
 
-    # Auto blur radius: ~2-3% of the longest edge, capped at 60px
-    # Too much blur makes shapes look like abstract blobs rather than real objects
-    if blur_radius is None:
-        blur_radius = max(15, min(60, int(max(img_orig.width, img_orig.height) * 0.025)))
-    log(output_dir, f"Blur radius: {blur_radius}px")
+    element_alpha = extract_element_alpha(element_raw, output_dir)
+    element_alpha.save(os.path.join(output_dir, "2_element_alpha.png"))
 
-    # Heavy blur on the inpainted result (only the framing areas will be used)
-    blurred = inpainted.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-    blurred.save(os.path.join(output_dir, "3a_blurred.jpg"), "JPEG", quality=95)
+    timings["alpha"] = time.time() - t0
+    log(output_dir, f"Step 3 done ({timings['alpha']:.1f}s)")
 
-    # Color match + darken the framing
-    final_img = match_framing_colors(img_orig, blurred, mask, darken=args.darken)
-    final_path = os.path.join(output_dir, "3b_framed_final.jpg")
+    # ========================================================================
+    # Step 4: Depth-aware DOF blur
+    # ========================================================================
+    t0 = time.time()
+    log(output_dir, "--- Step 4/6: Depth-aware DOF blur ---")
+
+    element_blurred, blur_radius = apply_dof_blur(
+        element_raw, element_alpha, depth_map, focus_depth,
+        exif_info, output_dir, blur_override=args.blur_radius,
+    )
+    element_blurred.save(os.path.join(output_dir, "3_element_blurred.jpg"), "JPEG", quality=95)
+
+    timings["blur"] = time.time() - t0
+    log(output_dir, f"Step 4 done ({timings['blur']:.1f}s)")
+
+    # ========================================================================
+    # Step 5: Color match + darken
+    # ========================================================================
+    t0 = time.time()
+    log(output_dir, "--- Step 5/6: Color match + darken ---")
+
+    edge_mask = create_edge_mask(
+        img_orig.width, img_orig.height,
+        coverage=args.coverage,
+        sides=args.sides if args.sides != "smart" else "auto",
+        irregularity=args.irregularity,
+        smart_sides=smart_sides,
+    )
+    edge_mask.save(os.path.join(output_dir, "1_edge_mask.png"))
+    mask_coverage = np.array(edge_mask).mean() / 255.0
+    log(output_dir, f"Edge mask coverage: {mask_coverage*100:.1f}% of image")
+
+    element_colored = match_element_colors(
+        img_orig, element_blurred, element_alpha, edge_mask,
+        args.darken, output_dir,
+    )
+    element_colored.save(os.path.join(output_dir, "4_element_colored.jpg"), "JPEG", quality=95)
+
+    timings["color"] = time.time() - t0
+    log(output_dir, f"Step 5 done ({timings['color']:.1f}s)")
+
+    # ========================================================================
+    # Step 6: Composite + evaluate + output
+    # ========================================================================
+    t0 = time.time()
+    log(output_dir, "--- Step 6/6: Composite + evaluate + output ---")
+
+    # Also blur the alpha to match the element blur
+    alpha_blurred = element_alpha.filter(ImageFilter.GaussianBlur(radius=max(3, blur_radius // 2)))
+
+    final_img, composite_mask = composite_element(
+        img_orig, element_colored, alpha_blurred,
+        subject_mask, edge_mask, output_dir,
+    )
+    composite_mask.save(os.path.join(output_dir, "5_composite_mask.png"))
+
+    final_path = os.path.join(output_dir, "6_framed_final.jpg")
     final_img.save(final_path, "JPEG", quality=95)
 
     quality_final = check_image_quality(final_img, "FINAL", output_dir)
-    timings["composite"] = time.time() - t0
-    log(output_dir, f"Step 3 done ({timings['composite']:.1f}s)")
 
-    # --- Step 4: Evaluate + output ---
-    t0 = time.time()
-    log(output_dir, "--- Step 4/4: Evaluate + output ---")
-
-    eval_result = None
-    if args.auto_correct:
-        eval_result = evaluate_with_gemini(final_img, output_dir, original_img=img_orig)
-    else:
-        eval_result = evaluate_with_gemini(final_img, output_dir, original_img=img_orig)
+    # Evaluate
+    eval_result = evaluate_with_gemini(final_img, output_dir, original_img=img_orig)
 
     # Copy to finals
     local_out = args.local_output_dir or os.path.expanduser("~/.openclaw/workspace/shared")
@@ -874,7 +1276,7 @@ def main():
         pass
 
     timings["output"] = time.time() - t0
-    log(output_dir, f"Step 4 done ({timings['output']:.1f}s)")
+    log(output_dir, f"Step 6 done ({timings['output']:.1f}s)")
 
     # --- Summary ---
     total = sum(timings.values())
@@ -888,15 +1290,17 @@ def main():
   Framing:         {framing_name}
   Coverage:        {args.coverage}
   Sides:           {args.sides}
-  Blur:            {blur_radius}px
+  DOF Blur:        {blur_radius}px (focal={exif_info['focal_length_mm']:.0f}mm f/{exif_info['aperture']:.1f})
   Darken:          {args.darken}
   Seed:            {seed}
 
   Step Timings:
-    1. Create edge mask       {timings.get('mask', 0):>8.1f}s
-    2. Inpaint foreground     {timings.get('inpaint', 0):>8.1f}s
-    3. Blur + composite       {timings.get('composite', 0):>8.1f}s
-    4. Evaluate + output      {timings.get('output', 0):>8.1f}s
+    1. Analyze photo          {timings.get('analyze', 0):>8.1f}s
+    2. Generate element       {timings.get('generate', 0):>8.1f}s
+    3. Extract alpha          {timings.get('alpha', 0):>8.1f}s
+    4. DOF blur               {timings.get('blur', 0):>8.1f}s
+    5. Color match + darken   {timings.get('color', 0):>8.1f}s
+    6. Composite + output     {timings.get('output', 0):>8.1f}s
     TOTAL                     {total:>8.1f}s
 
   Quality Report:

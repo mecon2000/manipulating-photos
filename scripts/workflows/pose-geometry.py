@@ -596,7 +596,20 @@ def generate_crystal(img_orig, mask, output_dir, num_points=2000, saturation=1.3
         else:
             avg_color = (128, 128, 128)
 
-        draw.polygon(triangle_pts, fill=avg_color, outline=avg_color)
+        # 3D facet brightness jitter: ±25% random brightness, 1.3x saturation boost
+        r, g, b = avg_color
+        # Convert to HSV-like: boost saturation by scaling distance from grey
+        grey = (r + g + b) / 3.0
+        r2 = int(np.clip(grey + (r - grey) * 1.3, 0, 255))
+        g2 = int(np.clip(grey + (g - grey) * 1.3, 0, 255))
+        b2 = int(np.clip(grey + (b - grey) * 1.3, 0, 255))
+        # Apply ±25% brightness jitter
+        jitter = np.random.uniform(0.75, 1.25)
+        r3 = int(np.clip(r2 * jitter, 0, 255))
+        g3 = int(np.clip(g2 * jitter, 0, 255))
+        b3 = int(np.clip(b2 * jitter, 0, 255))
+        facet_color = (r3, g3, b3)
+        draw.polygon(triangle_pts, fill=facet_color, outline=facet_color)
 
     log(output_dir, f"Crystal: drew {len(tri.simplices)} triangles")
 
@@ -977,7 +990,7 @@ def run_workflow(args):
     log(output_dir, f"--- Step 3: Generate geometric art ({args.geometry}) ---")
     geo_img = _generate_geometry(img_orig, mask, args.geometry, output_dir,
                                   line_color=args.line_color, block_size=args.block_size,
-                                  seed=base_seed)
+                                  num_points=args.num_points, seed=base_seed)
     geo_img.save(os.path.join(output_dir, f"3_geometry_{args.geometry}.jpg"), quality=95)
     check_image_quality(geo_img, f"geometry-{args.geometry}", output_dir)
 
@@ -1029,7 +1042,7 @@ def run_workflow(args):
                 new_seed = random.randint(0, 2**32 - 1)
                 geo_img = _generate_geometry(img_orig, mask, current_geometry, output_dir,
                                               line_color=args.line_color, block_size=args.block_size,
-                                              seed=new_seed)
+                                              num_points=args.num_points, seed=new_seed)
                 geo_img.save(os.path.join(output_dir, f"3_geometry_{current_geometry}_r{correction_round}.jpg"), quality=95)
 
             # Re-blend
@@ -1111,7 +1124,7 @@ def run_workflow(args):
     log(output_dir, "=" * 60)
 
 
-def _generate_geometry(img_orig, mask, preset, output_dir, line_color="auto", block_size=30, seed=None):
+def _generate_geometry(img_orig, mask, preset, output_dir, line_color="auto", block_size=30, num_points=None, seed=None):
     """Dispatch to the appropriate geometry generator."""
     if preset == "wireframe":
         return generate_wireframe(img_orig, mask, output_dir, line_color=line_color, seed=seed)
@@ -1122,7 +1135,7 @@ def _generate_geometry(img_orig, mask, preset, output_dir, line_color="auto", bl
     elif preset == "contour":
         return generate_contour(img_orig, mask, output_dir, seed=seed)
     elif preset == "crystal":
-        return generate_crystal(img_orig, mask, output_dir, seed=seed)
+        return generate_crystal(img_orig, mask, output_dir, num_points=num_points or 2000, seed=seed)
     else:
         raise ValueError(f"Unknown geometry preset: {preset}")
 
@@ -1153,6 +1166,8 @@ def main():
                         help="Line color for wireframe preset: hex color or 'auto' to sample from image (default: auto)")
     parser.add_argument("--block-size", type=int, default=30,
                         help="Block size in pixels for blocks preset (default: 30)")
+    parser.add_argument("--num-points", type=int, default=None,
+                        help="Number of points for crystal triangulation (default: 2000). More = denser/smaller triangles")
 
     # Seed & corrections
     parser.add_argument("--seed", type=int, default=None, help="Random seed (random if not set)")

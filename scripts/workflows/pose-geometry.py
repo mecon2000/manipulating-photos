@@ -668,9 +668,10 @@ def generate_shatter(img_orig, mask, output_dir, num_points=1500, saturation=1.3
     # But we place PAIRS offset perpendicular to the gradient direction
 
     # Create probability map from gradient magnitude within mask
-    prob_map = mag_norm * mask_zone.astype(np.float64)
-    # Add small base probability for flat areas (prevents huge triangles)
-    prob_map = prob_map + 0.02 * mask_zone.astype(np.float64)
+    # Exponential weighting: features get MUCH more density than flat areas
+    prob_map = (mag_norm ** 2) * mask_zone.astype(np.float64)
+    # Very small base probability for flat areas (they get few, large triangles)
+    prob_map = prob_map + 0.005 * mask_zone.astype(np.float64)
     prob_sum = prob_map.sum()
     if prob_sum == 0:
         log(output_dir, "No gradient found in mask zone — falling back to crystal", "WARN")
@@ -688,7 +689,8 @@ def generate_shatter(img_orig, mask, output_dir, num_points=1500, saturation=1.3
     # Offset perpendicular to gradient direction (= along the edge)
     # Actually we want offset ALONG gradient direction (perpendicular to edge)
     # so the Delaunay edge between the pair runs along the edge
-    straddle_dist = max(3, int(short_edge * 0.008))  # distance from center to each vertex
+    # Adaptive straddle distance based on local gradient
+    base_straddle = max(3, int(short_edge * 0.008))
 
     points = []
     for sy, sx in zip(sample_ys, sample_xs):
@@ -697,14 +699,10 @@ def generate_shatter(img_orig, mask, output_dir, num_points=1500, saturation=1.3
 
         # Offset along gradient direction (perpendicular to the edge)
         # This places one vertex on the bright side, one on the dark side
-        dy = np.cos(dir_here) * straddle_dist
-        dx = np.sin(dir_here) * straddle_dist
-
-        # Scale straddle distance inversely with gradient magnitude
-        # Strong edges: tight straddling. Weak edges: wider spread
-        scale = 0.5 + (1.0 - mag_here) * 1.0
-        dy *= scale
-        dx *= scale
+        # For each point: low gradient = wider spread, high gradient = tight
+        local_straddle = base_straddle * (0.3 + 2.0 * (1.0 - mag_here))  # 0.3x to 2.3x
+        dy = np.cos(dir_here) * local_straddle
+        dx = np.sin(dir_here) * local_straddle
 
         y1 = int(np.clip(sy - dy, 0, h - 1))
         x1 = int(np.clip(sx - dx, 0, w - 1))

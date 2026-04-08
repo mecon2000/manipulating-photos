@@ -924,21 +924,9 @@ def composite_element(original, element_img, element_alpha, subject_mask, edge_m
     ).astype(np.float32) / 255.0
     not_subject = 1.0 - subject_dilated
 
-    # Element shape comes from its own alpha — no blobby edge mask needed
-    # Add a soft fade from edges inward so element doesn't have hard cutoffs
-    # toward the center of the image
-    fade_dist = int(min(w, h) * 0.15)  # fade over 15% of short edge
-    yy, xx = np.mgrid[0:h, 0:w]
-    # Distance from nearest edge (0 at edge, increases inward)
-    dist_from_edge = np.minimum(
-        np.minimum(yy, h - 1 - yy),
-        np.minimum(xx, w - 1 - xx)
-    ).astype(np.float32)
-    # Gradient: 1.0 at edge, fading to 0.0 at fade_dist pixels inward
-    edge_fade = np.clip(1.0 - dist_from_edge / max(fade_dist, 1), 0, 1)
-
-    # Combine: element alpha * edge fade * not-subject
-    final_alpha = alpha_arr * edge_fade * not_subject
+    # Element alpha defines the shape. DOF blur already softens all edges.
+    # Just subtract the subject.
+    final_alpha = alpha_arr * not_subject
     final_alpha = np.clip(final_alpha, 0, 1)
 
     # Soften composite edges

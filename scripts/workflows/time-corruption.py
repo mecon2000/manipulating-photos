@@ -484,7 +484,7 @@ def effect_channel_shift(img_arr, mask_arr, intensity, direction_deg, output_dir
 
     # Shift amount: scales with image size (0.3-1% of short edge)
     short_edge = min(h, w)
-    shift_px = max(3, int(short_edge * (0.003 + intensity * 0.007)))
+    shift_px = max(3, int(short_edge * (0.005 + intensity * 0.025)))
 
     rad = math.radians(direction_deg)
     dx = int(round(math.cos(rad) * shift_px))

@@ -284,7 +284,7 @@ def run_depth_estimation(image_path, output_dir):
 
     try:
         response = requests.post(
-            "https://fal.run/fal-ai/depth-anything-v2",
+            "https://fal.run/fal-ai/imageutils/depth",
             headers=headers,
             json={"image_url": f"data:image/jpeg;base64,{img_b64}"},
             timeout=120,

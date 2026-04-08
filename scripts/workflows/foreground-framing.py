@@ -568,86 +568,141 @@ def create_edge_mask(width, height, coverage=0.20, sides="auto", irregularity=0.
 # ---------------------------------------------------------------------------
 # Text-to-image generation via fal.ai Flux Schnell
 # ---------------------------------------------------------------------------
-def generate_element(prompt, negative_prompt, width, height, output_dir,
-                     seed=None, scene_context=None, smart_sides=None, exif_info=None):
-    """Generate a foreground element on a black background using Flux Schnell.
-
-    Returns PIL RGB image or None on failure.
-    """
-    # Build the full prompt with side placement, scene context, and camera info
-    side_desc = ""
-    if smart_sides:
-        sides = []
-        for role in ("primary", "secondary"):
-            sides.append(smart_sides[role])
-        side_desc = f", entering from the {' and '.join(sides)} edge of the frame"
-
-    scene_desc = ""
-    if scene_context:
-        lighting = scene_context.get("lighting_direction", "")
-        temperature = scene_context.get("color_temperature", "")
-        if lighting or temperature:
-            parts = []
-            if lighting:
-                parts.append(lighting)
-            if temperature:
-                parts.append(f"{temperature} tones")
-            scene_desc = f", matching {' with '.join(parts)}"
-
-    camera_desc = ""
-    if exif_info:
-        fl = exif_info.get("focal_length_mm", 50)
-        ap = exif_info.get("aperture", 2.0)
-        camera_desc = f", as seen through a {fl:.0f}mm f/{ap:.1f} lens"
-
-    full_prompt = f"{prompt}{side_desc}{scene_desc}{camera_desc}"
-
-    log(output_dir, f"Generating element: '{full_prompt[:120]}...'")
-
+def _generate_one_strip(prompt, width, height, seed, output_dir):
+    """Generate a single element strip via Flux Schnell. Returns PIL RGB or None."""
     headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
-
     payload = {
-        "prompt": full_prompt,
+        "prompt": prompt,
         "image_size": {"width": width, "height": height},
         "num_images": 1,
     }
     if seed is not None:
         payload["seed"] = seed
-    if negative_prompt:
-        # Flux Schnell does not have a dedicated negative prompt field but
-        # we append negative guidance to the prompt itself
-        payload["prompt"] = full_prompt + f". NOT: {negative_prompt}"
 
     try:
-        response = requests.post(
-            "https://fal.run/fal-ai/flux/schnell",
-            headers=headers,
-            json=payload,
-            timeout=120,
-        )
+        response = requests.post("https://fal.run/fal-ai/flux/schnell",
+                                 headers=headers, json=payload, timeout=120)
     except requests.RequestException as e:
-        log(output_dir, f"Element generation request failed: {e}", "ERROR")
+        log(output_dir, f"Strip generation failed: {e}", "ERROR")
         return None
 
     if response.status_code != 200:
-        log(output_dir, f"Element generation failed ({response.status_code}): {response.text[:300]}", "ERROR")
+        log(output_dir, f"Strip generation failed ({response.status_code}): {response.text[:200]}", "ERROR")
         return None
 
     data = response.json()
     images = data.get("images", [])
     if not images:
-        log(output_dir, f"Element generation returned no images. Keys: {list(data.keys())}", "ERROR")
         return None
 
     result_url = images[0].get("url") if isinstance(images[0], dict) else images[0]
     if not result_url:
-        log(output_dir, "Element generation returned no image URL", "ERROR")
         return None
 
-    log(output_dir, f"Element CDN URL: {result_url}")
-    result_img = Image.open(requests.get(result_url, stream=True, timeout=30).raw).convert("RGB")
-    log(output_dir, f"Generated element: {result_img.size[0]}x{result_img.size[1]}")
-    return result_img
+    log(output_dir, f"Strip CDN: {result_url}")
+    return Image.open(requests.get(result_url, stream=True, timeout=30).raw).convert("RGB")
+
+
+def generate_element(prompt, negative_prompt, width, height, output_dir,
+                     seed=None, scene_context=None, smart_sides=None, exif_info=None):
+    """Generate foreground element strips per-side, then composite onto a black canvas.
+
+    For each side in smart_sides, generates a strip at the correct aspect ratio
+    with a side-specific prompt. Places each strip at its edge position.
+    Returns PIL RGB image (element on black background) or None on failure.
+    """
+    # Build context descriptors
+    scene_desc = ""
+    if scene_context:
+        lighting = scene_context.get("lighting_direction", "")
+        temperature = scene_context.get("color_temperature", "")
+        if lighting or temperature:
+            parts = [p for p in [lighting, f"{temperature} tones" if temperature else ""] if p]
+            scene_desc = f", {' with '.join(parts)}"
+
+    camera_desc = ""
+    if exif_info:
+        fl = exif_info.get("focal_length_mm", 50)
+        ap = exif_info.get("aperture", 2.0)
+        camera_desc = f", shallow depth of field, {fl:.0f}mm f/{ap:.1f}"
+
+    neg_suffix = f". NOT: {negative_prompt}" if negative_prompt else ""
+
+    # Determine which sides to generate for
+    if smart_sides:
+        sides_to_gen = [
+            (smart_sides["primary"], smart_sides["primary_mult"]),
+            (smart_sides["secondary"], smart_sides["secondary_mult"]),
+        ]
+    else:
+        # Default: left and top
+        sides_to_gen = [("left", 1.0), ("top", 0.6)]
+
+    # Coverage determines strip thickness
+    coverage_frac = 0.25  # fraction of image dimension for each strip
+
+    canvas = Image.new("RGB", (width, height), (0, 0, 0))
+    generated_any = False
+
+    # Side-specific prompt templates
+    SIDE_PROMPTS = {
+        "left": "entering from the left edge, vertical element on the left side of frame",
+        "right": "entering from the right edge, vertical element on the right side of frame",
+        "top": "entering from the top edge, horizontal element along the top of frame",
+        "bottom": "entering from the bottom edge, horizontal element along the bottom of frame",
+    }
+
+    for i, (side, mult) in enumerate(sides_to_gen):
+        side_seed = (seed + i * 1000) if seed is not None else None
+
+        # Strip dimensions based on side
+        if side in ("left", "right"):
+            strip_w = max(256, int(width * coverage_frac * mult))
+            strip_h = height
+        else:
+            strip_w = width
+            strip_h = max(256, int(height * coverage_frac * mult))
+
+        # Ensure dimensions are multiples of 8 (required by Flux)
+        strip_w = (strip_w // 8) * 8
+        strip_h = (strip_h // 8) * 8
+        strip_w = max(256, min(strip_w, 1536))
+        strip_h = max(256, min(strip_h, 1536))
+
+        side_prompt = f"{prompt}, {SIDE_PROMPTS.get(side, '')}{scene_desc}{camera_desc}, on solid black background, isolated{neg_suffix}"
+        log(output_dir, f"Generating {side} strip ({strip_w}x{strip_h}): '{side_prompt[:100]}...'")
+
+        strip = _generate_one_strip(side_prompt, strip_w, strip_h, side_seed, output_dir)
+        if strip is None:
+            log(output_dir, f"Strip generation for {side} failed — skipping", "WARN")
+            continue
+
+        # Resize strip to match target dimensions for this edge
+        if side in ("left", "right"):
+            target_w = int(width * coverage_frac * mult)
+            strip = strip.resize((target_w, height), Image.LANCZOS)
+        else:
+            target_h = int(height * coverage_frac * mult)
+            strip = strip.resize((width, target_h), Image.LANCZOS)
+
+        # Paste strip at correct edge position
+        if side == "left":
+            canvas.paste(strip, (0, 0))
+        elif side == "right":
+            canvas.paste(strip, (width - strip.size[0], 0))
+        elif side == "top":
+            canvas.paste(strip, (0, 0))
+        elif side == "bottom":
+            canvas.paste(strip, (0, height - strip.size[1]))
+
+        generated_any = True
+        log(output_dir, f"Placed {side} strip at edge")
+
+    if not generated_any:
+        log(output_dir, "No strips generated — element generation failed", "ERROR")
+        return None
+
+    return canvas
 
 
 # ---------------------------------------------------------------------------

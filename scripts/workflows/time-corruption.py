@@ -75,7 +75,7 @@ sys.stdout.reconfigure(line_buffering=True)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-EFFECTS = ["ghost", "melt", "trails", "glitch", "full"]
+EFFECTS = ["ghost", "melt", "trails", "glitch", "echo", "full"]
 MODES = ["normal", "dissolve", "float"]  # kept for backward-compat deprecation mapping
 # Deprecated mode → affect mapping
 _MODE_TO_AFFECT = {
@@ -600,6 +600,98 @@ def effect_arc_ghosting(img_arr, mask_arr, intensity, direction_deg, rng, output
 
 
 
+def effect_echo(img_arr, mask_arr, intensity, direction_deg, rng, output_dir, n_echoes=4, arc_angle=20):
+    """Silhouette echo: offset copies of the subject placed OUTSIDE the mask in the BG.
+
+    The subject stays perfectly sharp. Semi-transparent copies of her silhouette
+    radiate outward in 1-2 directions, creating a vibration/afterimage feel.
+    Echoes only appear in the background — they don't cover ropes, gags, or
+    anything else that's outside the affect mask.
+
+    Uses the FULL subject (not just skin) for the echo shape, but places echoes
+    only where the original image has background (not on non-affected foreground
+    elements like ropes).
+    """
+    log(output_dir, f"Applying echo effect (intensity={intensity:.2f}, dir={direction_deg}°, n={n_echoes})")
+
+    h, w = img_arr.shape[:2]
+    result = img_arr.astype(np.float64)
+    short_edge = min(h, w)
+
+    # The mask defines what to AFFECT — but for echo, we use it differently:
+    # - Subject stays sharp (mask area untouched)
+    # - Echoes are placed OUTSIDE the mask (in background)
+    mask_norm = mask_arr.astype(np.float64) / 255.0
+    mask_3ch = mask_norm[:, :, np.newaxis]
+
+    # Extract the subject pixels for making echo copies
+    subject = img_arr.astype(np.float64) * mask_3ch
+
+    # Exponential offsets scaled to image size
+    base_offset = max(5, int(short_edge * 0.015))  # ~1.5% of image
+    offsets = [base_offset * (2 ** i) for i in range(n_echoes)]  # 1x, 2x, 4x, 8x
+    opacities = [0.5, 0.35, 0.2, 0.1][:n_echoes]
+
+    # Color tint for echoes — slight shift toward a complementary tone
+    # Creates a more artistic, less "copy-paste" feel
+    tint_strength = 0.15 * intensity
+    rad = math.radians(direction_deg)
+
+    # Arc: each echo curves slightly
+    arc_step = arc_angle / max(n_echoes - 1, 1)
+
+    for i, (offset_px, opacity) in enumerate(zip(offsets, opacities)):
+        current_angle = direction_deg + arc_step * i
+        echo_rad = math.radians(current_angle)
+        ox = int(round(math.cos(echo_rad) * offset_px * intensity))
+        oy = int(round(math.sin(echo_rad) * offset_px * intensity))
+
+        if ox == 0 and oy == 0:
+            continue
+
+        # Shift the subject
+        shifted_subject = np.zeros_like(subject)
+        shifted_mask = np.zeros_like(mask_norm)
+
+        src_y_start = max(0, -oy)
+        src_y_end = min(h, h - oy)
+        src_x_start = max(0, -ox)
+        src_x_end = min(w, w - ox)
+        dst_y_start = max(0, oy)
+        dst_y_end = min(h, h + oy)
+        dst_x_start = max(0, ox)
+        dst_x_end = min(w, w + ox)
+
+        copy_h = min(src_y_end - src_y_start, dst_y_end - dst_y_start)
+        copy_w = min(src_x_end - src_x_start, dst_x_end - dst_x_start)
+        if copy_h <= 0 or copy_w <= 0:
+            continue
+
+        shifted_subject[dst_y_start:dst_y_start+copy_h, dst_x_start:dst_x_start+copy_w] = \
+            subject[src_y_start:src_y_start+copy_h, src_x_start:src_x_start+copy_w]
+        shifted_mask[dst_y_start:dst_y_start+copy_h, dst_x_start:dst_x_start+copy_w] = \
+            mask_norm[src_y_start:src_y_start+copy_h, src_x_start:src_x_start+copy_w]
+
+        # KEY: only place echo where the ORIGINAL mask is NOT active
+        # This means echoes go into background, never over ropes/accessories/the model herself
+        bg_zone = 1.0 - mask_norm  # background = where mask is 0
+        echo_alpha = shifted_mask * opacity * intensity * bg_zone
+
+        # Slight color shift for artistic feel (warmer for forward echoes, cooler for further)
+        tinted = shifted_subject.copy()
+        warmth = 1.0 - (i / n_echoes)  # first echo = warm, last = cool
+        tinted[:, :, 0] = tinted[:, :, 0] * (1 + tint_strength * warmth)      # red boost
+        tinted[:, :, 2] = tinted[:, :, 2] * (1 + tint_strength * (1 - warmth)) # blue boost on far echoes
+
+        echo_alpha_3ch = echo_alpha[:, :, np.newaxis]
+        result = result * (1 - echo_alpha_3ch) + tinted * echo_alpha_3ch
+
+    # Subject stays perfectly sharp — paste original back on top
+    result = result * (1 - mask_3ch) + img_arr.astype(np.float64) * mask_3ch
+
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
 def apply_effects(img, mask, effect, intensity, direction_deg, seed, output_dir, **kwargs):
     """Apply the requested effect preset to the region defined by mask.
 
@@ -650,6 +742,8 @@ def _apply_single_effect(effect, img_arr, mask_arr, intensity, direction_deg, rn
         return effect_motion_trails(img_arr, mask_arr, intensity, direction_deg, output_dir)
     elif effect == "glitch":
         return effect_channel_shift(img_arr, mask_arr, intensity, direction_deg, output_dir)
+    elif effect == "echo":
+        return effect_echo(img_arr, mask_arr, intensity, direction_deg, rng, output_dir)
     elif effect == "full":
         log(output_dir, "Full preset: layering all effects...")
         result = effect_channel_shift(img_arr, mask_arr, intensity * 0.8, direction_deg, output_dir)

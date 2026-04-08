@@ -58,6 +58,7 @@ GEOMETRY_PRESETS = {
     "contour":   "Topographic contour lines at multiple brightness levels — elevation map portrait",
     "crystal":   "Edge-aware Delaunay — dense triangles at contours that 'shatter' along edges, sparse in flat areas",
     "shatter":   "Gradient-straddling Delaunay — triangle edges FOLLOW contrast boundaries (light/shadow lines)",
+    "refine":    "Error-minimizing iterative triangulation — splits worst triangles until each has uniform color",
 }
 
 BLEND_MODES = ["overlay", "multiply", "screen", "alpha"]
@@ -804,6 +805,284 @@ def generate_shatter(img_orig, mask, output_dir, num_points=1500, saturation=1.3
     return result
 
 
+def _triangle_color_error(img_np, points, simplex, h, w):
+    """Compute the color variance within a triangle. Higher = less uniform."""
+    verts = points[simplex]
+    cy = int(np.mean(verts[:, 0]))
+    cx = int(np.mean(verts[:, 1]))
+    cy = max(0, min(h - 1, cy))
+    cx = max(0, min(w - 1, cx))
+
+    # Get bounding box of triangle
+    y_min = max(0, int(verts[:, 0].min()))
+    y_max = min(h - 1, int(verts[:, 0].max()))
+    x_min = max(0, int(verts[:, 1].min()))
+    x_max = min(w - 1, int(verts[:, 1].max()))
+
+    if y_max <= y_min or x_max <= x_min:
+        return 0.0, cy, cx
+
+    # Sample pixels within the triangle's bounding box
+    patch = img_np[y_min:y_max+1, x_min:x_max+1]
+    if patch.size == 0:
+        return 0.0, cy, cx
+
+    # Create a mini-mask for pixels inside the triangle
+    ph, pw = patch.shape[:2]
+    # Use barycentric coordinates to test which pixels are inside
+    v0 = verts[0].astype(np.float64)
+    v1 = verts[1].astype(np.float64)
+    v2 = verts[2].astype(np.float64)
+
+    yy, xx = np.mgrid[y_min:y_max+1, x_min:x_max+1]
+    pts = np.stack([yy.ravel(), xx.ravel()], axis=1).astype(np.float64)
+
+    # Barycentric test
+    d00 = np.dot(v1 - v0, v1 - v0)
+    d01 = np.dot(v1 - v0, v2 - v0)
+    d11 = np.dot(v2 - v0, v2 - v0)
+    denom = d00 * d11 - d01 * d01
+    if abs(denom) < 1e-10:
+        return 0.0, cy, cx
+
+    diff = pts - v0
+    d20 = diff @ (v1 - v0)
+    d21 = diff @ (v2 - v0)
+    u = (d11 * d20 - d01 * d21) / denom
+    v = (d00 * d21 - d01 * d20) / denom
+    inside = (u >= 0) & (v >= 0) & (u + v <= 1)
+
+    if inside.sum() < 3:
+        return 0.0, cy, cx
+
+    # Get pixel colors inside the triangle
+    inside_2d = inside.reshape(ph, pw)
+    pixels = patch[inside_2d]  # (N, 3)
+
+    # Color variance = mean of per-channel std
+    variance = pixels.astype(np.float64).std(axis=0).mean()
+
+    # Find the point of maximum error (pixel furthest from mean color)
+    mean_color = pixels.mean(axis=0)
+    errors = np.sqrt(((pixels.astype(np.float64) - mean_color) ** 2).sum(axis=1))
+    max_error_idx = errors.argmax()
+
+    # Map back to image coordinates
+    inside_ys, inside_xs = np.where(inside_2d)
+    max_err_y = inside_ys[max_error_idx] + y_min
+    max_err_x = inside_xs[max_error_idx] + x_min
+
+    # Weight by triangle area (larger triangles with same variance are worse)
+    area = abs(np.cross(v1 - v0, v2 - v0)) / 2.0
+    weighted_error = variance * np.sqrt(max(area, 1.0))
+
+    return weighted_error, int(max_err_y), int(max_err_x)
+
+
+def generate_refine(img_orig, mask, output_dir, num_points=500, saturation=1.3, seed=None):
+    """Error-minimizing iterative triangulation.
+
+    Starts with a coarse mesh, then iteratively splits the triangle with
+    highest color variance by adding a vertex at the point of maximum error.
+    This ensures each triangle ends up with uniform color — no triangle spans
+    a contrast boundary.
+
+    Produces the most faithful low-poly result: big triangles in flat areas,
+    tiny triangles at features, edges precisely following contrast boundaries.
+    """
+    log(output_dir, f"Generating refine geometry (target ~{num_points} triangles, sat={saturation})...")
+
+    rng = np.random.default_rng(seed if seed is not None else 42)
+
+    img_np = np.array(img_orig)
+    mask_np = np.array(mask)
+    gray = np.array(img_orig.convert("L"), dtype=np.float64)
+    w, h = img_orig.size
+
+    # --- Start with coarse seed points ---
+    # Mask boundary + corners + sparse interior
+    mask_bool = mask_np > 127
+    ys_mask, xs_mask = np.where(mask_bool)
+
+    if len(ys_mask) < 10:
+        log(output_dir, "Mask too small for refine — returning blank", "WARN")
+        return Image.new("RGB", (w, h), (0, 0, 0))
+
+    # Bounding box of mask
+    y_min, y_max = ys_mask.min(), ys_mask.max()
+    x_min, x_max = xs_mask.min(), xs_mask.max()
+
+    # Initial coarse grid within mask bbox
+    n_grid = 6  # 6x6 grid = ~36 initial points
+    initial_pts = []
+    for gy in range(n_grid + 1):
+        for gx in range(n_grid + 1):
+            py = int(y_min + gy * (y_max - y_min) / n_grid)
+            px = int(x_min + gx * (x_max - x_min) / n_grid)
+            py = max(0, min(h - 1, py))
+            px = max(0, min(w - 1, px))
+            initial_pts.append([py, px])
+
+    # Add mask boundary points
+    mask_boundary = np.array(mask.filter(ImageFilter.FIND_EDGES))
+    by, bx = np.where(mask_boundary > 127)
+    if len(by) > 40:
+        idx = rng.choice(len(by), 40, replace=False)
+        for i in idx:
+            initial_pts.append([by[i], bx[i]])
+
+    # Image corners and borders
+    for corner in [[0, 0], [0, w-1], [h-1, 0], [h-1, w-1]]:
+        initial_pts.append(corner)
+    for i in range(16):
+        t = i / 16
+        initial_pts.extend([
+            [0, int(t * (w-1))], [h-1, int(t * (w-1))],
+            [int(t * (h-1)), 0], [int(t * (h-1)), w-1],
+        ])
+
+    points = np.array(initial_pts)
+    points = np.unique(points, axis=0)
+    points[:, 0] = np.clip(points[:, 0], 0, h - 1)
+    points[:, 1] = np.clip(points[:, 1], 0, w - 1)
+
+    log(output_dir, f"Refine: starting with {len(points)} seed points")
+
+    # --- Iterative refinement loop ---
+    # Each iteration: triangulate, find worst triangle, add vertex at max error point
+    max_iterations = num_points * 2  # safety limit
+    target_triangles = num_points  # roughly 2x points = triangles
+
+    for iteration in range(max_iterations):
+        try:
+            tri = Delaunay(points)
+        except Exception as e:
+            log(output_dir, f"Delaunay failed at iteration {iteration}: {e}", "WARN")
+            break
+
+        n_tris = len(tri.simplices)
+        if n_tris >= target_triangles:
+            break
+
+        # Compute error for each triangle
+        errors = []
+        for si, simplex in enumerate(tri.simplices):
+            # Only refine triangles whose center is in the mask
+            cy = int(np.mean(points[simplex][:, 0]))
+            cx = int(np.mean(points[simplex][:, 1]))
+            cy = max(0, min(h - 1, cy))
+            cx = max(0, min(w - 1, cx))
+            if not mask_bool[cy, cx]:
+                errors.append((0.0, 0, 0, si))
+                continue
+
+            err, ey, ex = _triangle_color_error(img_np, points, simplex, h, w)
+            errors.append((err, ey, ex, si))
+
+        if not errors:
+            break
+
+        # Sort by error descending — split the worst ones
+        errors.sort(key=lambda x: -x[0])
+
+        # Add vertices for top N worst triangles per iteration
+        # (batch splitting is much faster than one-at-a-time)
+        n_split = max(1, min(30, (target_triangles - n_tris) // 2))
+        new_points = []
+        prev_count = len(points)
+        for err, ey, ex, si in errors[:n_split]:
+            if err < 0.5:  # triangle is already uniform enough
+                break
+            ey = max(1, min(h - 2, ey))
+            ex = max(1, min(w - 2, ex))
+            new_points.append([ey, ex])
+            # Also add centroid of the worst triangle (ensures progress even if
+            # max-error point is already a vertex)
+            simplex = tri.simplices[si]
+            cy = int(np.mean(points[simplex][:, 0]))
+            cx = int(np.mean(points[simplex][:, 1]))
+            cy = max(1, min(h - 2, cy))
+            cx = max(1, min(w - 2, cx))
+            # Add with small jitter to avoid duplicates
+            jy = int(rng.integers(-2, 3))
+            jx = int(rng.integers(-2, 3))
+            new_points.append([max(0, min(h-1, cy + jy)), max(0, min(w-1, cx + jx))])
+
+        if not new_points:
+            break  # all triangles are uniform
+
+        points = np.vstack([points, np.array(new_points)])
+        points = np.unique(points, axis=0)
+        points[:, 0] = np.clip(points[:, 0], 0, h - 1)
+        points[:, 1] = np.clip(points[:, 1], 0, w - 1)
+
+        # Break if no new unique points were added (stuck)
+        if len(points) <= prev_count:
+            log(output_dir, f"Refine: no new points at iteration {iteration}, stopping")
+            break
+
+        if iteration % 50 == 0 and iteration > 0:
+            log(output_dir, f"Refine: iteration {iteration}, {len(points)} points, {n_tris} triangles")
+
+    # Final triangulation
+    try:
+        tri = Delaunay(points)
+    except Exception as e:
+        log(output_dir, f"Final Delaunay failed: {e}", "WARN")
+        return Image.new("RGB", (w, h), (0, 0, 0))
+
+    log(output_dir, f"Refine: final mesh has {len(points)} points, {len(tri.simplices)} triangles")
+
+    # --- Draw triangles ---
+    result = Image.new("RGB", (w, h), (0, 0, 0))
+    draw = ImageDraw.Draw(result)
+
+    for simplex in tri.simplices:
+        triangle_pts = [(int(points[i][1]), int(points[i][0])) for i in simplex]
+
+        cy = int(np.mean([points[i][0] for i in simplex]))
+        cx = int(np.mean([points[i][1] for i in simplex]))
+        cy = max(0, min(h - 1, cy))
+        cx = max(0, min(w - 1, cx))
+
+        # Color from centroid — small patch for accuracy
+        verts_y = [points[i][0] for i in simplex]
+        verts_x = [points[i][1] for i in simplex]
+        tri_size = max(max(verts_y) - min(verts_y), max(verts_x) - min(verts_x))
+        patch_r = max(1, int(tri_size * 0.1))
+
+        y_lo = max(0, cy - patch_r)
+        y_hi = min(h, cy + patch_r + 1)
+        x_lo = max(0, cx - patch_r)
+        x_hi = min(w, cx + patch_r + 1)
+        patch = img_np[y_lo:y_hi, x_lo:x_hi]
+        if patch.size > 0:
+            r, g, b = [float(c) for c in patch.mean(axis=(0, 1))]
+        else:
+            r, g, b = 128., 128., 128.
+
+        # Saturation boost
+        grey = (r + g + b) / 3.0
+        r = grey + (r - grey) * 1.3
+        g = grey + (g - grey) * 1.3
+        b = grey + (b - grey) * 1.3
+
+        # Subtle facet jitter (less than crystal/shatter — refine should be more faithful)
+        jitter = rng.uniform(0.88, 1.12)
+        r, g, b = [max(0, min(255, c * jitter)) for c in [r, g, b]]
+
+        color = (int(r), int(g), int(b))
+        draw.polygon(triangle_pts, fill=color, outline=color)
+
+    log(output_dir, f"Refine: drew {len(tri.simplices)} triangles")
+
+    if saturation != 1.0:
+        result = ImageEnhance.Color(result).enhance(saturation)
+        result = ImageEnhance.Contrast(result).enhance(1.0 + (saturation - 1.0) * 0.3)
+
+    return result
+
+
 def generate_blocks(img_orig, mask, output_dir, block_size=30, seed=None):
     """Generate block mosaic: grid of rectangles with average color."""
     log(output_dir, f"Generating blocks geometry (block_size={block_size}px)...")
@@ -1321,6 +1600,8 @@ def _generate_geometry(img_orig, mask, preset, output_dir, line_color="auto", bl
         return generate_crystal(img_orig, mask, output_dir, num_points=num_points or 2000, seed=seed)
     elif preset == "shatter":
         return generate_shatter(img_orig, mask, output_dir, num_points=num_points or 1500, seed=seed)
+    elif preset == "refine":
+        return generate_refine(img_orig, mask, output_dir, num_points=num_points or 500, seed=seed)
     else:
         raise ValueError(f"Unknown geometry preset: {preset}")
 

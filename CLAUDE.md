@@ -138,7 +138,7 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 ./scripts/workflows/pose-geometry.py --list-presets
 ```
 
-**6 presets:** wireframe, lowpoly, crystal (edge-aware Delaunay), shatter (gradient-straddling — edges follow contrast boundaries), blocks, contour. `--num-points` controls triangle density. **4 blend modes:** overlay, multiply, screen, alpha.
+**7 presets:** wireframe, lowpoly, crystal (edge-aware Delaunay), shatter (gradient-straddling), refine (error-minimizing iterative — best quality, adaptive sizing), blocks, contour. `--num-points` controls triangle density. **4 blend modes:** overlay, multiply, screen, alpha.
 
 ### `scripts/workflows/body-segment.py`
 **Fine-grained body part segmentation.** Uses MediaPipe multiclass selfie segmentation to separate body into face-skin, body-skin, hair, clothes, and others. Can also detect and subtract hands (MediaPipe hand landmarker) and ropes (HSV thresholding). Runs locally — no API calls.

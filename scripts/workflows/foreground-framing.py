@@ -63,58 +63,123 @@ from masking import build_mask
 sys.stdout.reconfigure(line_buffering=True)
 
 # ---------------------------------------------------------------------------
-# Framing Presets — generation-style prompts (element on black background)
+# Framing Presets — three types:
+#   object  — recognizable object (teapot, plant) generated whole, then placed
+#             so only part peeks in from the frame edge
+#   bar     — continuous material (wood, brick) stretched along full edge length
+#   organic — amorphous (foliage, smoke) generated at edge dimensions directly
 # ---------------------------------------------------------------------------
 FRAMING_PRESETS = {
+    # --- organic (amorphous, fills edge area) ---
     "foliage": {
-        "prompt": "green oak leaves and small twigs with dappled light, natural organic shapes, lush vegetation, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, colorful background, bright background, white background",
-        "description": "Blurry green leaves/branches framing the shot",
+        "type": "organic",
+        "prompt": "dense green oak leaves and twigs filling the entire frame, lush vegetation, dappled light, botanical close-up, on solid black background",
+        "negative": "person, face, text, bright background",
+        "description": "Blurry green leaves/branches framing",
     },
     "warm foliage": {
-        "prompt": "warm autumn leaves in golden brown and orange tones, dried twigs, fall foliage, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, green, bright background, white background",
+        "type": "organic",
+        "prompt": "dense warm autumn leaves in golden brown and orange filling the entire frame, dried twigs, fall foliage close-up, on solid black background",
+        "negative": "person, face, text, green, bright background",
         "description": "Warm autumn-toned blurry leaves",
     },
+    "flowers": {
+        "type": "organic",
+        "prompt": "dense colorful flower petals and blossoms filling the frame, soft pink and white petals, romantic floral close-up, on solid black background",
+        "negative": "person, face, text, stems, bright background",
+        "description": "Blurry flower petals framing",
+    },
+    "smoke": {
+        "type": "organic",
+        "prompt": "wispy tendrils of white and grey smoke filling the frame, ethereal fog wisps, atmospheric haze, swirling patterns, on solid black background",
+        "negative": "person, face, text, colorful, fire",
+        "description": "Ethereal smoke/haze framing",
+    },
+    "fairy lights": {
+        "type": "organic",
+        "prompt": "warm golden fairy lights and glowing bokeh orbs filling the frame, string lights close-up, warm circles of light, on solid black background",
+        "negative": "person, face, text, daylight",
+        "description": "Warm bokeh light circles",
+    },
+    # --- bar (continuous material along edge) ---
     "doorframe": {
-        "prompt": "dark wooden doorframe edge with warm wood grain texture, architectural element, aged wood, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, bright background, white background, full door",
+        "type": "bar",
+        "prompt": "close-up of dark wooden surface with warm wood grain texture, aged oak wood plank, detailed grain pattern, on solid black background",
+        "negative": "person, face, text, full door, room, bright background",
         "description": "Dark wooden doorframe edges",
     },
     "curtain": {
-        "prompt": "sheer white curtain fabric, soft translucent flowing textile, delicate draping, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, opaque, bright background, colorful",
-        "description": "Soft sheer curtain fabric",
+        "type": "bar",
+        "prompt": "close-up of sheer white curtain fabric, soft translucent flowing textile, delicate draping folds, on solid black background",
+        "negative": "person, face, text, opaque, colorful",
+        "description": "Soft sheer curtain fabric along edge",
     },
     "dark curtain": {
-        "prompt": "dark velvet curtain fabric, rich heavy draping textile, theatrical deep tones, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, bright, white, colorful background",
-        "description": "Dark velvet curtain draping",
-    },
-    "flowers": {
-        "prompt": "colorful flower petals and blossoms, soft delicate petals in pink and white, romantic floral arrangement, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, stems, bright background, white background",
-        "description": "Blurry flower petals framing",
-    },
-    "fairy lights": {
-        "prompt": "warm golden fairy lights, string of glowing bokeh orbs, warm light circles, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, daylight, bright background",
-        "description": "Warm bokeh light circles",
+        "type": "bar",
+        "prompt": "close-up of dark velvet curtain fabric, rich heavy draping textile, theatrical deep red-black tones, on solid black background",
+        "negative": "person, face, text, bright, white, colorful",
+        "description": "Dark velvet curtain draping along edge",
     },
     "metal": {
-        "prompt": "dark iron railing and metal bars, industrial metalwork, aged dark metal with patina, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, bright, shiny, chrome, white background",
-        "description": "Dark metal railing/bars",
-    },
-    "smoke": {
-        "prompt": "wispy tendrils of white and grey smoke, ethereal fog wisps, atmospheric haze, delicate swirling patterns, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, colorful, bright background, fire",
-        "description": "Ethereal smoke/haze framing",
+        "type": "bar",
+        "prompt": "close-up of dark iron railing surface, industrial metalwork texture, aged dark metal with patina and rivets, on solid black background",
+        "negative": "person, face, text, bright, shiny, chrome",
+        "description": "Dark metal railing along edge",
     },
     "brick": {
-        "prompt": "red brick wall corner edge, warm masonry texture, urban architectural element, rough textured bricks, against solid black background, isolated object, no other objects",
-        "negative": "person, face, text, bright background, white background, full wall",
+        "type": "bar",
+        "prompt": "close-up of red brick wall surface, warm masonry texture, rough textured bricks with mortar lines, on solid black background",
+        "negative": "person, face, text, bright background, full wall",
         "description": "Blurry brick wall edge",
+    },
+    # --- object (recognizable shape, partially visible from edge) ---
+    "plant": {
+        "type": "object",
+        "prompt": "a lush green potted houseplant in a terracotta pot, monstera or fern, detailed leaves, studio photo, on solid black background, isolated",
+        "negative": "person, face, text, multiple plants, bright background",
+        "description": "Potted plant peeking from edge",
+    },
+    "wine glass": {
+        "type": "object",
+        "prompt": "an elegant wine glass half-filled with red wine, crystal glass with reflections, studio photo, on solid black background, isolated",
+        "negative": "person, face, text, multiple glasses, bright background",
+        "description": "Wine glass peeking from edge",
+    },
+    "coffee mug": {
+        "type": "object",
+        "prompt": "a ceramic coffee mug with steam rising, warm tones, cozy cafe still life, studio photo, on solid black background, isolated",
+        "negative": "person, face, text, multiple cups, bright background",
+        "description": "Coffee mug peeking from edge",
+    },
+    "teapot": {
+        "type": "object",
+        "prompt": "an ornate ceramic teapot with delicate patterns, warm tones, cozy still life, studio photo, on solid black background, isolated",
+        "negative": "person, face, text, multiple objects, bright background",
+        "description": "Teapot peeking from corner",
+    },
+    "trophy": {
+        "type": "object",
+        "prompt": "a shiny golden trophy cup on a dark wooden base, metallic reflections, studio photo, on solid black background, isolated",
+        "negative": "person, face, text, multiple trophies, bright background",
+        "description": "Trophy peeking from edge",
+    },
+    "candle": {
+        "type": "object",
+        "prompt": "a tall lit candle in a brass candlestick holder, warm flickering flame, soft glow, studio photo, on solid black background, isolated",
+        "negative": "person, face, text, multiple candles, bright background",
+        "description": "Candle with warm glow from edge",
+    },
+    "books": {
+        "type": "object",
+        "prompt": "a small stack of old leather-bound books, aged paper and rich binding, vintage still life, studio photo, on solid black background, isolated",
+        "negative": "person, face, text, bookshelf, bright background",
+        "description": "Stack of books peeking from edge",
+    },
+    "vase": {
+        "type": "object",
+        "prompt": "an elegant ceramic vase with dried flowers, artistic still life, warm tones, studio photo, on solid black background, isolated",
+        "negative": "person, face, text, multiple vases, bright background",
+        "description": "Vase with flowers peeking from edge",
     },
 }
 
@@ -604,14 +669,20 @@ def _generate_one_strip(prompt, width, height, seed, output_dir):
 
 
 def generate_element(prompt, negative_prompt, width, height, output_dir,
-                     seed=None, scene_context=None, smart_sides=None, exif_info=None):
-    """Generate foreground element strips per-side, then composite onto a black canvas.
+                     seed=None, scene_context=None, smart_sides=None,
+                     exif_info=None, preset_type="organic", coverage=0.25):
+    """Generate foreground element and place on a black canvas.
 
-    For each side in smart_sides, generates a strip at the correct aspect ratio
-    with a side-specific prompt. Places each strip at its edge position.
+    Three generation strategies based on preset type:
+      organic — amorphous fill (foliage, smoke): generate strip per side
+      bar     — continuous material (doorframe, brick): generate texture, stretch
+      object  — recognizable item (teapot, plant): generate whole, crop to peek from edge
+
     Returns PIL RGB image (element on black background) or None on failure.
     """
-    # Build context descriptors
+    neg_suffix = f". NOT: {negative_prompt}" if negative_prompt else ""
+
+    # Context descriptors for prompt enrichment
     scene_desc = ""
     if scene_context:
         lighting = scene_context.get("lighting_direction", "")
@@ -620,14 +691,6 @@ def generate_element(prompt, negative_prompt, width, height, output_dir,
             parts = [p for p in [lighting, f"{temperature} tones" if temperature else ""] if p]
             scene_desc = f", {' with '.join(parts)}"
 
-    camera_desc = ""
-    if exif_info:
-        fl = exif_info.get("focal_length_mm", 50)
-        ap = exif_info.get("aperture", 2.0)
-        camera_desc = f", shallow depth of field, {fl:.0f}mm f/{ap:.1f}"
-
-    neg_suffix = f". NOT: {negative_prompt}" if negative_prompt else ""
-
     # Determine which sides to generate for
     if smart_sides:
         sides_to_gen = [
@@ -635,74 +698,181 @@ def generate_element(prompt, negative_prompt, width, height, output_dir,
             (smart_sides["secondary"], smart_sides["secondary_mult"]),
         ]
     else:
-        # Default: left and top
         sides_to_gen = [("left", 1.0), ("top", 0.6)]
 
-    # Coverage determines strip thickness
-    coverage_frac = 0.25  # fraction of image dimension for each strip
-
     canvas = Image.new("RGB", (width, height), (0, 0, 0))
-    generated_any = False
 
-    # Side-specific prompt templates
-    SIDE_PROMPTS = {
-        "left": "entering from the left edge, vertical element on the left side of frame",
-        "right": "entering from the right edge, vertical element on the right side of frame",
-        "top": "entering from the top edge, horizontal element along the top of frame",
-        "bottom": "entering from the bottom edge, horizontal element along the bottom of frame",
-    }
+    if preset_type == "object":
+        return _generate_object_element(
+            prompt, neg_suffix, scene_desc, width, height,
+            sides_to_gen, coverage, seed, output_dir, canvas,
+        )
+    elif preset_type == "bar":
+        return _generate_bar_element(
+            prompt, neg_suffix, scene_desc, width, height,
+            sides_to_gen, coverage, seed, output_dir, canvas,
+        )
+    else:  # organic
+        return _generate_organic_element(
+            prompt, neg_suffix, scene_desc, width, height,
+            sides_to_gen, coverage, seed, output_dir, canvas,
+        )
+
+
+def _generate_organic_element(prompt, neg_suffix, scene_desc, width, height,
+                              sides_to_gen, coverage, seed, output_dir, canvas):
+    """Organic type: generate amorphous fill for each side strip."""
+    generated_any = False
 
     for i, (side, mult) in enumerate(sides_to_gen):
         side_seed = (seed + i * 1000) if seed is not None else None
 
-        # Strip dimensions based on side
         if side in ("left", "right"):
-            strip_w = max(256, int(width * coverage_frac * mult))
+            strip_w = max(256, int(width * coverage * mult))
             strip_h = height
         else:
             strip_w = width
-            strip_h = max(256, int(height * coverage_frac * mult))
+            strip_h = max(256, int(height * coverage * mult))
 
-        # Ensure dimensions are multiples of 8 (required by Flux)
         strip_w = (strip_w // 8) * 8
         strip_h = (strip_h // 8) * 8
         strip_w = max(256, min(strip_w, 1536))
         strip_h = max(256, min(strip_h, 1536))
 
-        side_prompt = f"{prompt}, {SIDE_PROMPTS.get(side, '')}{scene_desc}{camera_desc}, on solid black background, isolated{neg_suffix}"
-        log(output_dir, f"Generating {side} strip ({strip_w}x{strip_h}): '{side_prompt[:100]}...'")
+        side_prompt = f"{prompt}{scene_desc}, on solid black background{neg_suffix}"
+        log(output_dir, f"Organic {side} strip ({strip_w}x{strip_h}): '{side_prompt[:80]}...'")
 
         strip = _generate_one_strip(side_prompt, strip_w, strip_h, side_seed, output_dir)
         if strip is None:
-            log(output_dir, f"Strip generation for {side} failed — skipping", "WARN")
+            log(output_dir, f"Strip generation for {side} failed", "WARN")
             continue
 
-        # Resize strip to match target dimensions for this edge
+        # Resize to target edge dimensions
         if side in ("left", "right"):
-            target_w = int(width * coverage_frac * mult)
-            strip = strip.resize((target_w, height), Image.LANCZOS)
+            strip = strip.resize((int(width * coverage * mult), height), Image.LANCZOS)
         else:
-            target_h = int(height * coverage_frac * mult)
-            strip = strip.resize((width, target_h), Image.LANCZOS)
+            strip = strip.resize((width, int(height * coverage * mult)), Image.LANCZOS)
 
-        # Paste strip at correct edge position
-        if side == "left":
-            canvas.paste(strip, (0, 0))
-        elif side == "right":
-            canvas.paste(strip, (width - strip.size[0], 0))
-        elif side == "top":
-            canvas.paste(strip, (0, 0))
-        elif side == "bottom":
-            canvas.paste(strip, (0, height - strip.size[1]))
-
+        _paste_at_side(canvas, strip, side, width, height)
         generated_any = True
-        log(output_dir, f"Placed {side} strip at edge")
+        log(output_dir, f"Placed organic {side} strip")
 
-    if not generated_any:
-        log(output_dir, "No strips generated — element generation failed", "ERROR")
+    return canvas if generated_any else None
+
+
+def _generate_bar_element(prompt, neg_suffix, scene_desc, width, height,
+                          sides_to_gen, coverage, seed, output_dir, canvas):
+    """Bar type: generate a texture swatch, then stretch it along each edge."""
+    # Generate one square texture swatch (512x512 is enough for a texture)
+    swatch_size = 512
+    swatch_prompt = f"{prompt}{scene_desc}, filling the entire frame, close-up texture, on solid black background{neg_suffix}"
+    log(output_dir, f"Generating texture swatch ({swatch_size}x{swatch_size}): '{swatch_prompt[:80]}...'")
+
+    swatch = _generate_one_strip(swatch_prompt, swatch_size, swatch_size, seed, output_dir)
+    if swatch is None:
+        log(output_dir, "Texture swatch generation failed", "ERROR")
         return None
 
-    return canvas
+    generated_any = False
+    for i, (side, mult) in enumerate(sides_to_gen):
+        bar_thickness = max(50, int((width if side in ("left", "right") else height) * coverage * mult))
+
+        if side in ("left", "right"):
+            # Stretch swatch to bar_thickness x full height
+            bar = swatch.resize((bar_thickness, height), Image.LANCZOS)
+        else:
+            # Stretch swatch to full width x bar_thickness
+            bar = swatch.resize((width, bar_thickness), Image.LANCZOS)
+
+        _paste_at_side(canvas, bar, side, width, height)
+        generated_any = True
+        log(output_dir, f"Placed bar {side} ({bar.size[0]}x{bar.size[1]})")
+
+    return canvas if generated_any else None
+
+
+def _generate_object_element(prompt, neg_suffix, scene_desc, width, height,
+                             sides_to_gen, coverage, seed, output_dir, canvas):
+    """Object type: generate full object, then position so it peeks from edge.
+
+    The object is generated centered on black background, then placed so that
+    only ~25-35% of it is visible inside the frame — the rest is cropped off-screen.
+    This mimics placing a real object between camera and subject.
+    """
+    # Generate at square aspect ratio — Flux does best with centered objects
+    obj_size = 768
+    obj_prompt = f"{prompt}{scene_desc}, centered in frame, on solid black background{neg_suffix}"
+    generated_any = False
+
+    for i, (side, mult) in enumerate(sides_to_gen):
+        side_seed = (seed + i * 1000) if seed is not None else None
+        log(output_dir, f"Generating object for {side} ({obj_size}x{obj_size}): '{obj_prompt[:80]}...'")
+
+        obj_img = _generate_one_strip(obj_prompt, obj_size, obj_size, side_seed, output_dir)
+        if obj_img is None:
+            log(output_dir, f"Object generation for {side} failed", "WARN")
+            continue
+
+        # Scale object to a reasonable size relative to the photo
+        # Object should be roughly 40-60% of the photo's short edge
+        short_edge = min(width, height)
+        obj_scale = short_edge * 0.55
+        obj_img = obj_img.resize((int(obj_scale), int(obj_scale)), Image.LANCZOS)
+        ow, oh = obj_img.size
+
+        # How much of the object peeks into the frame (25-35%)
+        peek_frac = 0.25 + coverage * 0.4  # coverage 0.2 -> 33%, 0.3 -> 37%
+
+        # Calculate paste position so most of the object is off-screen
+        if side == "left":
+            px = -int(ow * (1 - peek_frac))  # negative = mostly off left edge
+            py = height // 2 - oh // 2 + random.randint(-oh // 6, oh // 6)
+        elif side == "right":
+            px = width - int(ow * peek_frac)
+            py = height // 2 - oh // 2 + random.randint(-oh // 6, oh // 6)
+        elif side == "top":
+            px = width // 2 - ow // 2 + random.randint(-ow // 6, ow // 6)
+            py = -int(oh * (1 - peek_frac))
+        elif side == "bottom":
+            px = width // 2 - ow // 2 + random.randint(-ow // 6, ow // 6)
+            py = height - int(oh * peek_frac)
+        else:
+            continue
+
+        # Paste object onto canvas (PIL handles negative coords by clipping)
+        # We need to manually crop the object to the visible region
+        # Visible region in object coordinates
+        vis_x1 = max(0, -px)
+        vis_y1 = max(0, -py)
+        vis_x2 = min(ow, width - px)
+        vis_y2 = min(oh, height - py)
+
+        if vis_x2 <= vis_x1 or vis_y2 <= vis_y1:
+            log(output_dir, f"Object for {side} entirely off-screen — skipping", "WARN")
+            continue
+
+        visible_part = obj_img.crop((vis_x1, vis_y1, vis_x2, vis_y2))
+        paste_x = max(0, px)
+        paste_y = max(0, py)
+        canvas.paste(visible_part, (paste_x, paste_y))
+
+        generated_any = True
+        vis_pct = ((vis_x2 - vis_x1) * (vis_y2 - vis_y1)) / (ow * oh) * 100
+        log(output_dir, f"Placed object at {side}: {vis_pct:.0f}% visible at ({paste_x},{paste_y})")
+
+    return canvas if generated_any else None
+
+
+def _paste_at_side(canvas, strip, side, canvas_w, canvas_h):
+    """Paste a strip/bar image at the correct edge of the canvas."""
+    if side == "left":
+        canvas.paste(strip, (0, 0))
+    elif side == "right":
+        canvas.paste(strip, (canvas_w - strip.size[0], 0))
+    elif side == "top":
+        canvas.paste(strip, (0, 0))
+    elif side == "bottom":
+        canvas.paste(strip, (0, canvas_h - strip.size[1]))
 
 
 # ---------------------------------------------------------------------------
@@ -1078,11 +1248,13 @@ def main():
     args = parser.parse_args()
 
     if args.list_presets:
-        print(f"\n{'Preset':<18} Description")
-        print("=" * 65)
+        print(f"\n{'Preset':<18} {'Type':<10} Description")
+        print("=" * 80)
         for name, preset in FRAMING_PRESETS.items():
-            print(f"  {name:<16} {preset['description']}")
+            ptype = preset.get("type", "organic")
+            print(f"  {name:<16} {ptype:<10} {preset['description']}")
         print(f"\nTotal: {len(FRAMING_PRESETS)} presets")
+        print("Types: organic (amorphous fill), bar (stretched texture), object (peeking item)")
         sys.exit(0)
 
     source = os.path.expanduser(args.source)
@@ -1094,6 +1266,7 @@ def main():
     framing_prompt = None
     framing_negative = None
     framing_name = None
+    preset_type = "organic"  # default
 
     if args.prompt:
         framing_prompt = args.prompt
@@ -1107,6 +1280,7 @@ def main():
         framing_prompt = preset["prompt"]
         framing_negative = args.negative or preset.get("negative", "")
         framing_name = args.framing
+        preset_type = preset.get("type", "organic")
     elif args.framing == "auto" or args.framing is None:
         framing_name = "auto"
     else:
@@ -1183,6 +1357,7 @@ def main():
             framing_prompt = preset["prompt"]
             framing_negative = preset["negative"]
             framing_name = "foliage (fallback)"
+            preset_type = "organic"
 
     # 1c. Subject mask via shared masking module (BiRefNet)
     log(output_dir, "Extracting subject mask (BiRefNet via masking module)...")
@@ -1221,11 +1396,13 @@ def main():
     t0 = time.time()
     log(output_dir, "--- Step 2/6: Generate foreground element ---")
 
+    log(output_dir, f"Preset type: {preset_type}")
     element_raw = generate_element(
         framing_prompt, framing_negative,
         img_orig.width, img_orig.height, output_dir,
         seed=seed, scene_context=scene_context,
         smart_sides=smart_sides, exif_info=exif_info,
+        preset_type=preset_type, coverage=args.coverage,
     )
     if element_raw is None:
         log(output_dir, "Element generation failed — cannot proceed", "ERROR")

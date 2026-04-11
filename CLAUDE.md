@@ -1,6 +1,6 @@
 # OpenClaw Scripts
 
-Photo transformation pipeline for portrait/boudoir photography. Seven tools with unified `--affect`/`--exclude` masking.
+Photo transformation pipeline for portrait/boudoir photography. Eight tools with unified `--affect`/`--exclude` masking.
 
 ## Environment
 
@@ -160,6 +160,41 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 - HSV rope detection (`--exclude ropes`) is aggressive and may eat skin — only use when ropes are misclassified as skin
 - Hand detection works well for subtracting another person's hands touching the subject
 - `--debug` saves individual mask PNGs for each category
+
+### `scripts/workflows/noir-paint.py`
+**High-contrast painterly effect** inspired by @pulpbrother's gouache/acrylic style. Extracts subject, relights with harsh directional light, posterizes to 2-3 tones, vectorizes boundaries into smooth curved contours, overlays coarse canvas texture.
+
+**Usage:**
+```bash
+./scripts/workflows/noir-paint.py --source photo.jpg
+./scripts/workflows/noir-paint.py --source photo.jpg --tones warm --num-tones 3
+./scripts/workflows/noir-paint.py --source photo.jpg --light-angle 135 --canvas-strength 0.25
+./scripts/workflows/noir-paint.py --list-palettes
+```
+
+**All flags:** `--source`, `--tones` (cool/warm/cold/sepia, default cool), `--num-tones` (2/3/4, default 2), `--light-angle` (degrees, default auto from body axis), `--highres-denoise` (default 0.45), `--paint-strength` (Tensor Art img2img, default 0.18, 0=skip), `--canvas-strength` (default 0.22, 0=skip), `--edge-roughness` (default 0.5, 0=skip), `--seed`, `--auto-correct`, `--output-to`, `--local-output-dir`
+
+**4 palettes:** cool (blue-grey, classic), warm (skin tones), cold (steel-blue), sepia (vintage)
+
+**Pipeline:** 1. Extract subject (BiRefNet) + scene context (Gemini) → 2. Body axis detection (MediaPipe pose) → perpendicular light direction → 3. Relight (IC-Light, harsh directional) → 4. [Shadow casting — parked] → 5. Bilateral presmooth + Otsu posterize → 6. Vectorize tones (Douglas-Peucker + slight bezier curves) → 7. Edge roughening → 8. Paint texture (optional Tensor Art img2img) → 9. Coarse canvas texture overlay
+
+**Light direction convention (XZ/XY clock):**
+- XZ clock (floor plane, bird's eye): 12=behind model, 6=camera, 3=model's left, 9=model's right
+- XY clock (wall behind model): 12=above, 6=below, 3=left, 9=right
+- Example: xz-3 = side light from model's left, xy-10+xz-6 = above camera slightly left
+
+**Key techniques:**
+- **Bilateral presmooth** before posterizing eliminates gradient jitter at tone boundaries
+- **Smooth curved contours** (cv2 + Douglas-Peucker + slight bezier bow) — decisive paint-stroke-like edges, not jagged pixels
+- **Coarse canvas texture** — real burlap texture generated via Flux, seamlessly tiled with feathered overlapping + random flips
+- **Gemini scene context** — detects ground surface for grounding shapes (trapezoid for floor, rectangle for bed)
+- **Body axis perpendicular lighting** — MediaPipe pose landmarks determine body orientation, light placed perpendicular biased toward empty space
+
+**Tips:**
+- `--num-tones 2` gives the boldest, most graphic result (like pulpbrother)
+- `--paint-strength 0` skips Tensor Art pass — faster, slightly less painterly
+- Shadow casting is implemented but parked — procedural approach doesn't generalize well across poses
+- IC-Light prompt direction can be unintuitive — describe what's illuminated, not light position
 
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.

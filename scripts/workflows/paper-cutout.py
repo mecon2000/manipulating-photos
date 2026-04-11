@@ -59,7 +59,7 @@ except ImportError:
 
 import cv2
 from PIL import Image, ImageFilter, ImageOps, ImageDraw
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, sobel
 
 # Use shared masking module
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -202,6 +202,21 @@ def posterize_to_layers(img, subject_mask_np, face_mask_np, num_layers, output_d
     gray = np.array(img.convert("L")).astype(np.float32)
     h, w = gray.shape
 
+    # --- Bilateral-style presmooth: eliminate gradient jitter at tone boundaries
+    # while keeping real edges sharp (same approach as noir-paint) ---
+    # 1. Compute edge strength via Sobel
+    edge_x = sobel(gray, axis=1)
+    edge_y = sobel(gray, axis=0)
+    edge_mag = np.sqrt(edge_x**2 + edge_y**2)
+    edge_mag = edge_mag / (edge_mag.max() + 1e-6)  # normalize to [0, 1]
+    # 2. Gaussian blur the grayscale
+    blur_sigma = max(2.0, min(w, h) * 0.008)
+    gray_blurred = gaussian_filter(gray, sigma=blur_sigma)
+    # 3. Blend: keep original where edges are strong, use blurred where smooth
+    edge_mask = np.clip(edge_mag * 3.0, 0, 1)  # amplify edges so they stay crisp
+    gray = gray * edge_mask + gray_blurred * (1 - edge_mask)
+    log(output_dir, f"Bilateral presmooth applied (blur sigma={blur_sigma:.1f})")
+
     # Only consider subject pixels for threshold calculation
     subject_bool = subject_mask_np > 127
     subject_pixels = gray[subject_bool]
@@ -264,8 +279,8 @@ def generate_paper_texture(h, w, base_color, seed, short_edge):
     rng = np.random.RandomState(seed)
 
     # Directional fiber noise: elongated in one direction
-    # Generate at lower resolution and upscale for fiber-like appearance
-    fiber_scale = max(4, int(short_edge * 0.005))
+    # Generate at low resolution and upscale — larger scale = coarser, more visible fibers
+    fiber_scale = max(16, int(short_edge * 0.02))
     small_h = max(1, h // fiber_scale)
     small_w = max(1, w // fiber_scale)
 
@@ -290,9 +305,13 @@ def generate_paper_texture(h, w, base_color, seed, short_edge):
     else:
         fiber = np.zeros((h, w), dtype=np.float32)
 
-    # Fine grain noise for paper speckle
-    speckle = rng.randn(h, w).astype(np.float32) * 0.3
-    speckle = gaussian_filter(speckle, sigma=0.8)
+    # Coarse speckle noise for visible paper grain
+    speckle_scale = max(8, int(short_edge * 0.008))
+    small_sp_h = max(1, h // speckle_scale)
+    small_sp_w = max(1, w // speckle_scale)
+    speckle = rng.randn(small_sp_h, small_sp_w).astype(np.float32) * 0.3
+    speckle = gaussian_filter(speckle, sigma=1.0)
+    speckle = cv2.resize(speckle, (w, h), interpolation=cv2.INTER_LINEAR)
 
     combined = fiber * 0.7 + speckle * 0.3
 

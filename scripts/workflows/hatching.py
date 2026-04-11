@@ -2,24 +2,25 @@
 """
 Hatching — Cross-hatched illustration from portrait photography.
 
-Transforms a portrait photo into a cross-hatched pen-and-ink illustration
-where hatching lines follow the body's 3D surface curvature (derived from
-a depth map). Darker regions get denser hatching; the face gets finer strokes;
-the background gets sparse or no hatching.
+Overlays depth-following cross-hatching on the original photo with region-
+aware opacity: the face stays nearly photographic, the body gets subtle
+hatching texture, and the background receives full hatching that fades out
+(fewer lines, lower alpha) the farther you get from the subject.
 
 Pipeline:
   1. Extract subject mask (BiRefNet via masking.py)
   2. Estimate depth map (fal.ai depth endpoint)
   3. Compute surface normals from depth gradients
   4. Body-segment for face vs body density control
-  5. Generate two-pass cross-hatching following surface normals
-  6. Composite on desaturated/tinted base
-  7. Output + push notification
+  5. Distance transform from subject edge for BG fade
+  6. Generate two-pass cross-hatching following surface normals
+  7. Composite hatching ON TOP of original photo with region-varying opacity
+  8. Output + push notification
 
 Usage:
     python hatching.py --source photo.jpg
     python hatching.py --source photo.jpg --style fine --density 1.5
-    python hatching.py --source photo.jpg --style sepia --density 0.8
+    python hatching.py --source photo.jpg --style sepia --bg-desat 0.7
     python hatching.py --list-styles
 """
 
@@ -56,7 +57,7 @@ except ImportError:
     ISRAEL_TZ = timezone(timedelta(hours=3))
 
 from PIL import Image, ImageFilter, ImageOps, ImageDraw, ImageEnhance
-from scipy.ndimage import gaussian_filter, uniform_filter
+from scipy.ndimage import gaussian_filter, uniform_filter, distance_transform_edt
 import fal_client
 
 # Use shared masking module
@@ -73,38 +74,46 @@ sys.stdout.reconfigure(line_buffering=True)
 STYLES = {
     "classic": {
         "ink_color": (25, 22, 18),          # near-black warm ink
-        "paper_color": (235, 225, 210),     # warm off-white paper
-        "base_tint": (0.15, 0.10, 0.05),   # slight warm desaturation tint (added to grey)
+        "paper_color": (235, 225, 210),     # warm off-white (used as BG tint when bg_desat > 0)
         "line_width_scale": 1.0,            # multiplier on base line width
         "cross_angle_offset": 60,           # degrees between hatching passes
         "second_pass_opacity": 0.55,        # opacity of cross-hatch pass
+        "face_opacity": 0.12,              # hatching overlay opacity on face
+        "body_opacity": 0.35,              # hatching overlay opacity on body/subject
+        "bg_max_opacity": 0.85,            # hatching overlay opacity on nearest BG
         "description": "Black ink on warm paper, medium density",
     },
     "fine": {
         "ink_color": (15, 12, 10),
         "paper_color": (240, 235, 228),
-        "base_tint": (0.08, 0.06, 0.03),
         "line_width_scale": 0.6,
         "cross_angle_offset": 45,
         "second_pass_opacity": 0.65,
+        "face_opacity": 0.10,
+        "body_opacity": 0.30,
+        "bg_max_opacity": 0.80,
         "description": "Very dense, thin lines — master draftsman feel",
     },
     "bold": {
         "ink_color": (10, 8, 5),
         "paper_color": (230, 220, 205),
-        "base_tint": (0.12, 0.08, 0.04),
         "line_width_scale": 1.6,
         "cross_angle_offset": 70,
         "second_pass_opacity": 0.45,
+        "face_opacity": 0.15,
+        "body_opacity": 0.40,
+        "bg_max_opacity": 0.90,
         "description": "Thick lines, high contrast, woodcut-adjacent",
     },
     "sepia": {
         "ink_color": (80, 50, 25),
         "paper_color": (235, 220, 190),
-        "base_tint": (0.25, 0.15, 0.05),
         "line_width_scale": 1.0,
         "cross_angle_offset": 55,
         "second_pass_opacity": 0.50,
+        "face_opacity": 0.12,
+        "body_opacity": 0.35,
+        "bg_max_opacity": 0.85,
         "description": "Brown ink on cream paper, vintage",
     },
 }
@@ -206,12 +215,17 @@ def get_body_segments(img_array, output_dir):
 def generate_hatching(
     img, luminance_arr, angle_arr, subject_mask_arr, cat_mask,
     style_params, density=1.0, line_width_override=None, seed=None,
-    output_dir=None,
+    bg_desat=0.6, output_dir=None,
 ):
-    """Generate cross-hatched illustration.
+    """Generate cross-hatching overlaid on original photo with region-varying opacity.
+
+    The base image is the actual photo (not paper). Hatching is drawn on top:
+      - Face: very low opacity (~12%) — face stays photographic
+      - Body/subject: low-medium opacity (~35%) overlay on photo
+      - Background: hatching density and alpha fade with distance from subject
 
     Args:
-        img: original PIL Image (for sizing)
+        img: original PIL Image
         luminance_arr: float32 [0,1] luminance of original, shape (H, W)
         angle_arr: float32 radians, surface normal angle per pixel, shape (H, W)
         subject_mask_arr: bool array, True=subject
@@ -220,10 +234,11 @@ def generate_hatching(
         density: global density multiplier
         line_width_override: override auto line width (scaled to image)
         seed: random seed
+        bg_desat: desaturation strength for background (0=none, 1=fully desaturated)
         output_dir: for logging
 
     Returns:
-        PIL Image with hatching on paper background
+        PIL Image — photo with hatching overlay
     """
     if seed is not None:
         random.seed(seed)
@@ -237,6 +252,9 @@ def generate_hatching(
     lw_scale = style_params["line_width_scale"]
     cross_angle = math.radians(style_params["cross_angle_offset"])
     second_opacity = style_params["second_pass_opacity"]
+    face_opacity = style_params["face_opacity"]
+    body_opacity = style_params["body_opacity"]
+    bg_max_opacity = style_params["bg_max_opacity"]
 
     # --- Line width: scale to image size ---
     # Base: ~0.08% of short edge, clamped to [1, 4]
@@ -253,11 +271,10 @@ def generate_hatching(
         f"(image short edge={short_edge}px)")
 
     # --- Cell size: determines hatching resolution ---
-    # Smaller cells = more lines, finer detail
-    # Base cell: ~1.2% of short edge for normal density
     base_cell = max(4, int(short_edge * 0.012 / density))
-    face_cell = max(3, int(base_cell * 0.55))  # face gets ~55% cell size (denser)
-    bg_cell = int(base_cell * 2.5)  # background gets very sparse
+    face_cell = max(3, int(base_cell * 0.55))
+    bg_cell = max(4, int(base_cell * 0.8))  # BG cells similar to body — density
+                                              # fade handled via alpha, not cell size
 
     log(output_dir, f"Cell sizes: base={base_cell}px, face={face_cell}px, bg={bg_cell}px")
 
@@ -268,8 +285,23 @@ def generate_hatching(
     is_clothes = (cat_mask == 4)
     is_bg = ~subject_mask_arr
 
+    # --- Distance transform from subject boundary for BG fade ---
+    # Distance in pixels from each BG pixel to nearest subject pixel
+    log(output_dir, "Computing distance field from subject boundary...")
+    dist_from_subject = distance_transform_edt(~subject_mask_arr)
+    # Normalize: 0 at subject boundary, 1 at max distance
+    # Use a fade range of ~25% of short edge — beyond that, hatching is minimal
+    fade_range = short_edge * 0.25
+    dist_norm = np.clip(dist_from_subject / max(1, fade_range), 0.0, 1.0)
+    # BG opacity: max near subject, fading to near-zero far away
+    # Use a curve that starts high and drops off: (1 - dist)^1.5 for gradual fade
+    bg_opacity_map = np.power(1.0 - dist_norm, 1.5) * bg_max_opacity
+    # Only apply to BG pixels
+    bg_opacity_map[subject_mask_arr] = 0.0
+
+    log(output_dir, f"BG fade range: {fade_range:.0f}px, max dist: {dist_from_subject.max():.0f}px")
+
     # --- Smooth the angle field for coherent strokes ---
-    # Use a circular mean via sin/cos components
     sin_arr = np.sin(angle_arr)
     cos_arr = np.cos(angle_arr)
     smooth_kernel = max(3, int(short_edge * 0.015))
@@ -277,7 +309,7 @@ def generate_hatching(
     cos_smooth = uniform_filter(cos_arr, size=smooth_kernel)
     angle_smooth = np.arctan2(sin_smooth, cos_smooth)
 
-    # --- Create hatching canvas (white/paper) ---
+    # --- Create hatching canvas (white = no ink, dark = ink) ---
     hatch_pass1 = Image.new("L", (w, h), 255)
     hatch_pass2 = Image.new("L", (w, h), 255)
     draw1 = ImageDraw.Draw(hatch_pass1)
@@ -292,44 +324,31 @@ def generate_hatching(
         if darkness < 0.08:
             return  # too light, skip
 
-        # Number of lines scales with darkness and density
-        # At max darkness, fill cell with lines spaced ~lw*1.5 apart
         max_lines = max(1, int(cell_sz / max(1.5, lw * 1.8)))
         num_lines = max(1, int(max_lines * darkness * density))
 
-        # Line spacing within cell
         if num_lines <= 1:
             spacing = 0
         else:
             spacing = cell_sz / num_lines
 
-        # Direction vectors
         cos_a = math.cos(angle_rad)
         sin_a = math.sin(angle_rad)
-
-        # Perpendicular for spacing offset
         perp_x = -sin_a
         perp_y = cos_a
+        half_len = cell_sz * 0.75
 
-        half_len = cell_sz * 0.75  # lines extend beyond cell for overlap
-
-        # Draw parallel lines centered on cell
         for i in range(num_lines):
             offset = (i - (num_lines - 1) / 2.0) * spacing
             ox = cx + perp_x * offset
             oy = cy + perp_y * offset
-
             x0 = ox - cos_a * half_len
             y0 = oy - sin_a * half_len
             x1 = ox + cos_a * half_len
             y1 = oy + sin_a * half_len
-
-            # Opacity based on darkness (darker = more opaque lines)
             ink_val = int(255 * (1.0 - min(1.0, darkness * 1.1)))
             draw.line([(x0, y0), (x1, y1)], fill=ink_val, width=max(1, int(round(lw))))
 
-    # --- Process cells in different regions ---
-    # We use different cell sizes for face, body, and background
     def _hatch_region(draw, mask, cell_sz, lw, angle_offset=0.0, label=""):
         """Fill a region with hatching."""
         ys = np.arange(0, h, cell_sz)
@@ -340,19 +359,13 @@ def generate_hatching(
             for cx_start in xs:
                 cy = int(cy_start + cell_sz // 2)
                 cx = int(cx_start + cell_sz // 2)
-
                 if cy >= h or cx >= w:
                     continue
-
-                # Check if cell center is in region
                 if not mask[min(cy, h - 1), min(cx, w - 1)]:
                     continue
 
-                # Sample angle from smoothed field
                 angle_val = angle_smooth[min(cy, h - 1), min(cx, w - 1)] + angle_offset
 
-                # Sample darkness from luminance (invert: dark areas = high value)
-                # Average luminance in cell neighbourhood
                 y0c = max(0, cy - cell_sz // 2)
                 y1c = min(h, cy + cell_sz // 2)
                 x0c = max(0, cx - cell_sz // 2)
@@ -361,102 +374,115 @@ def generate_hatching(
                 if local_lum.size == 0:
                     continue
                 avg_lum = np.mean(local_lum)
-                darkness = 1.0 - avg_lum  # invert: dark image = dense hatching
+                darkness = 1.0 - avg_lum
 
-                # Add slight randomness to angle for organic feel
                 angle_val += (random.random() - 0.5) * 0.15
-
                 _draw_hatch_cell(draw, cx, cy, cell_sz, angle_val, darkness, lw)
                 cells_drawn += 1
 
         if label:
             log(output_dir, f"  {label}: {cells_drawn} cells hatched (cell={cell_sz}px, lw={lw:.1f}px)")
 
+    # --- Pass 1: primary strokes everywhere ---
     log(output_dir, "Generating hatching pass 1 (primary strokes)...")
 
-    # Face: fine, dense hatching
+    # Face
     _hatch_region(draw1, is_face, face_cell, face_lw, angle_offset=0.0, label="Face")
-    # Body skin: medium hatching
+    # Body skin
     _hatch_region(draw1, is_body_skin, base_cell, base_lw, angle_offset=0.0, label="Body skin")
-    # Hair: medium-dense hatching
+    # Hair
     hair_cell = max(3, int(base_cell * 0.7))
     _hatch_region(draw1, is_hair, hair_cell, base_lw * 0.8, angle_offset=0.0, label="Hair")
-    # Clothes: medium hatching
+    # Clothes
     _hatch_region(draw1, is_clothes, base_cell, base_lw, angle_offset=0.0, label="Clothes")
-    # Others (on subject): medium
+    # Others on subject
     is_others_subject = (cat_mask == 5) & subject_mask_arr
     _hatch_region(draw1, is_others_subject, base_cell, base_lw, angle_offset=0.0, label="Others")
-    # Background: sparse
-    _hatch_region(draw1, is_bg, bg_cell, base_lw * 0.7, angle_offset=0.0, label="Background")
+    # Background — same density as body, fade handled in compositing
+    _hatch_region(draw1, is_bg, bg_cell, base_lw, angle_offset=0.0, label="Background")
 
+    # --- Pass 2: cross-hatching ---
     log(output_dir, "Generating hatching pass 2 (cross-hatching)...")
 
-    # Second pass: cross-hatch at offset angle, slightly sparser
-    cross_density_mult = 0.7  # fewer lines in cross pass
-
-    # Only cross-hatch areas that are reasonably dark (shadows/midtones)
-    # Face cross-hatching
     _hatch_region(draw2, is_face, int(face_cell * 1.2), face_lw,
                   angle_offset=cross_angle, label="Face cross")
-    # Body cross-hatching
     _hatch_region(draw2, is_body_skin, int(base_cell * 1.3), base_lw,
                   angle_offset=cross_angle, label="Body cross")
-    # Hair cross-hatching (denser since hair is dark)
     _hatch_region(draw2, is_hair, int(hair_cell * 1.1), base_lw * 0.8,
                   angle_offset=cross_angle, label="Hair cross")
-    # Clothes cross-hatching
     _hatch_region(draw2, is_clothes, int(base_cell * 1.3), base_lw,
                   angle_offset=cross_angle, label="Clothes cross")
-    # Others on subject
     _hatch_region(draw2, is_others_subject, int(base_cell * 1.3), base_lw,
                   angle_offset=cross_angle, label="Others cross")
-    # No cross-hatch for background (keeps it airy)
+    # BG cross-hatching too (will fade with distance)
+    _hatch_region(draw2, is_bg, int(bg_cell * 1.3), base_lw,
+                  angle_offset=cross_angle, label="Background cross")
 
-    # --- Composite the two passes ---
+    # --- Combine two hatching passes into a single ink layer ---
     log(output_dir, "Compositing hatching passes...")
 
-    # Convert to arrays for blending
     p1 = np.array(hatch_pass1, dtype=np.float32) / 255.0
     p2 = np.array(hatch_pass2, dtype=np.float32) / 255.0
 
-    # Multiply blend: both passes darken
-    # Pass 2 at reduced opacity
+    # Multiply blend: pass 2 at reduced opacity
     p2_blended = 1.0 - (1.0 - p2) * second_opacity
-    combined = p1 * p2_blended
+    combined = p1 * p2_blended  # 0=full ink, 1=no ink
 
-    # --- Create final image ---
-    # Paper background with ink-colored hatching
-    paper = Image.new("RGB", (w, h), paper_color)
-    paper_arr = np.array(paper, dtype=np.float32) / 255.0
+    # Convert to ink intensity: 0=no hatching, 1=dense hatching
+    ink_intensity = 1.0 - combined
 
+    # --- Build the ink-colored hatching layer (RGB) ---
     ink_arr = np.array(ink_color, dtype=np.float32) / 255.0
+    # hatching_rgb: everywhere ink color, alpha varies
+    hatching_rgb = np.full((h, w, 3), ink_arr, dtype=np.float32)
 
-    # Where combined is dark (low values), use ink; where bright, use paper
-    combined_3d = combined[:, :, np.newaxis]
-    final_arr = paper_arr * combined_3d + ink_arr * (1.0 - combined_3d)
+    # --- Build per-pixel alpha map for compositing ---
+    # Region-based opacity modulated by ink intensity
+    alpha_map = np.zeros((h, w), dtype=np.float32)
 
-    # --- Overlay subtle original image tones for depth ---
-    # Desaturated, low-opacity original underneath gives tonal variation
-    grey = ImageOps.grayscale(img)
-    grey_arr = np.array(grey, dtype=np.float32) / 255.0
+    # Face: very low opacity
+    alpha_map[is_face] = face_opacity
+    # Body skin
+    alpha_map[is_body_skin] = body_opacity
+    # Hair: slightly higher than body (hair is dark, hatching reads well)
+    alpha_map[is_hair] = body_opacity * 1.1
+    # Clothes: same as body
+    alpha_map[is_clothes] = body_opacity
+    # Others on subject
+    alpha_map[(cat_mask == 5) & subject_mask_arr] = body_opacity
+    # Background: distance-faded opacity
+    alpha_map[is_bg] = bg_opacity_map[is_bg]
 
-    # Apply base tint
-    tint = np.array(style_params["base_tint"], dtype=np.float32)
-    tinted = grey_arr[:, :, np.newaxis] * (1.0 - tint) + tint
+    # Final alpha = region opacity * ink intensity (no ink = no overlay)
+    alpha_map = alpha_map * ink_intensity
 
-    # Blend: mostly hatching, subtle tonal underlay (15% opacity)
-    tone_opacity = 0.15
-    # Only where subject is present, let some tone through
-    subj_f = subject_mask_arr.astype(np.float32)[:, :, np.newaxis]
-    tone_mask = subj_f * tone_opacity
+    log(output_dir, f"Overlay alpha — face: {face_opacity:.2f}, body: {body_opacity:.2f}, "
+        f"bg max: {bg_max_opacity:.2f}")
 
-    # Resize tinted if dimensions differ (depth map might differ)
-    if tinted.shape[:2] != final_arr.shape[:2]:
-        tinted_img = Image.fromarray((tinted * 255).astype(np.uint8))
-        tinted_img = tinted_img.resize((w, h), Image.LANCZOS)
-        tinted = np.array(tinted_img, dtype=np.float32) / 255.0
+    # --- Prepare base image ---
+    base_arr = np.array(img, dtype=np.float32) / 255.0
 
-    final_arr = final_arr * (1.0 - tone_mask) + tinted * tone_mask
+    # Optionally desaturate + lighten background to make hatching more visible
+    if bg_desat > 0:
+        grey = np.mean(base_arr, axis=2, keepdims=True)
+        paper_arr = np.array(paper_color, dtype=np.float32) / 255.0
+        # Blend toward paper color for a slight tint
+        desat_bg = grey * (1.0 - 0.3 * bg_desat) + paper_arr * 0.3 * bg_desat
+        # Lighten slightly
+        desat_bg = desat_bg + (1.0 - desat_bg) * 0.15 * bg_desat
+        desat_bg = np.clip(desat_bg, 0.0, 1.0)
+
+        # Apply only to BG, with feathered transition
+        # Feather the subject mask for smooth BG treatment transition
+        feather_radius = max(1, int(short_edge * 0.015))
+        subj_f = gaussian_filter(subject_mask_arr.astype(np.float32), sigma=feather_radius)
+        subj_f = subj_f[:, :, np.newaxis]
+        base_arr = base_arr * subj_f + desat_bg * (1.0 - subj_f)
+        log(output_dir, f"BG desaturation: {bg_desat:.1%}")
+
+    # --- Composite: base photo + hatching overlay ---
+    alpha_3d = alpha_map[:, :, np.newaxis]
+    final_arr = base_arr * (1.0 - alpha_3d) + hatching_rgb * alpha_3d
 
     final_arr = np.clip(final_arr * 255, 0, 255).astype(np.uint8)
     result = Image.fromarray(final_arr)
@@ -552,8 +578,8 @@ def run_pipeline(args):
     # Step 5: Luminance
     luminance_arr = np.array(ImageOps.grayscale(img), dtype=np.float32) / 255.0
 
-    # Step 6: Generate hatching
-    log(output_dir, "Step 5: Generating cross-hatching...")
+    # Step 6: Distance transform (for BG fade logging)
+    log(output_dir, "Step 6: Generating cross-hatching with region-aware compositing...")
     result = generate_hatching(
         img=img,
         luminance_arr=luminance_arr,
@@ -564,6 +590,7 @@ def run_pipeline(args):
         density=args.density,
         line_width_override=args.line_width,
         seed=args.seed,
+        bg_desat=args.bg_desat,
         output_dir=output_dir,
     )
 
@@ -621,6 +648,10 @@ def main():
         "--line-width", type=float, default=None,
         help="Override line width in pixels (default: auto-scaled to image)"
     )
+    parser.add_argument(
+        "--bg-desat", type=float, default=0.6,
+        help="Background desaturation before hatching overlay (0=none, 1=full, default: 0.6)"
+    )
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument(
         "--output-to", default="local", choices=["local", "gdrive", "both"]
@@ -645,8 +676,9 @@ def main():
     if not args.source:
         parser.error("--source is required (unless using --list-styles)")
 
-    # Clamp density
+    # Clamp values
     args.density = max(0.3, min(3.0, args.density))
+    args.bg_desat = max(0.0, min(1.0, args.bg_desat))
 
     run_pipeline(args)
 

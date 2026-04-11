@@ -1362,6 +1362,15 @@ def run_workflow(args):
                     f_out.write(f_in.read())
             log(output_dir, f"Final copied to: {finals_dest}")
 
+            # Push to phone
+            try:
+                from notify import push_image
+                src_name = os.path.splitext(os.path.basename(args.source))[0]
+                push_image(finals_dest, title=f"Stylize — {src_name}", body=f"{bg_style or model_style or args.style}")
+                log(output_dir, "Pushed to phone")
+            except Exception as e:
+                log(output_dir, f"Push notification failed: {e}", "WARN")
+
         timings[7] = time.time() - t0
         log(output_dir, f"Step 7 done ({timings[7]:.1f}s)")
 

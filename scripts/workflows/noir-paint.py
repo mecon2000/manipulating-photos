@@ -1297,6 +1297,15 @@ def main():
             f_out.write(f_in.read())
     log(output_dir, f"Final copied to: {finals_dest}")
 
+    # Push to phone
+    try:
+        from notify import push_image
+        src_name = os.path.splitext(os.path.basename(args.source))[0]
+        push_image(finals_dest, title=f"Noir Paint — {src_name}", body=f"{args.tones} palette, {args.num_tones} tones")
+        log(output_dir, "Pushed to phone")
+    except Exception as e:
+        log(output_dir, f"Push notification failed: {e}", "WARN")
+
     # Copy script
     try:
         shutil.copy2(os.path.abspath(__file__), os.path.join(output_dir, f"workflow_script_{os.path.basename(__file__)}"))

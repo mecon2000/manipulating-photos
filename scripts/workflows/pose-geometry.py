@@ -1546,6 +1546,15 @@ def run_workflow(args):
     current_final.save(final_dest, quality=95)
     log(output_dir, f"Final copied to: {final_dest}")
 
+    # Push to phone
+    try:
+        from notify import push_image
+        src_name = os.path.splitext(os.path.basename(args.source))[0]
+        push_image(final_dest, title=f"Geometry — {src_name}", body=f"{args.geometry}")
+        log(output_dir, "Pushed to phone")
+    except Exception as e:
+        log(output_dir, f"Push notification failed: {e}", "WARN")
+
     # Save metadata
     metadata = {
         "source": os.path.abspath(args.source),

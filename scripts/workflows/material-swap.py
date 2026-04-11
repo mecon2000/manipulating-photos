@@ -690,6 +690,15 @@ def main():
                 f_out.write(f_in.read())
         log(output_dir, f"Final copied to: {finals_dest}")
 
+        # Push to phone
+        try:
+            from notify import push_image
+            src_name = os.path.splitext(os.path.basename(args.source))[0]
+            push_image(finals_dest, title=f"Material — {src_name}", body=f"{args.material}")
+            log(output_dir, "Pushed to phone")
+        except Exception as e:
+            log(output_dir, f"Push notification failed: {e}", "WARN")
+
     # GDrive / local output
     gdrive_link = None
     local_path = None

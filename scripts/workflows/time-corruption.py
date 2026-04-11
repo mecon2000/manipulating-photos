@@ -1094,6 +1094,15 @@ def run_workflow(args):
                 f_out.write(f_in.read())
         log(output_dir, f"Final copied to: {finals_dest}")
 
+        # Push to phone
+        try:
+            from notify import push_image
+            src_name = os.path.splitext(os.path.basename(args.source))[0]
+            push_image(finals_dest, title=f"Time Corruption — {src_name}", body=f"{effect} {intensity:.0%}")
+            log(output_dir, "Pushed to phone")
+        except Exception as e:
+            log(output_dir, f"Push notification failed: {e}", "WARN")
+
     timings[4] = time.time() - t0
     log(output_dir, f"Step 4 done ({timings[4]:.1f}s)")
 

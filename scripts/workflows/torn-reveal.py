@@ -89,10 +89,74 @@ LEFT_EYE_CONTOUR = [33, 133, 157, 158, 159, 160, 161, 246]
 RIGHT_EYE_CONTOUR = [263, 362, 382, 381, 380, 374, 373, 386]
 
 
+def _detect_eyes_via_body_segment(img_pil, output_dir, label=""):
+    """Fallback eye detection using MediaPipe body segmentation.
+
+    Uses the face-skin category (index 3) from body-segment.py to find
+    the face region, then estimates eye positions from its centroid.
+    Returns ((lx, ly), (rx, ry)) or None.
+    """
+    try:
+        import importlib.util
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        bs_path = os.path.join(script_dir, "body-segment.py")
+        if not os.path.exists(bs_path):
+            log(output_dir, f"body-segment.py not found at {bs_path}", "WARN")
+            return None
+        spec = importlib.util.spec_from_file_location("body_segment", bs_path)
+        bs_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bs_mod)
+
+        img_np = np.array(img_pil)
+        if img_np.ndim == 2:
+            img_rgb = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+        elif img_np.shape[2] == 4:
+            img_rgb = cv2.cvtColor(img_np, cv2.COLOR_RGBA2RGB)
+        else:
+            img_rgb = img_np
+
+        cat_mask = bs_mod.segment_body(img_rgb)
+        face_mask = (cat_mask == 3)  # face-skin category
+
+        if not np.any(face_mask):
+            log(output_dir, f"Body segment fallback [{label}]: no face-skin pixels found", "WARN")
+            return None
+
+        h, w = img_np.shape[:2]
+        ys, xs = np.where(face_mask)
+        # Face centroid
+        cx = np.mean(xs)
+        cy = np.mean(ys)
+
+        # Face bounding box for estimating eye separation
+        face_left, face_right = np.min(xs), np.max(xs)
+        face_top, face_bottom = np.min(ys), np.max(ys)
+        face_w = face_right - face_left
+        face_h = face_bottom - face_top
+
+        # Eyes are typically in the upper 40% of the face region
+        eye_y = face_top + face_h * 0.35
+
+        # Eye separation is roughly 35% of face width
+        eye_sep = face_w * 0.35
+        lx = cx - eye_sep / 2
+        rx = cx + eye_sep / 2
+
+        log(output_dir, f"Eyes estimated [{label}] via body-segment face-skin: "
+                         f"L=({lx:.0f},{eye_y:.0f}) R=({rx:.0f},{eye_y:.0f}) "
+                         f"(face bbox: {face_w:.0f}x{face_h:.0f}px)")
+        return ((lx, eye_y), (rx, eye_y))
+
+    except Exception as e:
+        log(output_dir, f"Body segment fallback failed [{label}]: {e}", "WARN")
+        return None
+
+
 def detect_eyes(img_pil, output_dir, label=""):
     """Detect left and right eye centers using MediaPipe face mesh.
 
-    Returns ((lx, ly), (rx, ry)) in pixel coords, or None if detection fails.
+    Falls back to body segmentation (face-skin centroid) if face mesh fails.
+    Returns ((lx, ly), (rx, ry)) in pixel coords, or None if all methods fail.
     """
     img_np = np.array(img_pil)
     # MediaPipe expects RGB
@@ -105,48 +169,55 @@ def detect_eyes(img_pil, output_dir, label=""):
 
     h, w = img_np.shape[:2]
     FACE_MODEL = os.path.expanduser("~/openclaw-venv/mediapipe_models/face_landmarker.task")
-    if not os.path.exists(FACE_MODEL):
-        log(output_dir, f"Face landmarker model not found: {FACE_MODEL}", "WARN")
-        return None
 
-    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-    base_opts = mp.tasks.BaseOptions(model_asset_path=FACE_MODEL)
-    opts = mp.tasks.vision.FaceLandmarkerOptions(
-        base_options=base_opts,
-        num_faces=1,
-    )
-    detector = mp.tasks.vision.FaceLandmarker.create_from_options(opts)
-    result = detector.detect(mp_img)
-    detector.close()
+    # --- Primary: FaceLandmarker ---
+    if os.path.exists(FACE_MODEL):
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+        base_opts = mp.tasks.BaseOptions(model_asset_path=FACE_MODEL)
+        opts = mp.tasks.vision.FaceLandmarkerOptions(
+            base_options=base_opts,
+            num_faces=1,
+        )
+        detector = mp.tasks.vision.FaceLandmarker.create_from_options(opts)
+        result = detector.detect(mp_img)
+        detector.close()
 
-    if not result.face_landmarks:
-        log(output_dir, f"Face detection failed for {label} — no faces found", "WARN")
-        return None
+        if result.face_landmarks:
+            landmarks = result.face_landmarks[0]
 
-    landmarks = result.face_landmarks[0]
+            # Try iris centers first (landmarks 468=left iris, 473=right iris)
+            try:
+                left_iris = landmarks[LEFT_IRIS_CENTER]
+                right_iris = landmarks[RIGHT_IRIS_CENTER]
+                lx, ly = left_iris.x * w, left_iris.y * h
+                rx, ry = right_iris.x * w, right_iris.y * h
+                log(output_dir, f"Eyes detected [{label}] via iris landmarks: L=({lx:.0f},{ly:.0f}) R=({rx:.0f},{ry:.0f})")
+                return ((lx, ly), (rx, ry))
+            except (IndexError, AttributeError):
+                pass
 
-    # Try iris centers first (landmarks 468=left iris, 473=right iris)
-    try:
-        left_iris = landmarks[LEFT_IRIS_CENTER]
-        right_iris = landmarks[RIGHT_IRIS_CENTER]
-        lx, ly = left_iris.x * w, left_iris.y * h
-        rx, ry = right_iris.x * w, right_iris.y * h
-        log(output_dir, f"Eyes detected [{label}] via iris landmarks: L=({lx:.0f},{ly:.0f}) R=({rx:.0f},{ry:.0f})")
-        return ((lx, ly), (rx, ry))
-    except (IndexError, AttributeError):
-        pass
+            # Fallback to eye contour averages
+            try:
+                lx = np.mean([landmarks[i].x for i in LEFT_EYE_CONTOUR]) * w
+                ly = np.mean([landmarks[i].y for i in LEFT_EYE_CONTOUR]) * h
+                rx = np.mean([landmarks[i].x for i in RIGHT_EYE_CONTOUR]) * w
+                ry = np.mean([landmarks[i].y for i in RIGHT_EYE_CONTOUR]) * h
+                log(output_dir, f"Eyes detected [{label}] via contour avg: L=({lx:.0f},{ly:.0f}) R=({rx:.0f},{ry:.0f})")
+                return ((lx, ly), (rx, ry))
+            except (IndexError, AttributeError):
+                log(output_dir, f"Eye contour extraction failed for {label}", "WARN")
+        else:
+            log(output_dir, f"FaceLandmarker found no faces for {label} — trying body-segment fallback", "WARN")
+    else:
+        log(output_dir, f"Face landmarker model not found: {FACE_MODEL} — trying body-segment fallback", "WARN")
 
-    # Fallback to eye contour averages
-    try:
-        lx = np.mean([landmarks[i].x for i in LEFT_EYE_CONTOUR]) * w
-        ly = np.mean([landmarks[i].y for i in LEFT_EYE_CONTOUR]) * h
-        rx = np.mean([landmarks[i].x for i in RIGHT_EYE_CONTOUR]) * w
-        ry = np.mean([landmarks[i].y for i in RIGHT_EYE_CONTOUR]) * h
-        log(output_dir, f"Eyes detected [{label}] via contour avg: L=({lx:.0f},{ly:.0f}) R=({rx:.0f},{ry:.0f})")
-        return ((lx, ly), (rx, ry))
-    except (IndexError, AttributeError):
-        log(output_dir, f"Eye contour detection also failed for {label}", "WARN")
-        return None
+    # --- Fallback: body segmentation face-skin ---
+    result_bs = _detect_eyes_via_body_segment(img_pil, output_dir, label)
+    if result_bs is not None:
+        return result_bs
+
+    log(output_dir, f"All eye detection methods failed for {label}", "WARN")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -240,41 +311,66 @@ def make_high_contrast_bw(img_pil, contrast_boost=1.5, output_dir=None):
 # ---------------------------------------------------------------------------
 # Tear Path Generation
 # ---------------------------------------------------------------------------
+def _midpoint_displace(points, rng, amplitude, levels):
+    """Fractal midpoint displacement on a list of (x, y) control points.
+
+    At each level, insert a midpoint between every adjacent pair, displaced
+    vertically by a random amount within [-amplitude, +amplitude].
+    Amplitude halves each level (like fractal terrain generation).
+    """
+    for _ in range(levels):
+        new_pts = [points[0]]
+        for i in range(len(points) - 1):
+            x0, y0 = points[i]
+            x1, y1 = points[i + 1]
+            mx = (x0 + x1) / 2
+            my = (y0 + y1) / 2 + rng.uniform(-amplitude, amplitude)
+            new_pts.append((mx, my))
+            new_pts.append((x1, y1))
+        points = new_pts
+        amplitude *= 0.5  # halve displacement range each recursion
+    return points
+
+
 def generate_tear_edge(width, base_y_array, jitter_amplitude, seed, num_low_freq=4, num_high_freq=15):
     """Generate a jagged tear edge as an array of y-values across image width.
 
     base_y_array: array of per-column base y values (supports angled tears).
-    Combines low-frequency waves (overall tear shape) with high-frequency
-    jaggedness (paper fiber randomness).
+    Uses fractal midpoint displacement for natural paper-tear jaggedness:
+    sharp, irregular direction changes instead of smooth sine waves.
     """
     rng = np.random.RandomState(seed)
-    x = np.linspace(0, 1, width)
     y = base_y_array.copy().astype(np.float64)
 
-    # Low-frequency displacement (broad waves, 3-5 cycles)
-    for _ in range(num_low_freq):
-        freq = rng.uniform(2.0, 6.0)
-        phase = rng.uniform(0, 2 * np.pi)
-        amp = rng.uniform(0.3, 1.0) * jitter_amplitude
-        y += amp * np.sin(2 * np.pi * freq * x + phase)
+    # --- Fractal midpoint displacement ---
+    # Start with ~20 anchor points along the edge, sampled from base_y_array
+    num_anchors = 20
+    anchor_xs = np.linspace(0, width - 1, num_anchors).astype(int)
+    anchor_pts = [(int(ax), float(y[ax])) for ax in anchor_xs]
 
-    # High-frequency jaggedness (many small tears)
-    for _ in range(num_high_freq):
-        freq = rng.uniform(15.0, 50.0)
-        phase = rng.uniform(0, 2 * np.pi)
-        amp = rng.uniform(0.05, 0.3) * jitter_amplitude
-        y += amp * np.sin(2 * np.pi * freq * x + phase)
+    # 9 levels of recursive subdivision gives ~10k points from 20 anchors
+    fractal_pts = _midpoint_displace(anchor_pts, rng, jitter_amplitude, levels=9)
 
-    # Additional sharp notches at random positions
-    num_notches = rng.randint(5, 15)
+    # Interpolate fractal points back to per-pixel y values
+    fx = np.array([p[0] for p in fractal_pts])
+    fy = np.array([p[1] for p in fractal_pts])
+    # Sort by x (should already be sorted, but ensure it)
+    sort_idx = np.argsort(fx)
+    fx, fy = fx[sort_idx], fy[sort_idx]
+    # Linear interpolation to full width
+    y = np.interp(np.arange(width, dtype=np.float64), fx, fy)
+
+    # --- Sharp V-notches at random positions (5-10 per edge) ---
+    num_notches = rng.randint(5, 11)
     for _ in range(num_notches):
         cx = rng.randint(0, width)
+        # Notch width: 0.5-2% of width — narrow and sharp
         notch_w = rng.randint(max(1, width // 200), max(2, width // 50))
-        notch_h = rng.uniform(0.2, 0.8) * jitter_amplitude
+        notch_h = rng.uniform(0.5, 1.5) * jitter_amplitude
         direction = rng.choice([-1, 1])
         left = max(0, cx - notch_w // 2)
         right = min(width, cx + notch_w // 2)
-        # Triangular notch
+        # Triangular (sharp V) notch — linear sides meeting at a point
         for xi in range(left, right):
             dist_from_center = abs(xi - cx) / max(1, notch_w // 2)
             y[xi] += direction * notch_h * (1.0 - dist_from_center)
@@ -302,11 +398,12 @@ def build_tear_mask(width, height, top_edge_y, bottom_edge_y):
 def draw_fiber_zone(img_np, edge_y, seed, side="top", short_edge=1000, tear_angle_rad=0.0):
     """Draw a zone of white fibrous texture along a torn edge.
 
-    Instead of individual thin lines, creates a varying-width white zone with:
-    - Width that varies with low-frequency noise along the edge
-    - Fine directional texture perpendicular to the tear
-    - Random thin dark gaps (clean separation areas)
+    Realistic torn paper fiber zone with:
+    - Mostly thin base width (~0.8% of short edge)
+    - 2-3 random "burst" peaks where fibers splay wide (3-5% of short edge)
+    - Clean break segments with nearly zero fibers between bursts
     - Taper/fade on the outer side (away from tear gap)
+    - More chaotic texture within burst zones
 
     side: "top" means fiber zone extends INTO the gap (downward from top edge).
           "bottom" means fiber zone extends INTO the gap (upward from bottom edge).
@@ -314,34 +411,41 @@ def draw_fiber_zone(img_np, edge_y, seed, side="top", short_edge=1000, tear_angl
     rng = np.random.RandomState(seed)
     h, w = img_np.shape[:2]
 
-    # Base fiber zone width: ~1-2% of short edge
-    base_width = max(3, int(short_edge * 0.015))
+    # Base fiber zone width: ~0.8% of short edge (thin default)
+    base_width = max(2, int(short_edge * 0.008))
+    # Burst width: 3-5% of short edge
+    burst_width = max(6, int(short_edge * rng.uniform(0.03, 0.05)))
 
-    # Generate varying width using low-frequency noise
-    # fiber_width(x) = base_width * (0.3 + 0.7 * noise(x))
-    width_noise = np.zeros(w, dtype=np.float64)
-    for _ in range(3):
-        freq = rng.uniform(1.5, 5.0)
-        phase = rng.uniform(0, 2 * np.pi)
-        xs = np.linspace(0, 1, w)
-        width_noise += rng.uniform(0.2, 1.0) * np.sin(2 * np.pi * freq * xs + phase)
-    # Normalize to 0-1
-    wn_min, wn_max = width_noise.min(), width_noise.max()
-    if wn_max > wn_min:
-        width_noise = (width_noise - wn_min) / (wn_max - wn_min)
-    else:
-        width_noise = np.ones(w) * 0.5
-    fiber_widths = (base_width * (0.3 + 0.7 * width_noise)).astype(np.int32)
+    # --- Build width profile: base + gaussian burst peaks ---
+    xs = np.linspace(0, 1, w)
+    width_profile = np.ones(w, dtype=np.float64) * base_width
 
-    # Generate random dark gaps (clean paper separation — no fibers)
-    gap_mask = np.ones(w, dtype=bool)  # True = has fibers
-    num_gaps = rng.randint(8, 25)
-    for _ in range(num_gaps):
-        gap_cx = rng.randint(0, w)
-        gap_w = rng.randint(max(1, int(short_edge * 0.002)), max(2, int(short_edge * 0.008)))
-        left = max(0, gap_cx - gap_w // 2)
-        right = min(w, gap_cx + gap_w // 2)
-        gap_mask[left:right] = False
+    # 2-3 burst peaks at random positions
+    num_bursts = rng.randint(2, 4)
+    for _ in range(num_bursts):
+        peak_x = rng.uniform(0.05, 0.95)  # avoid extreme edges
+        # Each burst spans 5-15% of image width
+        sigma = rng.uniform(0.05, 0.15) / 2.35  # FWHM -> sigma
+        bump = (burst_width - base_width) * np.exp(-0.5 * ((xs - peak_x) / sigma) ** 2)
+        width_profile += bump
+
+    fiber_widths = np.clip(width_profile, 0, burst_width * 1.2).astype(np.int32)
+
+    # --- Clean break segments (nearly zero fibers) ---
+    # Between bursts, some segments should have almost no fibers
+    gap_mask = np.ones(w, dtype=np.float64)  # 1.0 = full fibers, 0.0 = clean break
+    num_clean = rng.randint(6, 15)
+    for _ in range(num_clean):
+        gap_cx = rng.uniform(0, 1)
+        gap_w = rng.uniform(0.005, 0.025)  # 0.5-2.5% of width
+        # Only suppress fibers where width is near base (don't cut through bursts)
+        left_x = max(0, gap_cx - gap_w / 2)
+        right_x = min(1, gap_cx + gap_w / 2)
+        left_i = int(left_x * w)
+        right_i = int(right_x * w)
+        for xi in range(left_i, right_i):
+            if xi < w and fiber_widths[xi] < base_width * 1.5:
+                gap_mask[xi] = 0.0
 
     # Perpendicular direction for fiber texture: perpendicular to tear angle
     perp_angle = tear_angle_rad + math.pi / 2
@@ -350,11 +454,12 @@ def draw_fiber_zone(img_np, edge_y, seed, side="top", short_edge=1000, tear_angl
     fiber_layer = np.zeros((h, w, 4), dtype=np.uint8)
 
     for x in range(w):
-        if not gap_mask[x]:
+        if gap_mask[x] < 0.01:
             continue
 
         ey = int(np.clip(edge_y[x], 0, h - 1))
         fw = fiber_widths[x]
+        is_burst = fw > base_width * 2  # inside a burst zone
 
         for dy in range(fw):
             if side == "top":
@@ -376,15 +481,21 @@ def draw_fiber_zone(img_np, edge_y, seed, side="top", short_edge=1000, tear_angl
             base_alpha = rng.uniform(0.7, 0.95)
 
             # Fine fiber texture: random brightness variation per pixel
-            brightness = rng.uniform(0.85, 1.0)
+            if is_burst:
+                # More chaotic in burst zones: wider brightness range, more gaps
+                brightness = rng.uniform(0.65, 1.0)
+                if rng.random() < 0.15:
+                    brightness *= 0.2
+                    base_alpha *= 0.3
+            else:
+                brightness = rng.uniform(0.85, 1.0)
+                # Occasional thin dark streaks perpendicular to tear (fiber gaps)
+                if rng.random() < 0.08:
+                    brightness *= 0.3
+                    base_alpha *= 0.5
 
-            # Occasional thin dark streaks perpendicular to tear (fiber gaps)
-            if rng.random() < 0.08:
-                brightness *= 0.3
-                base_alpha *= 0.5
-
-            final_alpha = int(np.clip(base_alpha * alpha_taper * 255, 0, 255))
-            pixel_val = int(np.clip(brightness * 255, 200, 255))
+            final_alpha = int(np.clip(base_alpha * alpha_taper * gap_mask[x] * 255, 0, 255))
+            pixel_val = int(np.clip(brightness * 255, 180, 255))
 
             fiber_layer[y, x] = [pixel_val, pixel_val, pixel_val, final_alpha]
 
@@ -624,7 +735,7 @@ def run_pipeline(args, output_dir):
     composite_np = draw_fiber_zone(composite_np, bottom_edge_y, seed=seed + 20,
                                     side="bottom", short_edge=short_edge,
                                     tear_angle_rad=tear_angle_rad)
-    log(output_dir, f"Fiber zones drawn (base width ~{int(short_edge * 0.015)}px)")
+    log(output_dir, f"Fiber zones drawn (base width ~{int(short_edge * 0.008)}px, burst up to ~{int(short_edge * 0.05)}px)")
 
     composite_img = Image.fromarray(composite_np).convert("RGB")
     composite_img.save(os.path.join(output_dir, "04_composite_pre_grain.jpg"), quality=95)

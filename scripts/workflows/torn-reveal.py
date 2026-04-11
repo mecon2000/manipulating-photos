@@ -5,10 +5,14 @@ Torn Reveal — Two-Layer Portrait Composite with Paper Tear
 Layers two portraits of the same person:
   - Top layer: Color photo (the "public mask")
   - Bottom layer: High-contrast B&W (the raw emotional truth)
-  - Connection: A horizontal paper tear across the eye area reveals B&W eyes beneath
+  - Connection: A paper tear across the eye area reveals B&W eyes beneath
 
 Uses MediaPipe face mesh to align eyes between photos, generates realistic torn-paper
-edges with fibers and drop shadows, applies film grain.
+edges with fiber zones and drop shadows, applies film grain.
+
+For best results, use two photos of the same person from the same shoot (adjacent file
+numbers like BLD_5004.jpg and BLD_5039.jpg). The top photo should be color, the bottom
+will be auto-converted to high-contrast B&W.
 
 Pure PIL/numpy/scipy/cv2/mediapipe — no API calls needed.
 
@@ -16,6 +20,7 @@ Usage:
     ./torn-reveal.py --top color.jpg --bottom bw.jpg
     ./torn-reveal.py --top photo.jpg --bottom photo.jpg --bw-contrast 1.8
     ./torn-reveal.py --top photo.jpg --bottom photo.jpg --tear-height 0.12 --tear-jitter 0.7
+    ./torn-reveal.py --top photo.jpg --bottom photo.jpg --tear-angle 15
 """
 
 import os
@@ -98,20 +103,29 @@ def detect_eyes(img_pil, output_dir, label=""):
     else:
         img_rgb = img_np
 
-    face_mesh = mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=True, max_num_faces=1, refine_landmarks=True
-    )
-    result = face_mesh.process(img_rgb)
-    face_mesh.close()
-
-    if not result.multi_face_landmarks:
-        log(output_dir, f"Face mesh detection failed for {label} — no faces found", "WARN")
+    h, w = img_np.shape[:2]
+    FACE_MODEL = os.path.expanduser("~/openclaw-venv/mediapipe_models/face_landmarker.task")
+    if not os.path.exists(FACE_MODEL):
+        log(output_dir, f"Face landmarker model not found: {FACE_MODEL}", "WARN")
         return None
 
-    landmarks = result.multi_face_landmarks[0].landmark
-    h, w = img_np.shape[:2]
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+    base_opts = mp.tasks.BaseOptions(model_asset_path=FACE_MODEL)
+    opts = mp.tasks.vision.FaceLandmarkerOptions(
+        base_options=base_opts,
+        num_faces=1,
+    )
+    detector = mp.tasks.vision.FaceLandmarker.create_from_options(opts)
+    result = detector.detect(mp_img)
+    detector.close()
 
-    # Try iris centers first (refined landmarks)
+    if not result.face_landmarks:
+        log(output_dir, f"Face detection failed for {label} — no faces found", "WARN")
+        return None
+
+    landmarks = result.face_landmarks[0]
+
+    # Try iris centers first (landmarks 468=left iris, 473=right iris)
     try:
         left_iris = landmarks[LEFT_IRIS_CENTER]
         right_iris = landmarks[RIGHT_IRIS_CENTER]
@@ -226,15 +240,16 @@ def make_high_contrast_bw(img_pil, contrast_boost=1.5, output_dir=None):
 # ---------------------------------------------------------------------------
 # Tear Path Generation
 # ---------------------------------------------------------------------------
-def generate_tear_edge(width, base_y, jitter_amplitude, seed, num_low_freq=4, num_high_freq=15):
+def generate_tear_edge(width, base_y_array, jitter_amplitude, seed, num_low_freq=4, num_high_freq=15):
     """Generate a jagged tear edge as an array of y-values across image width.
 
+    base_y_array: array of per-column base y values (supports angled tears).
     Combines low-frequency waves (overall tear shape) with high-frequency
     jaggedness (paper fiber randomness).
     """
     rng = np.random.RandomState(seed)
     x = np.linspace(0, 1, width)
-    y = np.full(width, base_y, dtype=np.float64)
+    y = base_y_array.copy().astype(np.float64)
 
     # Low-frequency displacement (broad waves, 3-5 cycles)
     for _ in range(num_low_freq):
@@ -284,74 +299,112 @@ def build_tear_mask(width, height, top_edge_y, bottom_edge_y):
 # ---------------------------------------------------------------------------
 # Paper Fibers
 # ---------------------------------------------------------------------------
-def draw_paper_fibers(img_pil, edge_y, fiber_count, seed, side="top", short_edge=1000):
-    """Draw wispy white paper fibers along a torn edge.
+def draw_fiber_zone(img_np, edge_y, seed, side="top", short_edge=1000, tear_angle_rad=0.0):
+    """Draw a zone of white fibrous texture along a torn edge.
 
-    side: "top" means fibers hang DOWN from the top-layer's torn bottom edge.
-          "bottom" means fibers poke UP from the bottom of the tear gap.
+    Instead of individual thin lines, creates a varying-width white zone with:
+    - Width that varies with low-frequency noise along the edge
+    - Fine directional texture perpendicular to the tear
+    - Random thin dark gaps (clean separation areas)
+    - Taper/fade on the outer side (away from tear gap)
+
+    side: "top" means fiber zone extends INTO the gap (downward from top edge).
+          "bottom" means fiber zone extends INTO the gap (upward from bottom edge).
     """
     rng = np.random.RandomState(seed)
-    draw = ImageDraw.Draw(img_pil, "RGBA")
-    w, h = img_pil.size
+    h, w = img_np.shape[:2]
 
-    # Scale fiber dimensions to image size
-    min_len = max(2, int(short_edge * 0.005))   # ~0.5% of short edge
-    max_len = max(4, int(short_edge * 0.02))    # ~2% of short edge
-    fiber_width = max(1, int(short_edge * 0.001))  # ~0.1% of short edge
+    # Base fiber zone width: ~1-2% of short edge
+    base_width = max(3, int(short_edge * 0.015))
 
-    # Compute local jitter magnitude for density weighting
-    edge_diff = np.abs(np.gradient(edge_y))
-    edge_diff_smooth = gaussian_filter1d(edge_diff, sigma=max(1, w // 50))
-    if edge_diff_smooth.max() > 0:
-        density_weight = edge_diff_smooth / edge_diff_smooth.max()
+    # Generate varying width using low-frequency noise
+    # fiber_width(x) = base_width * (0.3 + 0.7 * noise(x))
+    width_noise = np.zeros(w, dtype=np.float64)
+    for _ in range(3):
+        freq = rng.uniform(1.5, 5.0)
+        phase = rng.uniform(0, 2 * np.pi)
+        xs = np.linspace(0, 1, w)
+        width_noise += rng.uniform(0.2, 1.0) * np.sin(2 * np.pi * freq * xs + phase)
+    # Normalize to 0-1
+    wn_min, wn_max = width_noise.min(), width_noise.max()
+    if wn_max > wn_min:
+        width_noise = (width_noise - wn_min) / (wn_max - wn_min)
     else:
-        density_weight = np.ones(w)
-    # Minimum density everywhere, boosted where jitter is high
-    density_weight = 0.3 + 0.7 * density_weight
+        width_noise = np.ones(w) * 0.5
+    fiber_widths = (base_width * (0.3 + 0.7 * width_noise)).astype(np.int32)
 
-    # Generate fiber positions weighted by density
-    positions = []
-    for _ in range(fiber_count * 3):  # oversample, then filter
-        x = rng.randint(0, w)
-        if rng.random() < density_weight[x]:
-            positions.append(x)
-        if len(positions) >= fiber_count:
-            break
+    # Generate random dark gaps (clean paper separation — no fibers)
+    gap_mask = np.ones(w, dtype=bool)  # True = has fibers
+    num_gaps = rng.randint(8, 25)
+    for _ in range(num_gaps):
+        gap_cx = rng.randint(0, w)
+        gap_w = rng.randint(max(1, int(short_edge * 0.002)), max(2, int(short_edge * 0.008)))
+        left = max(0, gap_cx - gap_w // 2)
+        right = min(w, gap_cx + gap_w // 2)
+        gap_mask[left:right] = False
 
-    for x in positions:
-        base_y = edge_y[x]
-        length = rng.randint(min_len, max_len + 1)
-        angle_offset = rng.uniform(-0.4, 0.4)  # slight angle variation (radians)
-        alpha = rng.randint(75, 180)  # semi-transparent
+    # Perpendicular direction for fiber texture: perpendicular to tear angle
+    perp_angle = tear_angle_rad + math.pi / 2
 
-        if side == "top":
-            # Fibers hang down from top layer's torn edge
-            direction = 1
-        else:
-            # Fibers poke up from bottom edge
-            direction = -1
+    # Create the fiber zone overlay (RGBA)
+    fiber_layer = np.zeros((h, w, 4), dtype=np.uint8)
 
-        end_x = x + int(length * math.sin(angle_offset))
-        end_y = int(base_y) + direction * length
+    for x in range(w):
+        if not gap_mask[x]:
+            continue
 
-        # Clamp
-        end_x = max(0, min(w - 1, end_x))
-        end_y = max(0, min(h - 1, end_y))
-        start_y = max(0, min(h - 1, int(base_y)))
+        ey = int(np.clip(edge_y[x], 0, h - 1))
+        fw = fiber_widths[x]
 
-        color = (255, 255, 255, alpha)
-        draw.line([(x, start_y), (end_x, end_y)], fill=color, width=fiber_width)
+        for dy in range(fw):
+            if side == "top":
+                y = ey + dy  # extend downward into gap
+            else:
+                y = ey - dy  # extend upward into gap
 
-    return img_pil
+            if y < 0 or y >= h:
+                continue
+
+            # Taper: outer 40% of zone fades out
+            inner_frac = dy / max(1, fw)
+            if inner_frac > 0.6:
+                alpha_taper = 1.0 - (inner_frac - 0.6) / 0.4
+            else:
+                alpha_taper = 1.0
+
+            # Base alpha: 0.7-0.95 mostly opaque
+            base_alpha = rng.uniform(0.7, 0.95)
+
+            # Fine fiber texture: random brightness variation per pixel
+            brightness = rng.uniform(0.85, 1.0)
+
+            # Occasional thin dark streaks perpendicular to tear (fiber gaps)
+            if rng.random() < 0.08:
+                brightness *= 0.3
+                base_alpha *= 0.5
+
+            final_alpha = int(np.clip(base_alpha * alpha_taper * 255, 0, 255))
+            pixel_val = int(np.clip(brightness * 255, 200, 255))
+
+            fiber_layer[y, x] = [pixel_val, pixel_val, pixel_val, final_alpha]
+
+    # Composite fiber layer onto image
+    alpha = fiber_layer[:, :, 3:4].astype(np.float64) / 255.0
+    rgb = fiber_layer[:, :, :3].astype(np.float64)
+    img_float = img_np.astype(np.float64)
+    result = img_float * (1.0 - alpha) + rgb * alpha
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
 # Drop Shadow
 # ---------------------------------------------------------------------------
-def add_inner_shadow(composite_np, top_edge_y, bottom_edge_y, shadow_height_frac, short_edge):
-    """Add inner drop shadow along tear edges on the top layer side.
+def add_tear_shadow(composite_np, tear_mask, top_edge_y, shadow_height_frac, short_edge):
+    """Add drop shadow cast BY the top layer ONTO the revealed bottom layer in the tear gap.
 
-    Shadow falls INTO the tear gap, suggesting the top paper curls slightly.
+    The shadow sits just below the top torn edge, on the B&W image visible in the gap.
+    This simulates the top sheet being slightly lifted, casting a shadow downward.
+    Shadow is only applied within the tear gap (where the bottom layer is visible).
     """
     h, w = composite_np.shape[:2]
     shadow_h = max(3, int(short_edge * shadow_height_frac))
@@ -359,24 +412,22 @@ def add_inner_shadow(composite_np, top_edge_y, bottom_edge_y, shadow_height_frac
     shadow_layer = np.zeros((h, w), dtype=np.float64)
 
     for x in range(w):
-        # Shadow below top edge (falls into gap from top layer)
+        # Shadow falls below the top edge, INTO the gap
         y_top = int(np.clip(top_edge_y[x], 0, h - 1))
         for dy in range(shadow_h):
             y = y_top + dy
             if 0 <= y < h:
-                # Linear falloff from 0.4 opacity to 0
-                opacity = 0.4 * (1.0 - dy / shadow_h)
-                shadow_layer[y, x] = max(shadow_layer[y, x], opacity)
+                # Only apply shadow within the tear gap
+                if tear_mask[y, x] > 0:
+                    # Quadratic falloff: stronger near edge, fades quickly
+                    t = dy / shadow_h
+                    opacity = 0.5 * (1.0 - t) ** 2
+                    shadow_layer[y, x] = max(shadow_layer[y, x], opacity)
 
-        # Shadow above bottom edge (falls into gap from bottom of tear)
-        y_bot = int(np.clip(bottom_edge_y[x], 0, h - 1))
-        for dy in range(shadow_h):
-            y = y_bot - dy
-            if 0 <= y < h:
-                opacity = 0.25 * (1.0 - dy / shadow_h)  # slightly lighter
-                shadow_layer[y, x] = max(shadow_layer[y, x], opacity)
+    # Slight horizontal blur to soften shadow edge
+    shadow_layer = gaussian_filter1d(shadow_layer, sigma=max(1, int(short_edge * 0.002)), axis=1)
 
-    # Apply shadow: darken the composite
+    # Apply shadow: darken only where shadow exists
     shadow_3ch = np.stack([shadow_layer] * 3, axis=-1)
     result = composite_np.astype(np.float64) * (1.0 - shadow_3ch)
     return np.clip(result, 0, 255).astype(np.uint8)
@@ -490,19 +541,48 @@ def run_pipeline(args, output_dir):
 
     # --- Generate tear path ---
     log(output_dir, "--- Step 5: Generate tear path ---")
-    tear_h = args.tear_height * h  # total tear height in pixels
     jitter_amp = args.tear_jitter * h * 0.025  # max displacement (~2.5% at jitter=1.0)
 
+    # Tear angle: random ±20 degrees from horizontal if "auto"
+    rng_angle = random.Random(seed)
+    if args.tear_angle == "auto":
+        tear_angle_deg = rng_angle.uniform(-20, 20)
+    else:
+        tear_angle_deg = float(args.tear_angle)
+    tear_angle_rad = math.radians(tear_angle_deg)
+
+    # Cone-shaped tear: varying width across image
+    # Scale cone dimensions by --tear-height (default 0.10 maps to ~12-15% wide, ~3-5% narrow)
+    scale = args.tear_height / 0.10  # 1.0 at default
+    tear_h_max = h * rng_angle.uniform(0.12, 0.15) * scale
+    tear_h_min = h * rng_angle.uniform(0.03, 0.05) * scale
+    # Randomly pick which side is wider
+    cone_left_wide = rng_angle.random() < 0.5
+
+    # Compute per-column tear height and angled base y
     tear_center_y = eye_center_y
-    top_base_y = tear_center_y - tear_h / 2
-    bot_base_y = tear_center_y + tear_h / 2
+    x_arr = np.arange(w, dtype=np.float64)
 
-    log(output_dir, f"Tear: center_y={tear_center_y:.0f}, height={tear_h:.0f}px "
-                     f"({args.tear_height:.0%} of image), jitter_amp={jitter_amp:.1f}px")
+    # Angled center line: base_y(x) = center_y + (x - w/2) * tan(angle)
+    center_y_arr = tear_center_y + (x_arr - w / 2) * math.tan(tear_angle_rad)
 
-    top_edge_y = generate_tear_edge(w, top_base_y, jitter_amp, seed=seed,
+    # Varying tear height (cone shape)
+    t = x_arr / max(1, w - 1)  # 0 to 1 across width
+    if cone_left_wide:
+        tear_h_arr = tear_h_max + (tear_h_min - tear_h_max) * t  # wide left, narrow right
+    else:
+        tear_h_arr = tear_h_min + (tear_h_max - tear_h_min) * t  # narrow left, wide right
+
+    top_base_y_arr = center_y_arr - tear_h_arr / 2
+    bot_base_y_arr = center_y_arr + tear_h_arr / 2
+
+    log(output_dir, f"Tear: center_y={tear_center_y:.0f}, angle={tear_angle_deg:.1f}deg, "
+                     f"cone={'L-wide' if cone_left_wide else 'R-wide'}, "
+                     f"h_range={tear_h_min:.0f}-{tear_h_max:.0f}px, jitter_amp={jitter_amp:.1f}px")
+
+    top_edge_y = generate_tear_edge(w, top_base_y_arr, jitter_amp, seed=seed,
                                      num_low_freq=4, num_high_freq=15)
-    bottom_edge_y = generate_tear_edge(w, bot_base_y, jitter_amp, seed=seed + 1,
+    bottom_edge_y = generate_tear_edge(w, bot_base_y_arr, jitter_amp, seed=seed + 1,
                                         num_low_freq=4, num_high_freq=15)
 
     # Ensure top edge is always above bottom edge
@@ -529,27 +609,24 @@ def run_pipeline(args, output_dir):
     composite_np = (top_np * (1.0 - mask_3ch) + bottom_np * mask_3ch).astype(np.uint8)
 
     # --- Drop shadow ---
-    log(output_dir, "--- Step 7: Inner drop shadow ---")
-    shadow_h_frac = 0.008  # ~0.8% of short edge for shadow depth
-    composite_np = add_inner_shadow(composite_np, top_edge_y, bottom_edge_y,
-                                     shadow_h_frac, short_edge)
+    log(output_dir, "--- Step 7: Drop shadow (top layer onto gap) ---")
+    shadow_h_frac = 0.012  # ~1.2% of short edge for shadow depth
+    composite_np = add_tear_shadow(composite_np, tear_mask, top_edge_y,
+                                    shadow_h_frac, short_edge)
 
-    composite_img = Image.fromarray(composite_np).convert("RGBA")
+    # --- Paper fiber zones ---
+    log(output_dir, "--- Step 8: Paper fiber zones ---")
+    # Fiber zone on top edge (extending down into the gap)
+    composite_np = draw_fiber_zone(composite_np, top_edge_y, seed=seed + 10,
+                                    side="top", short_edge=short_edge,
+                                    tear_angle_rad=tear_angle_rad)
+    # Fiber zone on bottom edge (extending up into the gap)
+    composite_np = draw_fiber_zone(composite_np, bottom_edge_y, seed=seed + 20,
+                                    side="bottom", short_edge=short_edge,
+                                    tear_angle_rad=tear_angle_rad)
+    log(output_dir, f"Fiber zones drawn (base width ~{int(short_edge * 0.015)}px)")
 
-    # --- Paper fibers ---
-    log(output_dir, "--- Step 8: Paper fibers ---")
-    # Fibers on top edge (hanging down into the gap)
-    composite_img = draw_paper_fibers(composite_img, top_edge_y,
-                                       fiber_count=args.fiber_count, seed=seed + 10,
-                                       side="top", short_edge=short_edge)
-    # Fibers on bottom edge (poking up into the gap)
-    composite_img = draw_paper_fibers(composite_img, bottom_edge_y,
-                                       fiber_count=args.fiber_count, seed=seed + 20,
-                                       side="bottom", short_edge=short_edge)
-    log(output_dir, f"Drew {args.fiber_count} fibers per edge")
-
-    # Convert back to RGB
-    composite_img = composite_img.convert("RGB")
+    composite_img = Image.fromarray(composite_np).convert("RGB")
     composite_img.save(os.path.join(output_dir, "04_composite_pre_grain.jpg"), quality=95)
 
     # --- Film grain ---
@@ -580,10 +657,10 @@ def main():
                         help="Path to bottom layer (B&W photo, or same photo for auto-convert)")
     parser.add_argument("--tear-height", type=float, default=0.10,
                         help="Height of tear as fraction of image (default: 0.10)")
+    parser.add_argument("--tear-angle", default="auto",
+                        help="Tear angle in degrees from horizontal, or 'auto' for random ±20deg (default: auto)")
     parser.add_argument("--tear-jitter", type=float, default=0.5,
                         help="Jaggedness of tear edges, 0=smooth 1=very rough (default: 0.5)")
-    parser.add_argument("--fiber-count", type=int, default=150,
-                        help="Number of paper fibers per torn edge (default: 150)")
     parser.add_argument("--grain", type=float, default=0.04,
                         help="Film grain strength (default: 0.04)")
     parser.add_argument("--bw-contrast", type=float, default=1.5,
@@ -670,8 +747,8 @@ def main():
         "top": os.path.abspath(args.top),
         "bottom": os.path.abspath(args.bottom),
         "tear_height": args.tear_height,
+        "tear_angle": args.tear_angle,
         "tear_jitter": args.tear_jitter,
-        "fiber_count": args.fiber_count,
         "grain": args.grain,
         "bw_contrast": args.bw_contrast,
         "seed": args.seed,

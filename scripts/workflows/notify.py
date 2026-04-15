@@ -12,6 +12,25 @@ import os
 import json
 import subprocess
 
+# Running counter for push notifications (resets at 99)
+_COUNTER_FILE = os.path.expanduser("~/.openclaw/workspace/shared/.push_counter")
+
+def _next_push_number():
+    """Get next push number (1-99, wraps around)."""
+    try:
+        with open(_COUNTER_FILE) as f:
+            n = int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        n = 0
+    n = (n % 99) + 1
+    try:
+        with open(_COUNTER_FILE, "w") as f:
+            f.write(str(n))
+    except OSError:
+        pass
+    return n
+
+
 # Load token from env (auto-loaded from ~/sol/.env by each script)
 def _get_token():
     token = os.environ.get("PUSHBULLET_TOKEN", "")
@@ -121,7 +140,7 @@ def push_image(file_path, title="", body=""):
             "file_name": file_name,
             "file_type": mime,
             "file_url": file_url,
-            "title": title or file_name,
+            "title": f"#{_next_push_number():02d} {title or file_name}",
             "body": body,
         },
     )

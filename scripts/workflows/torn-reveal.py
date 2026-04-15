@@ -54,6 +54,7 @@ try:
 except ImportError:
     ISRAEL_TZ = timezone(timedelta(hours=3))
 
+import gc
 import cv2
 from PIL import Image, ImageFilter, ImageDraw, ImageEnhance, ImageStat
 from scipy.ndimage import gaussian_filter1d
@@ -89,24 +90,39 @@ LEFT_EYE_CONTOUR = [33, 133, 157, 158, 159, 160, 161, 246]
 RIGHT_EYE_CONTOUR = [263, 362, 382, 381, 380, 374, 373, 386]
 
 
+def _segment_face_skin(img_rgb):
+    """Run MediaPipe selfie segmentation and return face-skin boolean mask.
+
+    Uses the multiclass selfie segmenter directly (no importlib).
+    Category 3 = face-skin in MediaPipe's multiclass model.
+    Returns a boolean numpy array, or None if model not found.
+    """
+    model_path = os.path.expanduser("~/openclaw-venv/mediapipe_models/selfie_multiclass.tflite")
+    if not os.path.exists(model_path):
+        return None
+
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+    base = mp.tasks.BaseOptions(model_asset_path=model_path)
+    opts = mp.tasks.vision.ImageSegmenterOptions(
+        base_options=base,
+        output_category_mask=True,
+    )
+    segmenter = mp.tasks.vision.ImageSegmenter.create_from_options(opts)
+    result = segmenter.segment(mp_img)
+    # CRITICAL: .copy() before closing — numpy_view() is a view into native memory
+    cat_mask = result.category_mask.numpy_view().squeeze().copy()
+    segmenter.close()
+    return cat_mask == 3  # face-skin
+
+
 def _detect_eyes_via_body_segment(img_pil, output_dir, label=""):
     """Fallback eye detection using MediaPipe body segmentation.
 
-    Uses the face-skin category (index 3) from body-segment.py to find
-    the face region, then estimates eye positions from its centroid.
+    Uses the face-skin category (index 3) to find the face region,
+    then estimates eye positions from its centroid.
     Returns ((lx, ly), (rx, ry)) or None.
     """
     try:
-        import importlib.util
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        bs_path = os.path.join(script_dir, "body-segment.py")
-        if not os.path.exists(bs_path):
-            log(output_dir, f"body-segment.py not found at {bs_path}", "WARN")
-            return None
-        spec = importlib.util.spec_from_file_location("body_segment", bs_path)
-        bs_mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(bs_mod)
-
         img_np = np.array(img_pil)
         if img_np.ndim == 2:
             img_rgb = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
@@ -115,8 +131,10 @@ def _detect_eyes_via_body_segment(img_pil, output_dir, label=""):
         else:
             img_rgb = img_np
 
-        cat_mask = bs_mod.segment_body(img_rgb)
-        face_mask = (cat_mask == 3)  # face-skin category
+        face_mask = _segment_face_skin(img_rgb)
+        if face_mask is None:
+            log(output_dir, "Selfie segmenter model not found", "WARN")
+            return None
 
         if not np.any(face_mask):
             log(output_dir, f"Body segment fallback [{label}]: no face-skin pixels found", "WARN")
@@ -156,7 +174,8 @@ def detect_eyes(img_pil, output_dir, label=""):
     """Detect left and right eye centers using MediaPipe face mesh.
 
     Falls back to body segmentation (face-skin centroid) if face mesh fails.
-    Returns ((lx, ly), (rx, ry)) in pixel coords, or None if all methods fail.
+    Returns (((lx, ly), (rx, ry)), method) where method is 'iris'/'contour'/'segment'/'none'.
+    Returns (None, 'none') if all methods fail.
     """
     img_np = np.array(img_pil)
     # MediaPipe expects RGB
@@ -192,7 +211,7 @@ def detect_eyes(img_pil, output_dir, label=""):
                 lx, ly = left_iris.x * w, left_iris.y * h
                 rx, ry = right_iris.x * w, right_iris.y * h
                 log(output_dir, f"Eyes detected [{label}] via iris landmarks: L=({lx:.0f},{ly:.0f}) R=({rx:.0f},{ry:.0f})")
-                return ((lx, ly), (rx, ry))
+                return ((lx, ly), (rx, ry)), "iris"
             except (IndexError, AttributeError):
                 pass
 
@@ -203,30 +222,35 @@ def detect_eyes(img_pil, output_dir, label=""):
                 rx = np.mean([landmarks[i].x for i in RIGHT_EYE_CONTOUR]) * w
                 ry = np.mean([landmarks[i].y for i in RIGHT_EYE_CONTOUR]) * h
                 log(output_dir, f"Eyes detected [{label}] via contour avg: L=({lx:.0f},{ly:.0f}) R=({rx:.0f},{ry:.0f})")
-                return ((lx, ly), (rx, ry))
+                return ((lx, ly), (rx, ry)), "contour"
             except (IndexError, AttributeError):
                 log(output_dir, f"Eye contour extraction failed for {label}", "WARN")
         else:
             log(output_dir, f"FaceLandmarker found no faces for {label} — trying body-segment fallback", "WARN")
+            # Force cleanup of native MediaPipe resources before loading another model
+            del detector, result, mp_img
+            gc.collect()
     else:
         log(output_dir, f"Face landmarker model not found: {FACE_MODEL} — trying body-segment fallback", "WARN")
 
     # --- Fallback: body segmentation face-skin ---
     result_bs = _detect_eyes_via_body_segment(img_pil, output_dir, label)
     if result_bs is not None:
-        return result_bs
+        return result_bs, "segment"
 
     log(output_dir, f"All eye detection methods failed for {label}", "WARN")
-    return None
+    return None, "none"
 
 
 # ---------------------------------------------------------------------------
 # Eye Alignment — Affine Warp
 # ---------------------------------------------------------------------------
-def align_eyes(img_bottom, eyes_top, eyes_bottom, output_dir):
+def align_eyes(img_bottom, eyes_top, eyes_bottom, output_dir, translation_only=False):
     """Warp img_bottom so its eyes align with eyes_top positions.
 
     Uses affine transform: translation + rotation + uniform scale.
+    If translation_only=True, only shifts the midpoint (no rotation/scale) —
+    safer when one eye detection used an imprecise fallback method.
     Returns a PIL Image the same size as img_bottom, warped.
     """
     (tl_x, tl_y), (tr_x, tr_y) = eyes_top      # top image eye centers
@@ -246,10 +270,36 @@ def align_eyes(img_bottom, eyes_top, eyes_bottom, output_dir):
         log(output_dir, "Bottom eye distance too small for alignment — skipping warp", "WARN")
         return img_bottom
 
+    if translation_only:
+        # Only shift midpoints — no rotation or scale
+        tx = top_mid[0] - bot_mid[0]
+        ty = top_mid[1] - bot_mid[1]
+        log(output_dir, f"Translation-only alignment: shift=({tx:.0f},{ty:.0f})")
+        M = np.array([[1, 0, tx],
+                       [0, 1, ty]], dtype=np.float64)
+        img_np = np.array(img_bottom)
+        h, w = img_np.shape[:2]
+        warped = cv2.warpAffine(img_np, M, (w, h),
+                                 flags=cv2.INTER_LANCZOS4,
+                                 borderMode=cv2.BORDER_REFLECT_101)
+        return Image.fromarray(warped)
+
     scale = top_dist / bot_dist
     top_angle = math.atan2(top_dy, top_dx)
     bot_angle = math.atan2(bot_dy, bot_dx)
     rotation = top_angle - bot_angle
+
+    # Sanity caps: if alignment is too extreme, the eye detection was probably wrong
+    MAX_ROTATION_DEG = 15.0
+    MAX_SCALE_DEVIATION = 0.4  # allow 0.6x to 1.4x
+    rot_deg = math.degrees(rotation)
+    if abs(rot_deg) > MAX_ROTATION_DEG:
+        log(output_dir, f"Alignment rotation {rot_deg:.1f}deg exceeds ±{MAX_ROTATION_DEG}deg — "
+                         f"clamping (eye detection likely inaccurate)", "WARN")
+        rotation = math.radians(max(-MAX_ROTATION_DEG, min(MAX_ROTATION_DEG, rot_deg)))
+    if abs(scale - 1.0) > MAX_SCALE_DEVIATION:
+        log(output_dir, f"Alignment scale {scale:.3f} too extreme — clamping to ±{MAX_SCALE_DEVIATION}", "WARN")
+        scale = max(1.0 - MAX_SCALE_DEVIATION, min(1.0 + MAX_SCALE_DEVIATION, scale))
 
     log(output_dir, f"Alignment: scale={scale:.3f}, rotation={math.degrees(rotation):.1f}deg, "
                      f"shift=({top_mid[0]-bot_mid[0]:.0f},{top_mid[1]-bot_mid[1]:.0f})")
@@ -621,8 +671,8 @@ def run_pipeline(args, output_dir):
 
     # --- Eye detection ---
     log(output_dir, "--- Step 2: Detect eyes ---")
-    eyes_top = detect_eyes(top_img, output_dir, label="top")
-    eyes_bottom = detect_eyes(bottom_img, output_dir, label="bottom")
+    eyes_top, method_top = detect_eyes(top_img, output_dir, label="top")
+    eyes_bottom, method_bottom = detect_eyes(bottom_img, output_dir, label="bottom")
 
     if eyes_top is None:
         log(output_dir, "FALLBACK: No eyes in top image — using center horizontal tear", "WARN")
@@ -635,7 +685,15 @@ def run_pipeline(args, output_dir):
     # --- Align bottom to top ---
     log(output_dir, "--- Step 3: Align bottom image ---")
     if eyes_top is not None and eyes_bottom is not None:
-        bottom_aligned = align_eyes(bottom_img, eyes_top, eyes_bottom, output_dir)
+        # If one used precise detection and the other used segment fallback,
+        # only do translation (shift midpoints), skip rotation/scale — too inaccurate
+        precise_methods = {"iris", "contour"}
+        both_precise = method_top in precise_methods and method_bottom in precise_methods
+        if not both_precise:
+            log(output_dir, f"Mixed detection methods (top={method_top}, bottom={method_bottom}) "
+                             f"— using translation-only alignment (no rotation/scale)")
+        bottom_aligned = align_eyes(bottom_img, eyes_top, eyes_bottom, output_dir,
+                                     translation_only=not both_precise)
         log(output_dir, "Bottom image warped to align eyes with top")
     else:
         bottom_aligned = bottom_img
@@ -737,6 +795,70 @@ def run_pipeline(args, output_dir):
                                     tear_angle_rad=tear_angle_rad)
     log(output_dir, f"Fiber zones drawn (base width ~{int(short_edge * 0.008)}px, burst up to ~{int(short_edge * 0.05)}px)")
 
+    # --- Extra tear (censor/artistic second tear) ---
+    if args.extra_tear_y is not None:
+        log(output_dir, "--- Step 8b: Extra tear ---")
+        extra_center_y = h * args.extra_tear_y
+        extra_rng = random.Random(seed + 500)
+        if args.extra_tear_angle is not None:
+            extra_angle_deg = args.extra_tear_angle
+        else:
+            extra_angle_deg = extra_rng.uniform(-15, 15)
+        extra_angle_rad = math.radians(extra_angle_deg)
+
+        extra_scale = args.extra_tear_height / 0.10
+        extra_h_max = h * extra_rng.uniform(0.10, 0.13) * extra_scale
+        extra_h_min = h * extra_rng.uniform(0.03, 0.05) * extra_scale
+        extra_left_wide = extra_rng.random() < 0.5
+
+        extra_x_arr = np.arange(w, dtype=np.float64)
+        extra_center_arr = extra_center_y + (extra_x_arr - w / 2) * math.tan(extra_angle_rad)
+        extra_t = extra_x_arr / max(1, w - 1)
+        if extra_left_wide:
+            extra_h_arr = extra_h_max + (extra_h_min - extra_h_max) * extra_t
+        else:
+            extra_h_arr = extra_h_min + (extra_h_max - extra_h_min) * extra_t
+
+        extra_top_base = extra_center_arr - extra_h_arr / 2
+        extra_bot_base = extra_center_arr + extra_h_arr / 2
+        extra_jitter = args.tear_jitter * h * 0.025
+
+        extra_top_edge = generate_tear_edge(w, extra_top_base, extra_jitter, seed=seed + 600)
+        extra_bot_edge = generate_tear_edge(w, extra_bot_base, extra_jitter, seed=seed + 601)
+        for x in range(w):
+            if extra_top_edge[x] >= extra_bot_edge[x]:
+                mid = (extra_top_edge[x] + extra_bot_edge[x]) / 2
+                extra_top_edge[x] = mid - 2
+                extra_bot_edge[x] = mid + 2
+
+        extra_mask = build_tear_mask(w, h, extra_top_edge, extra_bot_edge)
+
+        # Build the fill layer for the extra tear
+        if args.extra_tear_fill == "black":
+            fill_layer = np.zeros_like(composite_np)
+        elif args.extra_tear_fill == "bw":
+            fill_layer = np.array(bottom_bw)
+        else:  # "dark" — very dark, blurred version of the original
+            dark_layer = np.array(top_img).astype(np.float64) * 0.08  # 8% brightness
+            dark_layer = np.clip(dark_layer, 0, 255).astype(np.uint8)
+            dark_pil = Image.fromarray(dark_layer)
+            blur_r = max(10, int(short_edge * 0.05))
+            dark_pil = dark_pil.filter(ImageFilter.GaussianBlur(radius=blur_r))
+            fill_layer = np.array(dark_pil)
+
+        extra_mask_3ch = np.stack([extra_mask] * 3, axis=-1) / 255.0
+        composite_np = (composite_np * (1.0 - extra_mask_3ch) + fill_layer * extra_mask_3ch).astype(np.uint8)
+
+        # Shadow + fibers for extra tear
+        composite_np = add_tear_shadow(composite_np, extra_mask, extra_top_edge, shadow_h_frac, short_edge)
+        composite_np = draw_fiber_zone(composite_np, extra_top_edge, seed=seed + 610,
+                                        side="top", short_edge=short_edge, tear_angle_rad=extra_angle_rad)
+        composite_np = draw_fiber_zone(composite_np, extra_bot_edge, seed=seed + 620,
+                                        side="bottom", short_edge=short_edge, tear_angle_rad=extra_angle_rad)
+
+        log(output_dir, f"Extra tear: y={args.extra_tear_y:.0%}, angle={extra_angle_deg:.1f}deg, "
+                         f"fill={args.extra_tear_fill}, h_range={extra_h_min:.0f}-{extra_h_max:.0f}px")
+
     composite_img = Image.fromarray(composite_np).convert("RGB")
     composite_img.save(os.path.join(output_dir, "04_composite_pre_grain.jpg"), quality=95)
 
@@ -777,6 +899,14 @@ def main():
     parser.add_argument("--bw-contrast", type=float, default=1.5,
                         help="Contrast boost for B&W layer (default: 1.5)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--extra-tear-y", type=float, default=None,
+                        help="Y position for extra tear as fraction of image height (e.g. 0.7 for lower body)")
+    parser.add_argument("--extra-tear-angle", type=float, default=None,
+                        help="Angle of extra tear in degrees (default: random ±15)")
+    parser.add_argument("--extra-tear-height", type=float, default=0.08,
+                        help="Height of extra tear as fraction of image (default: 0.08)")
+    parser.add_argument("--extra-tear-fill", default="dark",
+                        help="Fill for extra tear: 'dark' (very dark blur), 'bw' (B&W of same area), 'black' (default: dark)")
     parser.add_argument("--output-to", default="local", choices=["local", "gdrive", "both"],
                         help="Output destination (default: local)")
     parser.add_argument("--local-output-dir", default=os.path.expanduser("~/.openclaw/workspace/shared"),

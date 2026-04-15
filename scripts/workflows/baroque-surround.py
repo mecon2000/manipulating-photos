@@ -62,29 +62,29 @@ sys.stdout.reconfigure(line_buffering=True)
 # ---------------------------------------------------------------------------
 PRESETS = {
     "baroque": {
-        "prompt": "flowing drapery and ethereal cloud forms surrounding the subject, baroque oil painting style, dramatic chiaroscuro lighting, luminous glazing technique, Bouguereau and Caravaggio inspired, warm ochre and cool blue-grey and cream tones, smooth blended brushwork, masterpiece classical painting",
-        "negative": "modern, digital, sharp edges, text, watermark, flat colors, cartoon",
+        "prompt": "large flowing amorphous organic shapes and billowing drapery surrounding the subject, baroque oil painting, dramatic chiaroscuro, luminous glazing, Bouguereau and Caravaggio inspired, warm ochre and cool blue-grey and cream, smooth blended brushwork, sweeping abstract undulating forms radiating outward from center, masterpiece classical painting",
+        "negative": "modern, digital, sharp edges, text, watermark, flat colors, cartoon, solid color background, plain background",
         "strength": 0.95,
     },
     "renaissance": {
-        "prompt": "sfumato background of soft golden light and draped silk fabric, Renaissance oil painting, Raphael and da Vinci inspired, olive and warm brown and soft blue tones, luminous atmospheric depth, classical beauty",
-        "negative": "modern, digital, harsh lighting, text, watermark",
+        "prompt": "large soft amorphous forms of golden light and flowing draped silk fabric, sfumato Renaissance oil painting, Raphael and da Vinci inspired, abstract sweeping shapes in olive and warm brown and soft blue, luminous atmospheric depth, billowing organic forms emanating from the figure",
+        "negative": "modern, digital, harsh lighting, text, watermark, flat background, solid color",
         "strength": 0.92,
     },
     "dark-romantic": {
-        "prompt": "stormy dramatic sky and swirling dark forms, dark romantic oil painting, Delacroix and Turner inspired, dark blue and warm amber and charcoal and copper tones, turbulent atmospheric drama, emotional intensity",
-        "negative": "bright, cheerful, flat, text, watermark, cartoon",
+        "prompt": "large swirling amorphous storm forms and turbulent abstract shapes, dark romantic oil painting, Delacroix and Turner inspired, dark blue and warm amber and charcoal and copper, flowing organic masses radiating from center, dramatic atmospheric turbulence, visible sweeping brushwork",
+        "negative": "bright, cheerful, flat, text, watermark, cartoon, solid background, empty background",
         "strength": 0.95,
     },
     "ethereal": {
-        "prompt": "ethereal mist and luminous soft light forms, dreamy angelic oil painting, flowing pearl and ivory and pale gold and soft blue forms, divine atmospheric radiance, transcendent beauty",
-        "negative": "dark, gritty, harsh, text, watermark, modern",
+        "prompt": "large flowing amorphous luminous forms and soft ethereal mist, dreamy angelic oil painting, abstract billowing organic shapes in pearl and ivory and pale gold and soft blue, divine radiance emanating outward, sweeping undulating cloud-like masses surrounding figure",
+        "negative": "dark, gritty, harsh, text, watermark, modern, flat background",
         "strength": 0.93,
     },
     "smoke": {
-        "prompt": "swirling smoke and deep shadow tenebrist oil painting, dramatic single light source, flowing dark forms emerging from darkness, black and warm grey and subtle amber and cream, Caravaggio chiaroscuro",
-        "negative": "bright, colorful, flat, text, watermark, cheerful",
-        "strength": 0.97,
+        "prompt": "large visible swirling smoke plumes and flowing amorphous grey forms against dark background, tenebrist oil painting, dramatic single light source illuminating billowing smoke shapes, abstract organic masses in warm grey and amber and cream emerging from shadows, Caravaggio chiaroscuro, NOT solid black",
+        "negative": "flat black, solid black, empty background, text, watermark, all dark, plain background",
+        "strength": 0.93,
     },
 }
 
@@ -260,8 +260,43 @@ def upload_pil_image(img, fmt="PNG"):
         os.unlink(tmp_path)
 
 
+def generate_bg(prompt, width, height, output_dir, seed=None):
+    """Generate a standalone baroque BG from scratch via text-to-image."""
+    log(output_dir, f"Generating BG: {width}x{height}, prompt='{prompt[:80]}...'")
+    import requests as req_lib
+
+    payload = {
+        "prompt": prompt,
+        "image_size": {"width": width, "height": height},
+        "num_inference_steps": 28,
+        "guidance_scale": 3.5,
+        "num_images": 1,
+        "output_format": "jpeg",
+        "enable_safety_checker": False,
+    }
+    if seed is not None:
+        payload["seed"] = seed
+
+    try:
+        handle = fal_client.submit("fal-ai/flux/dev", arguments=payload)
+        result = handle.get()
+        images = result.get("images", [])
+        if not images:
+            log(output_dir, "BG generation returned no images", "ERROR")
+            return None
+        bg_url = images[0].get("url", "")
+        log(output_dir, f"BG CDN URL: {bg_url}")
+        resp = req_lib.get(bg_url, timeout=60)
+        bg_img = Image.open(BytesIO(resp.content)).convert("RGB")
+        log(output_dir, f"Generated BG: {bg_img.size[0]}x{bg_img.size[1]}")
+        return bg_img
+    except Exception as e:
+        log(output_dir, f"BG generation failed: {e}", "ERROR")
+        return None
+
+
 def run_inpainting(image_url, mask_url, prompt, negative, strength, output_dir, seed=None):
-    """Inpaint background using fal.ai Flux inpainting."""
+    """Inpaint background using fal.ai Flux inpainting (legacy fallback)."""
     log(output_dir, f"Inpainting: strength={strength}, prompt='{prompt[:80]}...'")
 
     payload = {
@@ -313,8 +348,12 @@ def main():
     parser.add_argument("--prompt", default=None, help="Custom prompt (overrides preset)")
     parser.add_argument("--negative", default=None, help="Custom negative prompt")
     parser.add_argument("--strength", type=float, default=None, help="Inpainting strength (default: from preset)")
-    parser.add_argument("--transition", type=float, default=0.03,
-                        help="Blend zone as fraction of short edge (default: 0.03)")
+    parser.add_argument("--transition", type=float, default=0.04,
+                        help="Blend zone as fraction of short edge (default: 0.04)")
+    parser.add_argument("--method", default="generate", choices=["generate", "inpaint"],
+                        help="BG method: 'generate' (from scratch, default) or 'inpaint' (replace existing BG)")
+    parser.add_argument("--noise", action="store_true",
+                        help="Add noise/pixelation to BG before inpainting (only for --method inpaint)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--auto-correct", action="store_true", help="Enable Gemini evaluation")
     parser.add_argument("--max-corrections", type=int, default=2, help="Max auto-correction rounds")
@@ -409,66 +448,106 @@ def main():
     timings["extract"] = time.time() - t0
     log(output_dir, f"Step 1 done ({timings['extract']:.1f}s)")
 
-    # --- Step 2: Expand and feather mask ---
+    # --- Step 2: Build masks ---
     t0 = time.time()
-    log(output_dir, "--- Step 2/5: Expand & feather mask ---")
+    log(output_dir, "--- Step 2/5: Build masks (tight + bleed) ---")
 
-    # Binary threshold the mask
     mask_arr = np.array(mask)
     mask_binary = (mask_arr > 127).astype(np.uint8)
-
-    # Expand mask by ~2-3% of short edge using binary dilation
-    expand_px = max(3, int(short_edge * 0.025))
-    log(output_dir, f"Expanding mask by {expand_px}px ({expand_px/short_edge*100:.1f}% of short edge)")
     struct = ndimage.generate_binary_structure(2, 1)
-    mask_expanded = ndimage.binary_dilation(mask_binary, structure=struct, iterations=expand_px)
-    mask_expanded = (mask_expanded.astype(np.uint8) * 255)
-    mask_expanded_pil = Image.fromarray(mask_expanded, "L")
 
-    # Feather edges with gaussian blur (transition zone)
-    feather_px = max(3, int(short_edge * args.transition))
-    log(output_dir, f"Feathering edges: {feather_px}px ({args.transition*100:.1f}% of short edge)")
-    mask_feathered = mask_expanded_pil.filter(ImageFilter.GaussianBlur(radius=feather_px))
-    mask_feathered.save(os.path.join(output_dir, "2_mask_feathered.png"))
-
-    # Inpainting mask = inverse of expanded subject mask (white = area to inpaint = background)
-    # Use the hard-expanded (unfeathered) mask for inpainting to get clean generation
-    inpaint_mask = ImageOps.invert(mask_expanded_pil)
+    # TIGHT inpainting mask: only expand by ~0.5% — let inpainting come RIGHT UP to the subject
+    # This prevents the "cutout with 20px gap" look
+    tight_expand = max(1, int(short_edge * 0.005))
+    mask_tight = ndimage.binary_dilation(mask_binary, structure=struct, iterations=tight_expand)
+    mask_tight_pil = Image.fromarray((mask_tight.astype(np.uint8) * 255), "L")
+    inpaint_mask = ImageOps.invert(mask_tight_pil)
     inpaint_mask.save(os.path.join(output_dir, "2_inpaint_mask.png"))
+    log(output_dir, f"Tight inpaint mask: expand={tight_expand}px (subject hugging)")
+
+    # BLEED mask: where the BG forms can bleed INTO the subject
+    # Concentrated on lower body — uses vertical gradient to weight bleed toward bottom
+    bleed_depth = max(3, int(short_edge * 0.03))  # how far BG bleeds into subject
+    mask_eroded = ndimage.binary_erosion(mask_binary, structure=struct, iterations=bleed_depth)
+    # Bleed zone = original mask minus eroded mask (narrow band inside subject edge)
+    bleed_zone = mask_binary.astype(np.float32) - mask_eroded.astype(np.float32)
+    bleed_zone = np.clip(bleed_zone, 0, 1)
+
+    # Weight bleed toward lower body: linear gradient 0 at top → 1 at bottom
+    yy = np.linspace(0, 1, h)[:, np.newaxis]  # (h, 1)
+    bleed_gradient = np.clip(yy * 1.5 - 0.3, 0, 1)  # starts at ~20% height, full at ~87%
+    bleed_zone *= bleed_gradient
+    # Add randomness so bleed isn't uniform — perlin-like noise
+    rng_bleed = np.random.RandomState(seed)
+    noise_bleed = ndimage.gaussian_filter(rng_bleed.randn(h, w), sigma=max(10, int(short_edge * 0.04)))
+    noise_bleed = (noise_bleed - noise_bleed.min()) / (noise_bleed.max() - noise_bleed.min() + 1e-8)
+    bleed_zone *= noise_bleed  # zero out ~half the bleed randomly
+    bleed_zone = ndimage.gaussian_filter(bleed_zone, sigma=max(2, int(short_edge * 0.01)))
+    bleed_zone = np.clip(bleed_zone, 0, 1)
+    log(output_dir, f"Bleed zone: depth={bleed_depth}px, gradient bottom-weighted, noisy")
+
+    # COMPOSITE mask: tight protection with bleed holes
+    # Where bleed_zone > 0, reduce subject protection so BG shows through
+    composite_mask_arr = mask_arr.astype(np.float32) / 255.0
+    # Feather the raw mask edges
+    feather_px = max(3, int(short_edge * args.transition))
+    composite_mask_pil = Image.fromarray(mask_arr).filter(ImageFilter.GaussianBlur(radius=feather_px))
+    composite_mask_arr = np.array(composite_mask_pil).astype(np.float32) / 255.0
+    # Punch bleed holes: reduce mask where bleed_zone is active
+    bleed_strength = 0.6  # how much BG can show through in bleed zones (0=none, 1=full)
+    composite_mask_arr = composite_mask_arr * (1.0 - bleed_zone * bleed_strength)
+    composite_mask_arr = np.clip(composite_mask_arr, 0, 1)
+    mask_feathered = Image.fromarray((composite_mask_arr * 255).astype(np.uint8), "L")
+    mask_feathered.save(os.path.join(output_dir, "2_composite_mask.png"))
+    # Also save bleed zone for debugging
+    Image.fromarray((bleed_zone * 255).astype(np.uint8), "L").save(
+        os.path.join(output_dir, "2_bleed_zone.png"))
+
+    # Keep expanded mask for BG prep step (needed later)
+    mask_expanded_pil = mask_tight_pil
 
     bg_coverage = np.mean(np.array(inpaint_mask) > 127) * 100
-    log(output_dir, f"Background area to inpaint: {bg_coverage:.1f}%")
+    log(output_dir, f"BG area to inpaint: {bg_coverage:.1f}%")
     timings["mask_prep"] = time.time() - t0
     log(output_dir, f"Step 2 done ({timings['mask_prep']:.1f}s)")
 
-    # --- Step 3: Upload images and inpaint ---
+    # --- Step 3: Generate or inpaint background ---
     t0 = time.time()
-    log(output_dir, "--- Step 3/5: Inpaint surround via fal.ai ---")
+    import requests as req_lib
 
-    log(output_dir, "Uploading original image to fal CDN...")
-    image_url = upload_pil_image(img_orig, fmt="JPEG")
-    log(output_dir, f"Image URL: {image_url}")
+    if args.method == "generate":
+        # GENERATE BG FROM SCRATCH — independent of source photo's darkness
+        log(output_dir, "--- Step 3/5: Generate BG from scratch (text-to-image) ---")
+        # Add "NO person" to prevent generating figures in the BG
+        bg_prompt = inpaint_prompt + ", NO person, NO figure, NO face, just abstract painterly forms and shapes"
+        bg_result = generate_bg(bg_prompt, w, h, output_dir, seed=seed)
+        if bg_result is None:
+            log(output_dir, "BG generation failed — cannot proceed", "ERROR")
+            sys.exit(1)
+        if bg_result.size != (w, h):
+            bg_result = bg_result.resize((w, h), Image.LANCZOS)
+        inpainted = bg_result
+        inpainted.save(os.path.join(output_dir, "3_generated_bg.jpg"), "JPEG", quality=95)
+    else:
+        # INPAINT — replace existing BG via Flux inpainting (works better on light BGs)
+        log(output_dir, "--- Step 3/5: Inpaint surround via fal.ai ---")
+        log(output_dir, "Uploading image to fal CDN...")
+        image_url = upload_pil_image(img_orig, fmt="JPEG")
+        log(output_dir, "Uploading inpainting mask to fal CDN...")
+        mask_url = upload_pil_image(inpaint_mask, fmt="PNG")
+        inpainted = run_inpainting(
+            image_url, mask_url, inpaint_prompt, inpaint_negative,
+            inpaint_strength, output_dir, seed=seed,
+        )
+        if inpainted is None:
+            log(output_dir, "Inpainting failed — cannot proceed", "ERROR")
+            sys.exit(1)
+        if inpainted.size != (w, h):
+            inpainted = inpainted.resize((w, h), Image.LANCZOS)
+        inpainted.save(os.path.join(output_dir, "3_inpainted_raw.jpg"), "JPEG", quality=95)
 
-    log(output_dir, "Uploading inpainting mask to fal CDN...")
-    mask_url = upload_pil_image(inpaint_mask, fmt="PNG")
-    log(output_dir, f"Mask URL: {mask_url}")
-
-    inpainted = run_inpainting(
-        image_url, mask_url, inpaint_prompt, inpaint_negative,
-        inpaint_strength, output_dir, seed=seed,
-    )
-    if inpainted is None:
-        log(output_dir, "Inpainting failed — cannot proceed", "ERROR")
-        sys.exit(1)
-
-    # Resize to match original if needed
-    if inpainted.size != (w, h):
-        log(output_dir, f"Resizing inpainted {inpainted.size} -> {(w, h)}")
-        inpainted = inpainted.resize((w, h), Image.LANCZOS)
-
-    inpainted.save(os.path.join(output_dir, "3_inpainted_raw.jpg"), "JPEG", quality=95)
-    timings["inpaint"] = time.time() - t0
-    log(output_dir, f"Step 3 done ({timings['inpaint']:.1f}s)")
+    timings["bg"] = time.time() - t0
+    log(output_dir, f"Step 3 done ({timings['bg']:.1f}s)")
 
     # --- Step 4: Composite subject back ---
     t0 = time.time()
@@ -491,13 +570,48 @@ def main():
         log(output_dir, "cv2 not available — skipping bilateral filter", "WARN")
         inpainted_smoothed = inpainted
 
-    # Composite: use feathered mask to blend original subject onto inpainted background
-    # Where mask_feathered is 255 (subject), use original. Where 0 (background), use inpainted.
+    # --- Color harmonization: match subject edge tones to BG ---
+    # Sample BG colors near the subject boundary and shift subject edges slightly toward them
     orig_arr = np.array(img_orig).astype(np.float32)
     inpainted_arr = np.array(inpainted_smoothed).astype(np.float32)
-    blend_weight = np.array(mask_feathered).astype(np.float32) / 255.0
-    blend_weight_3ch = blend_weight[:, :, np.newaxis]
+    mask_arr_f = np.array(mask_feathered).astype(np.float32) / 255.0
 
+    # Create a narrow edge band (subject boundary zone)
+    edge_inner = (mask_arr_f > 0.3) & (mask_arr_f < 0.8)  # transition zone
+    if edge_inner.any():
+        # Average BG color in the zone just outside the subject
+        bg_zone = mask_arr_f < 0.4
+        if bg_zone.any():
+            bg_mean = inpainted_arr[bg_zone].mean(axis=0)  # (3,)
+            subj_zone = mask_arr_f > 0.6
+            if subj_zone.any():
+                subj_mean = orig_arr[subj_zone].mean(axis=0)
+                # Shift subject edge colors 15% toward BG average (gentle color grading)
+                color_shift = (bg_mean - subj_mean) * 0.15
+                # Apply shift only in the transition zone, fading with mask
+                edge_weight = np.clip((0.7 - mask_arr_f) / 0.4, 0, 1)  # 1 at mask=0.3, 0 at mask=0.7
+                edge_weight_3ch = edge_weight[:, :, np.newaxis]
+                orig_arr = orig_arr + color_shift[np.newaxis, np.newaxis, :] * edge_weight_3ch
+                orig_arr = np.clip(orig_arr, 0, 255)
+                log(output_dir, f"Color harmonization: shifted edges by {color_shift.astype(int)} toward BG")
+
+    # --- Light wrap: bleed BG light/color into subject edges ---
+    # Heavily blur the inpainted BG and let it spill slightly into the subject
+    light_wrap_radius = max(5, int(short_edge * 0.04))
+    bg_blurred = inpainted_smoothed.filter(ImageFilter.GaussianBlur(radius=light_wrap_radius))
+    bg_blurred_arr = np.array(bg_blurred).astype(np.float32)
+
+    # Light wrap zone: narrow band just inside the subject edge
+    # Where mask is 0.5-0.85, blend 20% of blurred BG into subject
+    wrap_weight = np.clip((0.85 - mask_arr_f) / 0.35, 0, 1) * np.clip(mask_arr_f / 0.5, 0, 1)
+    wrap_strength = 0.2  # how much BG light bleeds in
+    wrap_weight_3ch = (wrap_weight * wrap_strength)[:, :, np.newaxis]
+    orig_arr = orig_arr * (1.0 - wrap_weight_3ch) + bg_blurred_arr * wrap_weight_3ch
+    orig_arr = np.clip(orig_arr, 0, 255)
+    log(output_dir, f"Light wrap applied: radius={light_wrap_radius}px, strength={wrap_strength}")
+
+    # Composite: use feathered mask to blend (color-matched) subject onto inpainted background
+    blend_weight_3ch = mask_arr_f[:, :, np.newaxis]
     composite_arr = orig_arr * blend_weight_3ch + inpainted_arr * (1 - blend_weight_3ch)
     composite = Image.fromarray(np.clip(composite_arr, 0, 255).astype(np.uint8))
     composite.save(os.path.join(output_dir, "4_composite.jpg"), "JPEG", quality=95)
@@ -567,7 +681,7 @@ def main():
   Step Timings:
     1. Extract subject        {timings.get('extract', 0):>8.1f}s
     2. Mask expand/feather    {timings.get('mask_prep', 0):>8.1f}s
-    3. Inpaint surround       {timings.get('inpaint', 0):>8.1f}s
+    3. Generate/inpaint BG     {timings.get('bg', 0):>8.1f}s
     4. Composite              {timings.get('composite', 0):>8.1f}s
     5. Evaluate & output      {timings.get('output', 0):>8.1f}s
     TOTAL                     {total:>8.1f}s

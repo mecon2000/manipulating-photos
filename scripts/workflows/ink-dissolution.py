@@ -243,20 +243,22 @@ def generate_bleed_mask(mask_array, bleed_radius_frac, shape):
 # Dissolution map (controls how much each pixel dissolves)
 # ---------------------------------------------------------------------------
 def build_dissolution_map(img_pil, subject_mask, face_preserve=0.85,
-                          body_dissolve=0.9, use_depth=False):
+                          body_dissolve=0.9, use_depth=False, fade_multiplier=3.5):
     """Build a per-pixel dissolution map (0 = keep photo, 1 = full dissolution).
 
-    Uses body segmentation to create graduated dissolution:
-    - Face: low dissolution (preserve photographic detail)
-    - Body skin: high dissolution
-    - Hair: medium-high dissolution
-    - Background: full dissolution (or zero if not in subject mask)
-    - Optionally modulated by depth (near=less, far=more)
+    Radial gradient from face center:
+    - Face: zero dissolution (sharp)
+    - Near face (shoulders, hair): low dissolution
+    - Far body/limbs: increasing dissolution
+    - Background: full dissolution
+
+    The gradient is distance-from-face-center, normalized so that the face
+    radius = 0 dissolution and image corners = full dissolution.
     """
     w, h = img_pil.size
-    dissolution = np.zeros((h, w), dtype=np.float64)
+    short_edge = min(w, h)
 
-    # Get body segments via MediaPipe (body-segment.py)
+    # Get body segments via MediaPipe
     try:
         import importlib.util
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -268,51 +270,71 @@ def build_dissolution_map(img_pil, subject_mask, face_preserve=0.85,
         img_array_uint8 = np.array(img_pil)
         cat_mask = bs_mod.segment_body(img_array_uint8)
 
-        # CATEGORIES: 0=background, 1=hair, 2=body-skin, 3=face-skin, 4=clothes, 5=others
         face_mask = (cat_mask == 3).astype(np.float64)
         body_skin = (cat_mask == 2).astype(np.float64)
         hair_mask = (cat_mask == 1).astype(np.float64)
         clothes = (cat_mask == 4).astype(np.float64)
         others = (cat_mask == 5).astype(np.float64)
 
-        # Face: preserve most detail
-        dissolution += face_mask * (1.0 - face_preserve)
-
-        # Body skin: dissolve strongly
-        dissolution += body_skin * body_dissolve
-
-        # Hair: medium dissolution
-        dissolution += hair_mask * (body_dissolve * 0.75)
-
-        # Clothes: moderate dissolution
-        dissolution += clothes * (body_dissolve * 0.6)
-
-        # Others: moderate
-        dissolution += others * (body_dissolve * 0.5)
-
-        log("INFO", f"Dissolution map from body segments: face={1-face_preserve:.0%} preserve, body={body_dissolve:.0%} dissolve")
-
     except Exception as e:
-        log("WARN", f"Body segmentation failed ({e}), using subject mask gradient")
-        # Fallback: uniform dissolution within subject mask
-        subject_np = np.array(subject_mask.convert("L")).astype(np.float64) / 255.0
-        dissolution = subject_np * body_dissolve
+        log("WARN", f"Body segmentation failed ({e}), using uniform gradient")
+        face_mask = np.zeros((h, w), dtype=np.float64)
+        body_skin = np.zeros((h, w), dtype=np.float64)
+        hair_mask = np.zeros((h, w), dtype=np.float64)
+        clothes = np.zeros((h, w), dtype=np.float64)
+        others = np.zeros((h, w), dtype=np.float64)
 
-    # Mask to subject only (don't dissolve background)
+    # Find face center
+    face_pixels = np.where(face_mask > 0.5)
+    if len(face_pixels[0]) > 0:
+        face_cy = face_pixels[0].mean()
+        face_cx = face_pixels[1].mean()
+        # Face "radius" — approximate from bounding box
+        face_h = face_pixels[0].max() - face_pixels[0].min()
+        face_w = face_pixels[1].max() - face_pixels[1].min()
+        face_radius = max(face_h, face_w) * 0.6  # slightly larger than face bbox
+        log("INFO", f"Face center: ({face_cx:.0f}, {face_cy:.0f}), radius: {face_radius:.0f}px")
+    else:
+        # No face found — use image center, top third
+        face_cy = h * 0.3
+        face_cx = w * 0.5
+        face_radius = short_edge * 0.08
+        log("WARN", "No face detected, using top-center as dissolution origin")
+
+    # Build radial distance map from face center
+    yy, xx = np.mgrid[0:h, 0:w]
+    dist = np.sqrt((xx - face_cx)**2 + (yy - face_cy)**2)
+
+    # Normalize: 0 at face center, 1 at ~2x face radius from center
+    # Beyond that, clamp to 1
+    fade_distance = max(face_radius * fade_multiplier, short_edge * 0.4)  # how far until full dissolution
+    radial = np.clip((dist - face_radius) / (fade_distance - face_radius), 0, 1)
+
+    # Face mask gets zero dissolution regardless of distance
+    radial[face_mask > 0.5] = 0
+
+    # Background gets full dissolution
     subject_np = np.array(subject_mask.convert("L")).astype(np.float64) / 255.0
     subject_coverage = subject_np.mean()
 
-    # If BiRefNet coverage is too low (<10%), use MediaPipe segments as subject mask instead
+    # Use MediaPipe segments as subject if BiRefNet is bad
     if subject_coverage < 0.10:
-        log("WARN", f"BiRefNet coverage too low ({subject_coverage:.1%}), using MediaPipe segments as subject mask")
+        log("WARN", f"BiRefNet coverage too low ({subject_coverage:.1%}), using MediaPipe segments")
         mp_subject = np.clip(face_mask + body_skin + hair_mask + clothes + others, 0, 1)
-        dissolution *= mp_subject
+        is_bg = (mp_subject < 0.5)
     else:
-        dissolution *= subject_np
+        is_bg = (subject_np < 0.5)
 
-    # Smooth the dissolution map to avoid harsh transitions
-    dissolution = gaussian_filter(dissolution, sigma=max(1, min(h, w) * 0.01))
+    # BG: full dissolution
+    radial[is_bg] = 1.0
 
+    # Scale by overall strength
+    dissolution = radial * body_dissolve
+
+    # Smooth transitions
+    dissolution = gaussian_filter(dissolution, sigma=max(2, short_edge * 0.015))
+
+    log("INFO", f"Dissolution map: radial from face, bg=full, fade_dist={fade_distance:.0f}px")
     return np.clip(dissolution, 0, 1)
 
 
@@ -396,7 +418,7 @@ def generate_medium_overlay(shape, medium_params, seed=None):
 
 def ink_dissolve(img_pil, subject_mask, medium="ink-wash",
                  dissolve_strength=0.85, face_preserve=0.85,
-                 num_levels=5, seed=None):
+                 num_levels=5, seed=None, fade_multiplier=3.5):
     """Apply ink dissolution effect.
 
     The approach:
@@ -431,6 +453,7 @@ def ink_dissolve(img_pil, subject_mask, medium="ink-wash",
         img_pil, subject_mask,
         face_preserve=face_preserve,
         body_dissolve=dissolve_strength,
+        fade_multiplier=fade_multiplier,
     )
     dissolution_3ch = dissolution[:, :, np.newaxis]
 
@@ -542,6 +565,7 @@ def run_pipeline(args):
         face_preserve=args.face_preserve,
         num_levels=args.levels,
         seed=args.seed,
+        fade_multiplier=args.fade_distance,
     )
 
     # Output
@@ -593,6 +617,9 @@ def main():
                         help="Overall dissolution strength 0-1 (default: 0.85)")
     parser.add_argument("--face-preserve", type=float, default=0.85,
                         help="How much to preserve face detail 0-1 (default: 0.85)")
+    parser.add_argument("--fade-distance", type=float, default=3.5,
+                        help="Fade distance multiplier — how many face-radii until full dissolution "
+                             "(default: 3.5, higher = more body preserved)")
     parser.add_argument("--levels", type=int, default=5,
                         help="Laplacian pyramid levels (default: 5)")
     parser.add_argument("--seed", type=int, default=None,

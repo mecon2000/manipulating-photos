@@ -487,6 +487,150 @@ def generate_hatching(
     final_arr = np.clip(final_arr * 255, 0, 255).astype(np.uint8)
     result = Image.fromarray(final_arr)
 
+    # --- Gouache contour strokes: wet paint marks along offset silhouette ---
+    # Curved, color-sampled, with wet brush texture (tapered width, translucent edges)
+    base_photo_arr = np.array(img, dtype=np.float32)  # original photo for color sampling
+    bold_rng = np.random.RandomState(seed if seed else 42)
+
+    dist_field = distance_transform_edt(1 - subject_mask_arr)
+    max_dist = dist_field.max() + 1e-8
+
+    # We'll paint gouache strokes onto an RGBA overlay, then composite
+    gouache_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    g_draw = ImageDraw.Draw(gouache_layer)
+
+    # 4 echo rings at increasing distances
+    ring_distances = [0.03, 0.07, 0.13, 0.22]
+    total_strokes = 0
+
+    # First ring gets 4-5 big decisive strokes, rest get smaller ones
+    for ring_i, ring_frac in enumerate(ring_distances):
+        ring_dist_px = int(short_edge * ring_frac)
+        band_lo = ring_dist_px - max(2, int(short_edge * 0.006))
+        band_hi = ring_dist_px + max(2, int(short_edge * 0.006))
+        ring_mask = (dist_field >= band_lo) & (dist_field <= band_hi)
+
+        ring_pixels = np.where(ring_mask)
+        if len(ring_pixels[0]) < 10:
+            continue
+
+        fade = 1.0 - ring_i * 0.25
+
+        if ring_i == 0:
+            # Inner ring: big decisive gouache strokes
+            stroke_len = int(short_edge * 0.10)  # 10% of short edge — bold
+            n_strokes = 5
+            base_opacity = 0.8
+            base_width = max(5, int(short_edge * 0.008))  # thick
+        elif ring_i == 1:
+            # Second ring: medium strokes
+            stroke_len = int(short_edge * 0.06)
+            n_strokes = 6
+            base_opacity = 0.6
+            base_width = max(4, int(short_edge * 0.005))
+        else:
+            # Outer rings: smaller, fading
+            stroke_len = int(short_edge * 0.03 * fade)
+            n_strokes = max(3, int(8 * fade))
+            base_opacity = max(0.15, fade * 0.5)
+            base_width = max(3, int(short_edge * 0.003 * fade))
+
+        indices = bold_rng.choice(len(ring_pixels[0]),
+                                   size=min(n_strokes, len(ring_pixels[0])), replace=False)
+
+        for idx in indices:
+            by = ring_pixels[0][idx]
+            bx = ring_pixels[1][idx]
+
+            # Tangent direction (along contour)
+            gy = dist_field[min(by + 1, h - 1), bx] - dist_field[max(by - 1, 0), bx]
+            gx = dist_field[by, min(bx + 1, w - 1)] - dist_field[by, max(bx - 1, 0)]
+            tang_angle = math.atan2(gx, -gy)
+
+            # Sample color from photo at this position — darken + saturate it
+            sample_y = max(0, min(h - 1, by))
+            sample_x = max(0, min(w - 1, bx))
+            photo_rgb = base_photo_arr[sample_y, sample_x, :]  # 0-255
+            # Darken by ~40%, boost saturation
+            stroke_r = int(photo_rgb[0] * 0.55)
+            stroke_g = int(photo_rgb[1] * 0.50)
+            stroke_b = int(photo_rgb[2] * 0.55)
+
+            # Length variation
+            this_len = stroke_len * bold_rng.uniform(0.6, 1.4)
+
+            # Generate curved stroke as chain of points with quadratic bezier bow
+            n_pts = max(8, int(this_len / 3))
+            cos_a = math.cos(tang_angle)
+            sin_a = math.sin(tang_angle)
+
+            # Bezier control point: perpendicular offset for curve
+            # Bigger strokes get more dramatic curves
+            bow_range = 0.20 if base_width >= int(short_edge * 0.006) else 0.12
+            bow_amount = this_len * bold_rng.uniform(-bow_range, bow_range)
+            perp_x = -sin_a * bow_amount
+            perp_y = cos_a * bow_amount
+
+            pts = []
+            for ti in range(n_pts):
+                t = ti / (n_pts - 1)  # 0 to 1
+                # Quadratic bezier: P0 → P1(control) → P2
+                p0x = bx - cos_a * this_len
+                p0y = by - sin_a * this_len
+                p2x = bx + cos_a * this_len
+                p2y = by + sin_a * this_len
+                # Control point at midpoint + perpendicular bow
+                p1x = bx + perp_x
+                p1y = by + perp_y
+                # Bezier formula
+                px = (1 - t)**2 * p0x + 2 * (1 - t) * t * p1x + t**2 * p2x
+                py = (1 - t)**2 * p0y + 2 * (1 - t) * t * p1y + t**2 * p2y
+                pts.append((px, py))
+
+            # Draw stroke as overlapping circles (wet brush simulation)
+            # Width tapers at both ends, max in middle
+            for pi, (px, py) in enumerate(pts):
+                t = pi / max(1, n_pts - 1)
+                # Taper: sin curve peaks at center
+                taper = math.sin(t * math.pi)
+                radius = max(1, int(base_width * (0.3 + 0.7 * taper)))
+
+                # Alpha: higher at center, lower at edges, with slight noise
+                alpha_noise = bold_rng.uniform(0.85, 1.0)
+                alpha = int(255 * base_opacity * (0.4 + 0.6 * taper) * alpha_noise)
+
+                # Slight color variation along stroke (pigment isn't uniform)
+                color_noise = bold_rng.uniform(0.9, 1.1)
+                cr = max(0, min(255, int(stroke_r * color_noise)))
+                cg = max(0, min(255, int(stroke_g * color_noise)))
+                cb = max(0, min(255, int(stroke_b * color_noise)))
+
+                ipx, ipy = int(px), int(py)
+                if 0 <= ipx < w and 0 <= ipy < h:
+                    g_draw.ellipse(
+                        [ipx - radius, ipy - radius, ipx + radius, ipy + radius],
+                        fill=(cr, cg, cb, alpha)
+                    )
+
+                    # Pigment pooling: darker edge ring at ~60% of points
+                    if taper > 0.3 and bold_rng.random() < 0.6:
+                        edge_r = max(1, radius + 1)
+                        edge_alpha = max(10, int(alpha * 0.3))
+                        edge_cr = max(0, cr - 30)
+                        edge_cg = max(0, cg - 30)
+                        edge_cb = max(0, cb - 30)
+                        g_draw.ellipse(
+                            [ipx - edge_r, ipy - edge_r, ipx + edge_r, ipy + edge_r],
+                            outline=(edge_cr, edge_cg, edge_cb, edge_alpha),
+                            width=1
+                        )
+
+            total_strokes += 1
+
+    # Composite gouache layer onto result
+    result = Image.alpha_composite(result.convert("RGBA"), gouache_layer).convert("RGB")
+    log(output_dir, f"Added {total_strokes} gouache contour strokes across {len(ring_distances)} rings")
+
     return result
 
 
@@ -594,8 +738,9 @@ def run_pipeline(args):
         output_dir=output_dir,
     )
 
-    # Save result
-    out_name = f"{src_name}_hatching_{args.style}.jpg"
+    # Save result (with timestamp to avoid overwrites)
+    ts = datetime.now(ISRAEL_TZ).strftime("%H%M%S")
+    out_name = f"{src_name}_hatching_{args.style}_{ts}.jpg"
     out_path = os.path.join(output_dir, out_name)
     result.save(out_path, quality=95)
     log(output_dir, f"Saved: {out_path}")
@@ -611,7 +756,7 @@ def run_pipeline(args):
     comparison = Image.new("RGB", (w * 2, h))
     comparison.paste(img, (0, 0))
     comparison.paste(result, (w, 0))
-    comp_name = f"{src_name}_hatching_{args.style}_comparison.jpg"
+    comp_name = f"{src_name}_hatching_{args.style}_{ts}_comparison.jpg"
     comp_path = os.path.join(finals_dir, comp_name)
     comparison.save(comp_path, quality=92)
     log(output_dir, f"Comparison: {comp_path}")

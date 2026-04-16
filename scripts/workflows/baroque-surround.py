@@ -2,21 +2,29 @@
 """
 Baroque Surround — Generative Painterly Background
 
-Creates a "baroque oil painting surround" effect: photorealistic subject floating
-in flowing, painterly, baroque-style forms. The background is GENERATIVE (wholly
-reimagined via inpainting), not transformative. Subject stays completely untouched.
+Extracts subject, generates a dramatic BG via Flux text-to-image (with optional
+story elements like roses, wings, chains), composites using Laplacian pyramid
+blending + light wrap + LAB edge match + LAB color wash for unified color.
+
+Pipeline:
+  1. Extract subject mask (BiRefNet)        } parallel
+  2. Generate BG (Flux text-to-image)       }
+  3. Laplacian pyramid blend (6 levels)
+  4. Light wrap (BG spill on subject edges)
+  5. LAB edge color match
+  6. Full-image LAB color wash (60%)
 
 Usage:
-    python baroque-surround.py --source photo.jpg --preset baroque
-    python baroque-surround.py --source photo.jpg --preset dark-romantic
-    python baroque-surround.py --source photo.jpg --prompt "custom prompt" --strength 0.95
+    python baroque-surround.py --source photo.jpg --preset smoke
+    python baroque-surround.py --source photo.jpg --preset roses --artifact petals
+    python baroque-surround.py --source photo.jpg --preset baroque --artifact random
     python baroque-surround.py --list-presets
+    python baroque-surround.py --list-artifacts
 """
 
 import os
 import sys
 
-# Auto-load env vars from ~/sol/.env if not already set
 _env_file = os.path.expanduser("~/sol/.env")
 if os.path.isfile(_env_file):
     with open(_env_file) as _f:
@@ -25,8 +33,6 @@ if os.path.isfile(_env_file):
             if _line and not _line.startswith("#") and "=" in _line:
                 _key, _val = _line.split("=", 1)
                 os.environ.setdefault(_key.strip(), _val.strip())
-
-# fal_client expects FAL_KEY, but env has FAL_API_KEY
 os.environ['FAL_KEY'] = os.environ.get('FAL_API_KEY', '')
 
 import re
@@ -46,89 +52,95 @@ try:
 except ImportError:
     ISRAEL_TZ = timezone(timedelta(hours=3))
 
+import cv2
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps, ImageStat
-from scipy import ndimage
 import fal_client
 
-# Shared masking module (BiRefNet / body-segment)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from masking import build_mask, add_affect_args
-
+from masking import build_mask
 sys.stdout.reconfigure(line_buffering=True)
 
 # ---------------------------------------------------------------------------
-# Presets
+# Presets — base atmosphere for the BG
 # ---------------------------------------------------------------------------
 PRESETS = {
     "baroque": {
-        "prompt": "large flowing amorphous organic shapes and billowing drapery, baroque oil painting, dramatic chiaroscuro, luminous glazing, Bouguereau and Caravaggio, warm ochre cool blue-grey cream, smooth blended brushwork, sweeping undulating forms radiating from center",
+        "prompt": "large flowing amorphous organic shapes and billowing drapery, baroque oil painting, dramatic chiaroscuro, luminous glazing, Bouguereau and Caravaggio, warm ochre cool blue-grey cream, smooth blended brushwork, sweeping undulating forms",
         "negative": "modern, digital, sharp edges, text, watermark, flat colors, cartoon, solid color background",
-        "strength": 0.95,
     },
     "renaissance": {
         "prompt": "large soft amorphous forms of golden light and flowing draped silk fabric, sfumato Renaissance oil painting, Raphael da Vinci, olive warm brown soft blue, luminous atmospheric depth, billowing organic forms",
         "negative": "modern, digital, harsh lighting, text, watermark, flat background, solid color",
-        "strength": 0.92,
     },
     "dark-romantic": {
         "prompt": "large swirling amorphous storm forms and turbulent abstract shapes, dark romantic oil painting, Delacroix Turner, dark blue warm amber charcoal copper, flowing organic masses, dramatic atmospheric turbulence",
         "negative": "bright, cheerful, flat, text, watermark, cartoon, solid background",
-        "strength": 0.95,
     },
     "ethereal": {
         "prompt": "large flowing amorphous luminous cloud forms and soft ethereal mist, dreamy angelic, billowing organic shapes in pearl ivory pale gold soft blue, divine radiance, sweeping undulating cloud-like masses",
         "negative": "dark, gritty, harsh, text, watermark, modern, flat background",
-        "strength": 0.93,
     },
     "smoke": {
         "prompt": "large visible swirling smoke plumes and flowing amorphous grey volumetric forms, dramatic single light source illuminating billowing smoke, warm grey amber cream emerging from shadows, Caravaggio chiaroscuro, dense volumetric smoke clouds",
         "negative": "flat black, solid black, empty background, text, watermark, plain background",
-        "strength": 0.93,
     },
     "underwater": {
         "prompt": "deep underwater scene with volumetric light rays penetrating dark ocean water, large flowing organic jellyfish-like forms and bioluminescent particles, swirling ocean currents carrying soft blue green teal glowing shapes, deep sea atmosphere",
         "negative": "text, watermark, surface, sky, dry, land, flat",
-        "strength": 0.93,
     },
     "ink-water": {
         "prompt": "large flowing ink drops dissolving in water, organic amorphous spreading ink forms in deep indigo black and warm sienna, mesmerizing fluid dynamics, billowing ink tendrils and blooming clouds of pigment in clear water",
         "negative": "text, watermark, flat, solid color, dry, paper",
-        "strength": 0.93,
     },
     "aurora": {
         "prompt": "sweeping northern lights aurora borealis forms, large flowing luminous curtains of green teal purple pink light against dark starry sky, organic undulating ribbons of light, atmospheric glow",
         "negative": "text, watermark, flat, daylight, sun, bright",
-        "strength": 0.93,
     },
     "silk": {
         "prompt": "large flowing luxurious silk fabric forms billowing in wind, organic draping shapes in rich burgundy gold ivory, volumetric folds catching dramatic light, Renaissance drapery study, sensual flowing textile",
         "negative": "text, watermark, flat, modern, digital, hard edges",
-        "strength": 0.93,
     },
     "embers": {
         "prompt": "swirling embers and warm smoke forms rising in dramatic updraft, glowing orange sparks and flowing ash shapes against dark background, volumetric fire glow, warm amber red black, cinematic atmosphere",
         "negative": "text, watermark, flat, bright, daylight, cold",
-        "strength": 0.93,
     },
     "curtains": {
         "prompt": "large crumpled heavy velvet curtains and draped theatrical fabric, rich burgundy crimson deep purple and gold fabric folds, dramatic stage lighting from above, luxurious textile wrinkles and creases, baroque theater",
         "negative": "text, watermark, flat, modern, smooth, digital",
-        "strength": 0.93,
     },
     "whipped-cream": {
         "prompt": "massive mountains and peaks of glossy white whipped cream, organic flowing cream swirls and peaks, soft volumetric meringue forms, creamy vanilla and soft pink highlights, dreamy confection landscape",
         "negative": "text, watermark, flat, dark, gritty, dry",
-        "strength": 0.93,
     },
     "bubbles": {
         "prompt": "large floating iridescent soap bubbles and heavy foam clusters, translucent spheres with rainbow reflections, thick soapy lather and bubble masses, soft diffused light through transparent orbs, dreamy bathroom atmosphere",
         "negative": "text, watermark, flat, dry, dark, harsh",
-        "strength": 0.93,
     },
 }
 
+# ---------------------------------------------------------------------------
+# Artifacts — story elements added to the BG prompt (1 per image)
+# ---------------------------------------------------------------------------
+ARTIFACTS = {
+    "wings": "huge dark crow wings spreading outward, dark feathers dissolving into smoke at the tips",
+    "petals": "hundreds of dark red rose petals floating and swirling through the air, wilting baroque roses with thorny stems",
+    "hands": "ghostly pale hands reaching upward through the clouds, ethereal fingers emerging from mist",
+    "faces": "tortured amorphic faces emerging from the smoke with open mouths, anguished expressions dissolving into mist",
+    "chains": "thick ornate iron chains hanging and draping through the smoke, dark iron links dissolving into mist",
+    "serpents": "a large serpent coiling through the haze with iridescent scales, sinuous body dissolving into smoke",
+    "butterflies": "dozens of dark moths and butterflies with translucent wings, scattered and floating through the haze",
+    "thorns": "twisted thorny vines creeping and weaving through the smoke, dark brambles with sharp barbs",
+    "feathers": "loose dark feathers floating and drifting through the air, individual plumes caught in slow motion",
+    "flames": "ethereal blue and amber flames dancing and flickering through the darkness, ghostly fire",
+    "flowers": "large baroque flowers blooming and wilting in the haze, peonies and dahlias with heavy petals",
+    "skulls": "ornate baroque skulls partially emerging from the smoke, vanitas memento mori, gilded bone",
+    "ribbons": "flowing silk ribbons and fabric strips twisting through the air, caught in wind",
+    "eyes": "multiple ethereal eyes peering from within the smoke, mysterious watchful presences",
+}
+
 _log_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -139,9 +151,8 @@ def log(output_dir, message, level="INFO"):
     print(formatted)
     if output_dir:
         with _log_lock:
-            log_path = os.path.join(output_dir, "workflow.log")
             try:
-                with open(log_path, "a") as f:
+                with open(os.path.join(output_dir, "workflow.log"), "a") as f:
                     f.write(formatted + "\n")
             except OSError:
                 pass
@@ -153,9 +164,7 @@ def log(output_dir, message, level="INFO"):
 def check_image_quality(img, label, output_dir):
     gray = img.convert("L")
     stat = ImageStat.Stat(gray)
-    brightness = stat.mean[0]
-    contrast = stat.stddev[0]
-    entropy = gray.entropy()
+    brightness, contrast, entropy = stat.mean[0], stat.stddev[0], gray.entropy()
     reasons = []
     if brightness < 10:
         reasons.append(f"nearly black (brightness={brightness:.1f})")
@@ -180,22 +189,15 @@ _EVAL_PROMPT = """\
 You are a professional art director evaluating a composite photograph where the subject is photographic \
 and the background has been replaced with generative painterly forms (baroque/classical oil painting style).
 
-If you see TWO images, the first is the ORIGINAL and the second is the RESULT — compare them.
-
-Evaluate the RESULT image on these criteria:
+Evaluate the image on these criteria:
 1. Subject integrity: does the person look untouched, photorealistic, and anatomically correct?
-2. Surround quality: does the painterly background look like convincing oil painting? Rich textures, proper brushwork?
+2. Surround quality: does the painterly background look like convincing oil painting?
 3. Transition: is the blend between photographic subject and painted surround smooth and natural?
-4. Composition: does the overall image work as a coherent piece of art?
-5. Color harmony: do the surround colors complement the subject?
+4. Color harmony: do the subject and surround share the same color temperature?
+5. Overall cohesion: does it feel like one unified image, not a cutout on a painted background?
 
 Respond ONLY with valid JSON (no markdown fences):
-{
-  "score": <int 1-10>,
-  "critique": "<2-3 sentences>",
-  "issues": [<zero or more from: "subject_altered", "harsh_transition", "flat_background", \
-"color_clash", "artifacts", "too_dark", "too_bright", "incoherent", "repetitive_pattern">]
-}"""
+{"score": <int 1-10>, "critique": "<2-3 sentences>", "issues": [<zero or more from: "subject_altered", "harsh_transition", "flat_background", "color_clash", "artifacts", "too_dark", "too_bright", "cutout_look", "incoherent">]}"""
 
 
 def evaluate_with_gemini(img, output_dir, original_img=None):
@@ -212,73 +214,41 @@ def evaluate_with_gemini(img, output_dir, original_img=None):
             im_resized.save(buf, format="JPEG", quality=85)
             return base64.b64encode(buf.getvalue()).decode("utf-8")
 
-        img_b64 = _img_to_b64(img)
-        parts = [{"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}]
+        parts = []
         if original_img is not None:
-            orig_b64 = _img_to_b64(original_img)
-            parts.insert(0, {"text": "ORIGINAL:"})
-            parts.insert(1, {"inline_data": {"mime_type": "image/jpeg", "data": orig_b64}})
-            parts.append({"text": "RESULT (baroque surround applied):\n\n" + _EVAL_PROMPT})
-        else:
-            parts.append({"text": _EVAL_PROMPT})
+            parts.append({"text": "ORIGINAL:"})
+            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": _img_to_b64(original_img)}})
+        parts.append({"text": "RESULT:" if original_img else ""})
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": _img_to_b64(img)}})
+        parts.append({"text": _EVAL_PROMPT})
 
         payload = {
             "contents": [{"parts": parts}],
-            "generationConfig": {
-                "temperature": 0.3,
-                "maxOutputTokens": 4096,
-                "responseMimeType": "application/json",
-            },
+            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 4096, "responseMimeType": "application/json"},
         }
-
         response = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
             json=payload, timeout=60)
-
         if response.status_code != 200:
             log(output_dir, f"Gemini API error ({response.status_code}): {response.text[:200]}", "WARN")
             return None
-
         resp_json = response.json()
         candidates = resp_json.get("candidates", [])
         if not candidates:
-            reason = resp_json.get("promptFeedback", {}).get("blockReason", "unknown")
-            log(output_dir, f"Gemini returned no candidates (reason: {reason})", "WARN")
+            log(output_dir, f"Gemini blocked: {resp_json.get('promptFeedback', {}).get('blockReason', '?')}", "WARN")
             return None
-
-        finish_reason = candidates[0].get("finishReason", "")
-        content = candidates[0].get("content", {})
-        parts_out = content.get("parts", [])
-        if not parts_out:
-            log(output_dir, f"Gemini candidate has no content parts (finishReason: {finish_reason})", "WARN")
-            return None
-
-        raw = parts_out[0].get("text", "").strip()
-        log(output_dir, f"Gemini raw ({len(raw)} chars, finishReason={finish_reason}): {raw[:500]}")
-
-        lines = raw.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        raw = "\n".join(lines).strip()
+        raw = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+        raw = "\n".join(l for l in raw.split("\n") if not l.strip().startswith("```")).strip()
         try:
             result = json.loads(raw)
         except json.JSONDecodeError:
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start == -1 or end == -1 or end <= start:
-                log(output_dir, f"Gemini response contains no JSON: {raw[:200]}", "WARN")
-                return None
-            try:
+            start, end = raw.find("{"), raw.rfind("}")
+            if start >= 0 and end > start:
                 result = json.loads(raw[start:end + 1])
-            except json.JSONDecodeError as e:
-                log(output_dir, f"Gemini JSON parse failed: {e}", "WARN")
+            else:
+                log(output_dir, f"Gemini JSON parse failed: {raw[:200]}", "WARN")
                 return None
-
-        score = result.get("score", "?")
-        critique = result.get("critique", "")
-        issues = result.get("issues", [])
-        log(output_dir, f"Gemini score: {score}/10 — {critique}")
-        if issues:
-            log(output_dir, f"Gemini issues: {', '.join(issues)}")
+        log(output_dir, f"Gemini score: {result.get('score', '?')}/10 — {result.get('critique', '')}")
         return result
     except Exception as e:
         log(output_dir, f"Gemini evaluation failed: {e}", "WARN")
@@ -286,100 +256,149 @@ def evaluate_with_gemini(img, output_dir, original_img=None):
 
 
 # ---------------------------------------------------------------------------
-# Inpainting via fal.ai
+# Step 1: Extract mask (runs in thread)
 # ---------------------------------------------------------------------------
-def upload_pil_image(img, fmt="PNG"):
-    """Upload a PIL image to fal.ai CDN and return the URL."""
-    with tempfile.NamedTemporaryFile(suffix=f".{fmt.lower()}", delete=False) as tmp:
-        img.save(tmp, format=fmt, quality=95)
-        tmp_path = tmp.name
+def extract_mask_thread(img_orig, w, h, output_dir, result_dict):
     try:
-        url = fal_client.upload_file(tmp_path)
-        return url
-    finally:
-        os.unlink(tmp_path)
+        mask, mask_info = build_mask(img_orig, affect="subject", exclude="", output_dir=output_dir, feather=0)
+        if mask is None:
+            result_dict["error"] = "Subject extraction failed"
+            return
+        if mask.size != (w, h):
+            mask = mask.resize((w, h), Image.LANCZOS)
+        mask.save(os.path.join(output_dir, "1_mask.png"))
+        result_dict["mask"] = mask
+        result_dict["mask_info"] = mask_info
+    except Exception as e:
+        result_dict["error"] = str(e)
 
 
-def generate_bg(prompt, width, height, output_dir, seed=None):
-    """Generate a standalone baroque BG from scratch via text-to-image."""
-    log(output_dir, f"Generating BG: {width}x{height}, prompt='{prompt[:80]}...'")
+# ---------------------------------------------------------------------------
+# Step 2: Generate BG (runs in thread)
+# ---------------------------------------------------------------------------
+def generate_bg_thread(prompt, w, h, output_dir, seed, result_dict):
     import requests as req_lib
-
-    payload = {
-        "prompt": prompt,
-        "image_size": {"width": width, "height": height},
-        "num_inference_steps": 28,
-        "guidance_scale": 3.5,
-        "num_images": 1,
-        "output_format": "jpeg",
-        "enable_safety_checker": False,
-    }
-    if seed is not None:
-        payload["seed"] = seed
-
     try:
-        handle = fal_client.submit("fal-ai/flux/dev", arguments=payload)
+        # Flux dimensions: cap at 1024 on long edge, maintain aspect ratio
+        flux_w = min(w, 1024)
+        flux_h = int(flux_w * h / w)
+        flux_h = (flux_h // 8) * 8
+        flux_w = (flux_w // 8) * 8
+
+        log(output_dir, f"Generating BG: {flux_w}x{flux_h}")
+        handle = fal_client.submit("fal-ai/flux/dev", arguments={
+            "prompt": prompt,
+            "image_size": {"width": flux_w, "height": flux_h},
+            "num_inference_steps": 28,
+            "guidance_scale": 3.5,
+            "num_images": 1,
+            "output_format": "jpeg",
+            "enable_safety_checker": False,
+            "seed": seed,
+        })
         result = handle.get()
         images = result.get("images", [])
         if not images:
-            log(output_dir, "BG generation returned no images", "ERROR")
-            return None
+            result_dict["error"] = "BG generation returned no images"
+            return
         bg_url = images[0].get("url", "")
-        log(output_dir, f"BG CDN URL: {bg_url}")
         resp = req_lib.get(bg_url, timeout=60)
         bg_img = Image.open(BytesIO(resp.content)).convert("RGB")
-        log(output_dir, f"Generated BG: {bg_img.size[0]}x{bg_img.size[1]}")
-        return bg_img
+        if bg_img.size != (w, h):
+            bg_img = bg_img.resize((w, h), Image.LANCZOS)
+        bg_img.save(os.path.join(output_dir, "2_bg.jpg"), "JPEG", quality=95)
+        result_dict["bg"] = bg_img
     except Exception as e:
-        log(output_dir, f"BG generation failed: {e}", "ERROR")
-        return None
-
-
-def run_inpainting(image_url, mask_url, prompt, negative, strength, output_dir, seed=None):
-    """Inpaint background using fal.ai Flux inpainting (legacy fallback)."""
-    log(output_dir, f"Inpainting: strength={strength}, prompt='{prompt[:80]}...'")
-
-    payload = {
-        "image_url": image_url,
-        "mask_url": mask_url,
-        "prompt": prompt,
-        "strength": strength,
-        "num_images": 1,
-        "output_format": "jpeg",
-        "enable_safety_checker": False,
-    }
-    if negative:
-        payload["negative_prompt"] = negative
-    if seed is not None:
-        payload["seed"] = seed
-
-    try:
-        log(output_dir, "Submitting to fal-ai/flux-general/inpainting...")
-        handle = fal_client.submit("fal-ai/flux-general/inpainting", arguments=payload)
-        result = handle.get()
-    except Exception as e:
-        log(output_dir, f"Inpainting failed: {e}", "ERROR")
-        return None
-
-    images = result.get("images", [])
-    if not images:
-        log(output_dir, "Inpainting returned no images", "ERROR")
-        return None
-
-    result_url = images[0].get("url")
-    if not result_url:
-        log(output_dir, "Inpainting returned no URL", "ERROR")
-        return None
-
-    log(output_dir, f"Inpainting CDN URL: {result_url}")
-    import requests
-    result_img = Image.open(requests.get(result_url, stream=True, timeout=60).raw).convert("RGB")
-    log(output_dir, f"Inpainting result: {result_img.size[0]}x{result_img.size[1]}")
-    return result_img
+        result_dict["error"] = str(e)
 
 
 # ---------------------------------------------------------------------------
-# Main Workflow
+# Steps 3-6: Composite pipeline (local, fast)
+# ---------------------------------------------------------------------------
+def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir):
+    """Laplacian pyramid blend + light wrap + LAB edge match + LAB 60% wash."""
+    bg_f = np.array(bg_img).astype(np.float32)
+
+    # --- Step 3: Laplacian pyramid blend ---
+    log(output_dir, "Step 3: Laplacian pyramid blend (6 levels)")
+
+    def lap_pyr(img_f, levels=6):
+        pyr, cur = [], img_f.copy()
+        for _ in range(levels - 1):
+            down = cv2.pyrDown(cur)
+            up = cv2.pyrUp(down, dstsize=(cur.shape[1], cur.shape[0]))
+            pyr.append(cur - up)
+            cur = down
+        pyr.append(cur)
+        return pyr
+
+    def gauss_pyr(m, levels=6):
+        pyr, cur = [m.copy()], m.copy()
+        for _ in range(levels - 1):
+            cur = cv2.pyrDown(cur)
+            pyr.append(cur)
+        return pyr
+
+    def reconstruct(pyr):
+        cur = pyr[-1]
+        for i in range(len(pyr) - 2, -1, -1):
+            cur = cv2.pyrUp(cur, dstsize=(pyr[i].shape[1], pyr[i].shape[0])) + pyr[i]
+        return cur
+
+    levels = 6
+    s_pyr = lap_pyr(src_f, levels)
+    b_pyr = lap_pyr(bg_f, levels)
+    m3 = np.stack([mask_binary.astype(np.float32)] * 3, axis=-1)
+    m_pyr = gauss_pyr(m3, levels)
+    blended = [s * m + b * (1 - m) for s, b, m in zip(s_pyr, b_pyr, m_pyr)]
+    result = np.clip(reconstruct(blended), 0, 255).astype(np.float32)
+
+    # --- Step 4: Light wrap ---
+    log(output_dir, "Step 4: Light wrap")
+    blur_r = max(30, int(short_edge * 0.08))
+    bg_blur = cv2.GaussianBlur(bg_f, (0, 0), blur_r)
+    ks = max(5, int(short_edge * 0.025))
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
+    dilated = cv2.dilate(mask_binary, kern, iterations=1)
+    edge_band = ((dilated - mask_binary) > 0).astype(np.float32)
+    edge_soft = cv2.GaussianBlur(edge_band, (0, 0), max(3, ks // 2))[:, :, np.newaxis]
+    result = result * (1 - edge_soft * 0.25) + bg_blur * (edge_soft * 0.25)
+
+    # --- Step 5: LAB edge color match ---
+    log(output_dir, "Step 5: LAB edge color match")
+    bg_lab = cv2.cvtColor(np.array(bg_img), cv2.COLOR_RGB2LAB).astype(np.float32)
+    res_lab = cv2.cvtColor(np.clip(result, 0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
+    ew = max(10, int(short_edge * 0.05))
+    ke = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ew, ew))
+    eroded = cv2.erode(mask_binary, ke, iterations=1)
+    inner_edge = ((mask_binary - eroded) > 0).astype(np.float32)
+    inner_soft = cv2.GaussianBlur(inner_edge, (0, 0), max(3, ew // 2))
+    for ch in range(3):
+        bg_near = bg_lab[:, :, ch][edge_band > 0.3]
+        subj_edge = res_lab[:, :, ch][inner_soft > 0.3]
+        if len(bg_near) == 0 or len(subj_edge) == 0:
+            continue
+        res_lab[:, :, ch] += (bg_near.mean() - subj_edge.mean()) * 0.4 * inner_soft
+    result = cv2.cvtColor(np.clip(res_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32)
+
+    # --- Step 6: Full-image LAB 60% wash ---
+    log(output_dir, "Step 6: LAB 60% color wash")
+    comp_lab = cv2.cvtColor(np.clip(result, 0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
+    for ch in range(3):
+        c_mean = comp_lab[:, :, ch].mean()
+        c_std = comp_lab[:, :, ch].std() + 1e-8
+        b_mean = bg_lab[:, :, ch].mean()
+        b_std = bg_lab[:, :, ch].std() + 1e-8
+        new_mean = c_mean + (b_mean - c_mean) * 0.6
+        new_std = c_std + (b_std - c_std) * 0.18
+        comp_lab[:, :, ch] = (comp_lab[:, :, ch] - c_mean) * (new_std / c_std) + new_mean
+    final = cv2.cvtColor(np.clip(comp_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+
+    return Image.fromarray(final)
+
+
+# ---------------------------------------------------------------------------
+# Main
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Baroque Surround — Generative Painterly Background")
@@ -387,28 +406,33 @@ def main():
     parser.add_argument("--preset", default="baroque", help="Preset name (default: baroque)")
     parser.add_argument("--prompt", default=None, help="Custom prompt (overrides preset)")
     parser.add_argument("--negative", default=None, help="Custom negative prompt")
-    parser.add_argument("--strength", type=float, default=None, help="Inpainting strength (default: from preset)")
-    parser.add_argument("--transition", type=float, default=0.04,
-                        help="Blend zone as fraction of short edge (default: 0.04)")
-    parser.add_argument("--method", default="generate", choices=["generate", "inpaint"],
-                        help="BG method: 'generate' (from scratch, default) or 'inpaint' (replace existing BG)")
-    parser.add_argument("--noise", action="store_true",
-                        help="Add noise/pixelation to BG before inpainting (only for --method inpaint)")
+    parser.add_argument("--artifact", default=None,
+                        help="Story element in BG: wings, petals, hands, faces, chains, serpents, "
+                             "butterflies, thorns, feathers, flames, flowers, skulls, ribbons, eyes, "
+                             "random, none (default: none)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--auto-correct", action="store_true", help="Enable Gemini evaluation")
-    parser.add_argument("--max-corrections", type=int, default=2, help="Max auto-correction rounds")
     parser.add_argument("--output-to", choices=["local", "gdrive", "both"], default="local")
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
-    parser.add_argument("--list-presets", action="store_true", help="List all presets and exit")
+    parser.add_argument("--list-presets", action="store_true", help="List all presets")
+    parser.add_argument("--list-artifacts", action="store_true", help="List all artifacts")
     args = parser.parse_args()
 
     if args.list_presets:
-        print(f"\n{'Preset':<20} Strength  Description")
-        print("=" * 90)
+        print(f"\n{'Preset':<20} Description")
+        print("=" * 80)
         for name, p in PRESETS.items():
-            desc = p["prompt"][:65] + "..." if len(p["prompt"]) > 65 else p["prompt"]
-            print(f"  {name:<18} {p['strength']:.2f}     {desc}")
+            desc = p["prompt"][:60] + "..." if len(p["prompt"]) > 60 else p["prompt"]
+            print(f"  {name:<18} {desc}")
         print(f"\nTotal: {len(PRESETS)} presets")
+        sys.exit(0)
+
+    if args.list_artifacts:
+        print(f"\n{'Artifact':<15} Description")
+        print("=" * 80)
+        for name, desc in ARTIFACTS.items():
+            print(f"  {name:<13} {desc[:65]}")
+        print(f"\nTotal: {len(ARTIFACTS)} artifacts. Use --artifact random for random selection.")
         sys.exit(0)
 
     source = os.path.expanduser(args.source)
@@ -416,21 +440,39 @@ def main():
         print(f"ERROR: Source not found: {source}")
         sys.exit(1)
 
-    # Resolve preset / custom prompt
+    # Resolve preset
     if args.prompt:
-        inpaint_prompt = args.prompt
-        inpaint_negative = args.negative or "modern, digital, text, watermark"
-        inpaint_strength = args.strength or 0.95
+        bg_base_prompt = args.prompt
+        bg_negative = args.negative or "modern, digital, text, watermark"
         preset_name = "Custom"
     else:
         if args.preset not in PRESETS:
             print(f"ERROR: Unknown preset '{args.preset}'. Use --list-presets.")
             sys.exit(1)
         preset = PRESETS[args.preset]
-        inpaint_prompt = preset["prompt"]
-        inpaint_negative = args.negative or preset.get("negative", "")
-        inpaint_strength = args.strength if args.strength is not None else preset["strength"]
+        bg_base_prompt = preset["prompt"]
+        bg_negative = args.negative or preset.get("negative", "")
         preset_name = args.preset
+
+    # Resolve artifact
+    artifact_name = "none"
+    artifact_text = ""
+    if args.artifact and args.artifact != "none":
+        if args.artifact == "random":
+            artifact_name = random.choice(list(ARTIFACTS.keys()))
+        elif args.artifact in ARTIFACTS:
+            artifact_name = args.artifact
+        else:
+            print(f"ERROR: Unknown artifact '{args.artifact}'. Use --list-artifacts.")
+            sys.exit(1)
+        artifact_text = ARTIFACTS[artifact_name]
+
+    # Build full BG prompt
+    bg_prompt = bg_base_prompt
+    if artifact_text:
+        bg_prompt += f", {artifact_text}"
+    bg_prompt += ", no central focal point, scattered elements around edges"
+    bg_prompt += ", NO person, NO figure, NO human face, just abstract painterly forms"
 
     # Derive names
     source_basename = os.path.splitext(os.path.basename(source))[0]
@@ -441,10 +483,10 @@ def main():
             model_name = path_parts[i + 1]
             break
 
+    seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
     timestamp = datetime.now(ISRAEL_TZ).strftime("%Y-%m-%d_%H-%M-%S")
-    preset_tag = preset_name.replace(" ", "_")[:25]
-    suffix = random.randint(10, 99)
-    folder_name = f"{model_name}_{source_basename}_{timestamp}_baroque_{preset_tag}_{suffix}"
+    artifact_tag = f"_{artifact_name}" if artifact_name != "none" else ""
+    folder_name = f"{model_name}_{source_basename}_{timestamp}_baroque_{preset_name}{artifact_tag}_{seed % 100:02d}"
     folder_name = re.sub(r'[<>:"/\\|?*]', '_', folder_name)
 
     if args.local_output_dir:
@@ -453,18 +495,13 @@ def main():
         output_dir = os.path.join(os.path.expanduser("~/.openclaw/workspace/shared"), folder_name)
     os.makedirs(output_dir, exist_ok=True)
 
-    seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
-    timings = {}
-
     log(output_dir, "=" * 60)
-    log(output_dir, "BAROQUE SURROUND WORKFLOW START")
-    log(output_dir, f"Source:         {source}")
-    log(output_dir, f"Preset:         {preset_name}")
-    log(output_dir, f"Prompt:         {inpaint_prompt[:100]}")
-    log(output_dir, f"Strength:       {inpaint_strength}")
-    log(output_dir, f"Transition:     {args.transition}")
-    log(output_dir, f"Seed:           {seed}")
-    log(output_dir, f"Output dir:     {output_dir}")
+    log(output_dir, "BAROQUE SURROUND v2")
+    log(output_dir, f"Source:    {source}")
+    log(output_dir, f"Preset:    {preset_name}")
+    log(output_dir, f"Artifact:  {artifact_name}")
+    log(output_dir, f"Seed:      {seed}")
+    log(output_dir, f"Prompt:    {bg_prompt[:120]}...")
     log(output_dir, "=" * 60)
 
     # Load original
@@ -472,301 +509,110 @@ def main():
     img_orig.save(os.path.join(output_dir, "0_original.jpg"), "JPEG", quality=95)
     w, h = img_orig.size
     short_edge = min(w, h)
+    src_f = np.array(img_orig).astype(np.float32)
 
-    # --- Step 1: Extract subject mask ---
+    # --- Steps 1 & 2: PARALLEL — mask extraction + BG generation ---
     t0 = time.time()
-    log(output_dir, "--- Step 1/5: Extract subject mask (BiRefNet) ---")
-    mask, mask_info = build_mask(img_orig, affect="subject", exclude="", output_dir=output_dir, feather=0)
-    if mask is None:
-        log(output_dir, "Subject extraction failed — cannot proceed", "ERROR")
+    log(output_dir, "Steps 1+2: Extracting mask + generating BG (parallel)...")
+
+    mask_result = {}
+    bg_result = {}
+    t_mask = threading.Thread(target=extract_mask_thread, args=(img_orig, w, h, output_dir, mask_result))
+    t_bg = threading.Thread(target=generate_bg_thread, args=(bg_prompt, w, h, output_dir, seed, bg_result))
+    t_mask.start()
+    t_bg.start()
+    t_mask.join()
+    t_bg.join()
+
+    if "error" in mask_result:
+        log(output_dir, f"Mask extraction failed: {mask_result['error']}", "ERROR")
         sys.exit(1)
-    # Ensure mask is same size as original
-    if mask.size != (w, h):
-        mask = mask.resize((w, h), Image.LANCZOS)
-    log(output_dir, f"Mask: engine={mask_info['engine']}, coverage={mask_info['coverage_pct']}%")
-    mask.save(os.path.join(output_dir, "1_mask_raw.png"))
-    timings["extract"] = time.time() - t0
-    log(output_dir, f"Step 1 done ({timings['extract']:.1f}s)")
+    if "error" in bg_result:
+        log(output_dir, f"BG generation failed: {bg_result['error']}", "ERROR")
+        sys.exit(1)
 
-    # --- Step 2: Build masks ---
-    t0 = time.time()
-    log(output_dir, "--- Step 2/6: Build masks (tight edge + spot bleeds) ---")
+    mask = mask_result["mask"]
+    mask_info = mask_result["mask_info"]
+    bg_img = bg_result["bg"]
 
-    mask_arr = np.array(mask).astype(np.float32) / 255.0
-    mask_binary = (mask_arr > 0.5).astype(np.uint8)
-    struct = ndimage.generate_binary_structure(2, 1)
-
-    # TIGHT feather: 1-2 pixels only — no soft halo
-    feather_px = max(1, min(2, int(short_edge * 0.002)))
-    mask_feathered_arr = np.array(
-        Image.fromarray((mask_binary * 255).astype(np.uint8), "L").filter(
-            ImageFilter.GaussianBlur(radius=feather_px))
-    ).astype(np.float32) / 255.0
-
-    # SPOT BLEEDS: 2-3 locations on the body outline where BG "engulfs" the subject
-    # These are large, organic blobs that eat into the subject edge
-    rng_bleed = np.random.RandomState(seed + 33)
-    # Find contour points (edge of subject mask)
-    edge = ndimage.binary_dilation(mask_binary, struct, 1).astype(np.float32) - mask_binary.astype(np.float32)
-    edge_ys, edge_xs = np.where(edge > 0.5)
-
-    bleed_mask = np.zeros((h, w), dtype=np.float32)
-    if len(edge_ys) > 0:
-        num_spots = rng_bleed.randint(2, 4)  # 2-3 spots
-        # Pick spots biased toward lower body (y > 40% of image height)
-        lower_idx = edge_ys > h * 0.4
-        if lower_idx.any():
-            candidate_ys = edge_ys[lower_idx]
-            candidate_xs = edge_xs[lower_idx]
+    # Check BG quality
+    bg_quality = check_image_quality(bg_img, "BG", output_dir)
+    if not bg_quality["ok"]:
+        log(output_dir, "BG quality check failed — retrying with different seed", "WARN")
+        bg_result2 = {}
+        generate_bg_thread(bg_prompt, w, h, output_dir, seed + 1, bg_result2)
+        if "bg" in bg_result2:
+            bg_img = bg_result2["bg"]
         else:
-            candidate_ys, candidate_xs = edge_ys, edge_xs
+            log(output_dir, "BG retry also failed — proceeding with original", "WARN")
 
-        for _ in range(num_spots):
-            idx = rng_bleed.randint(0, len(candidate_ys))
-            cy, cx = int(candidate_ys[idx]), int(candidate_xs[idx])
-            # Blob radius: 3-8% of short edge
-            blob_r = int(short_edge * rng_bleed.uniform(0.03, 0.08))
-            # Gaussian blob centered on the edge point, extending INTO the subject
-            yy_b, xx_b = np.ogrid[0:h, 0:w]
-            dist_sq = (yy_b - cy) ** 2 + (xx_b - cx) ** 2
-            blob = np.exp(-dist_sq / (2 * (blob_r * 0.5) ** 2))
-            # Only apply where currently inside subject (engulf effect)
-            blob *= mask_binary
-            bleed_mask = np.maximum(bleed_mask, blob)
-            log(output_dir, f"  Bleed spot at ({cx},{cy}), radius={blob_r}px")
+    mask_binary = (np.array(mask) > 127).astype(np.uint8)
+    t_parallel = time.time() - t0
+    log(output_dir, f"Steps 1+2 done ({t_parallel:.1f}s) — mask={mask_info['coverage_pct']}%")
 
-        # Smooth and cap
-        bleed_mask = ndimage.gaussian_filter(bleed_mask, sigma=max(2, int(short_edge * 0.008)))
-        bleed_mask = np.clip(bleed_mask, 0, 1)
-
-    # Punch bleed holes into the composite mask
-    bleed_strength = 0.7
-    composite_mask_arr = mask_feathered_arr * (1.0 - bleed_mask * bleed_strength)
-    composite_mask_arr = np.clip(composite_mask_arr, 0, 1)
-
-    mask_feathered = Image.fromarray((composite_mask_arr * 255).astype(np.uint8), "L")
-    mask_feathered.save(os.path.join(output_dir, "2_composite_mask.png"))
-    Image.fromarray((bleed_mask * 255).astype(np.uint8), "L").save(
-        os.path.join(output_dir, "2_bleed_spots.png"))
-
-    # Inpaint mask for the generate path (not used in generate mode, but needed for inpaint fallback)
-    tight_expand = max(1, int(short_edge * 0.003))
-    mask_tight = ndimage.binary_dilation(mask_binary, structure=struct, iterations=tight_expand)
-    mask_tight_pil = Image.fromarray((mask_tight.astype(np.uint8) * 255), "L")
-    inpaint_mask = ImageOps.invert(mask_tight_pil)
-    mask_expanded_pil = mask_tight_pil
-
-    bg_coverage = np.mean(np.array(inpaint_mask) > 127) * 100
-    log(output_dir, f"Masks: feather={feather_px}px, {num_spots if len(edge_ys) > 0 else 0} bleed spots, BG={bg_coverage:.1f}%")
-    timings["mask_prep"] = time.time() - t0
-    log(output_dir, f"Step 2 done ({timings['mask_prep']:.1f}s)")
-
-    # --- Step 3: Generate or inpaint background ---
+    # --- Steps 3-6: Composite pipeline (local, fast) ---
     t0 = time.time()
-    import requests as req_lib
+    final_img = composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
+    t_composite = time.time() - t0
+    log(output_dir, f"Steps 3-6 done ({t_composite:.1f}s)")
 
-    if args.method == "generate":
-        # GENERATE BG FROM SCRATCH — independent of source photo's darkness
-        log(output_dir, "--- Step 3/5: Generate BG from scratch (text-to-image) ---")
-        # Add "NO person" to prevent generating figures in the BG
-        bg_prompt = inpaint_prompt + ", NO person, NO figure, NO face, just abstract painterly forms and shapes"
-        bg_result = generate_bg(bg_prompt, w, h, output_dir, seed=seed)
-        if bg_result is None:
-            log(output_dir, "BG generation failed — cannot proceed", "ERROR")
-            sys.exit(1)
-        if bg_result.size != (w, h):
-            bg_result = bg_result.resize((w, h), Image.LANCZOS)
-        inpainted = bg_result
-        inpainted.save(os.path.join(output_dir, "3_generated_bg.jpg"), "JPEG", quality=95)
-    else:
-        # INPAINT — replace existing BG via Flux inpainting (works better on light BGs)
-        log(output_dir, "--- Step 3/5: Inpaint surround via fal.ai ---")
-        log(output_dir, "Uploading image to fal CDN...")
-        image_url = upload_pil_image(img_orig, fmt="JPEG")
-        log(output_dir, "Uploading inpainting mask to fal CDN...")
-        mask_url = upload_pil_image(inpaint_mask, fmt="PNG")
-        inpainted = run_inpainting(
-            image_url, mask_url, inpaint_prompt, inpaint_negative,
-            inpaint_strength, output_dir, seed=seed,
-        )
-        if inpainted is None:
-            log(output_dir, "Inpainting failed — cannot proceed", "ERROR")
-            sys.exit(1)
-        if inpainted.size != (w, h):
-            inpainted = inpainted.resize((w, h), Image.LANCZOS)
-        inpainted.save(os.path.join(output_dir, "3_inpainted_raw.jpg"), "JPEG", quality=95)
+    # Save composite
+    final_path = os.path.join(output_dir, "3_final.jpg")
+    final_img.save(final_path, "JPEG", quality=95)
 
-    timings["bg"] = time.time() - t0
-    log(output_dir, f"Step 3 done ({timings['bg']:.1f}s)")
+    # Quality check
+    quality_final = check_image_quality(final_img, "FINAL", output_dir)
 
-    # --- Step 4: Color-match subject to BG ---
-    t0 = time.time()
-    log(output_dir, "--- Step 4/6: Color-match subject to BG ---")
-    import cv2
-
-    bg_arr = np.array(inpainted).astype(np.float32)
-    orig_arr = np.array(img_orig).astype(np.float32)
-    mask_arr_f = np.array(mask_feathered).astype(np.float32) / 255.0
-
-    # LAB color transfer: shift subject colors toward BG color distribution
-    # This is more perceptually uniform than RGB shifting
-    try:
-        orig_lab = cv2.cvtColor(np.array(img_orig), cv2.COLOR_RGB2LAB).astype(np.float32)
-        bg_lab = cv2.cvtColor(np.array(inpainted), cv2.COLOR_RGB2LAB).astype(np.float32)
-        subj_pixels = mask_arr_f > 0.5
-        bg_pixels_m = mask_arr_f < 0.3
-        if subj_pixels.any() and bg_pixels_m.any():
-            for ch in range(3):
-                s_mean = orig_lab[:, :, ch][subj_pixels].mean()
-                s_std = orig_lab[:, :, ch][subj_pixels].std() + 1e-8
-                b_mean = bg_lab[:, :, ch][bg_pixels_m].mean()
-                b_std = bg_lab[:, :, ch][bg_pixels_m].std() + 1e-8
-                # Partial transfer: 40% shift toward BG distribution
-                shift = 0.40
-                new_mean = s_mean + (b_mean - s_mean) * shift
-                new_std = s_std + (b_std - s_std) * shift * 0.3
-                shifted = (orig_lab[:, :, ch] - s_mean) * (new_std / s_std) + new_mean
-                # Apply across entire subject, stronger at edges:
-                # edges=100% of shift, center of subject=40% of shift
-                edge_w = np.clip(1.0 - (mask_arr_f - 0.2) / 0.6, 0.4, 1.0)
-                orig_lab[:, :, ch] = orig_lab[:, :, ch] * (1 - edge_w) + shifted * edge_w
-            # Only shift chrominance (a, b channels), preserve luminance (L)
-            # Actually keep L shift too but at half strength — we want tonal harmony
-            orig_lab = np.clip(orig_lab, 0, 255).astype(np.uint8)
-            orig_arr = cv2.cvtColor(orig_lab, cv2.COLOR_LAB2RGB).astype(np.float32)
-            log(output_dir, "LAB color transfer: 40% shift (edges) / 16% (center) toward BG")
-    except Exception as e:
-        log(output_dir, f"LAB color transfer failed: {e}", "WARN")
-
-    timings["color"] = time.time() - t0
-    log(output_dir, f"Step 4 done ({timings['color']:.1f}s)")
-
-    # --- Step 5: Composite + foreground overlay ---
-    t0 = time.time()
-    log(output_dir, "--- Step 5/6: Composite + foreground overlay ---")
-
-    # Main composite: subject over BG using the tight mask with bleed spots
-    mask_3ch = mask_arr_f[:, :, np.newaxis]
-    composite_arr = orig_arr * mask_3ch + bg_arr * (1 - mask_3ch)
-
-    # --- FOREGROUND OVERLAY: generate a second BG and overlay on lower body ---
-    # This creates the "engulfing" effect where forms wrap AROUND the subject
-    if args.method == "generate":
-        log(output_dir, "Generating foreground overlay (same style, placed over lower body)...")
-        fg_prompt = inpaint_prompt + ", NO person, NO figure, NO face, wispy foreground elements, semi-transparent flowing forms"
-        fg_result = generate_bg(fg_prompt, w, h, output_dir, seed=seed + 999)
-        if fg_result is not None:
-            if fg_result.size != (w, h):
-                fg_result = fg_result.resize((w, h), Image.LANCZOS)
-            fg_arr = np.array(fg_result).astype(np.float32)
-
-            # Foreground mask: only show on lower 60% of image, NOT on face/upper body
-            yy_fg = np.linspace(0, 1, h)[:, np.newaxis]
-            fg_visibility = np.clip((yy_fg - 0.4) / 0.3, 0, 1)  # 0 above 40%, ramps to 1 by 70%
-            fg_visibility = np.broadcast_to(fg_visibility, (h, w)).copy()
-            # Reduce visibility where subject face is (upper part of subject)
-            yy_full = np.broadcast_to(yy_fg, (h, w))
-            face_protection = np.clip(mask_arr_f * (1.0 - yy_full * 0.5), 0, 1)
-            fg_visibility = fg_visibility * (1.0 - face_protection * 0.8)
-            # Make it patchy — only some areas show through
-            rng_fg = np.random.RandomState(seed + 777)
-            fg_noise = ndimage.gaussian_filter(rng_fg.randn(h, w), sigma=max(15, int(short_edge * 0.06)))
-            fg_noise = (fg_noise - fg_noise.min()) / (fg_noise.max() - fg_noise.min() + 1e-8)
-            fg_visibility *= np.clip(fg_noise * 2 - 0.5, 0, 1)  # threshold: ~50% coverage
-            fg_visibility = ndimage.gaussian_filter(fg_visibility, sigma=max(3, int(short_edge * 0.015)))
-
-            # Use brightness of FG to modulate opacity (brighter = more visible, dark = transparent)
-            fg_brightness = np.mean(fg_arr, axis=2) / 255.0
-            fg_visibility *= np.clip(fg_brightness * 1.5, 0, 1)
-
-            fg_opacity = 0.5  # max overlay strength
-            fg_weight = np.clip(fg_visibility * fg_opacity, 0, 1)[:, :, np.newaxis]
-            composite_arr = composite_arr * (1 - fg_weight) + fg_arr * fg_weight
-            log(output_dir, f"Foreground overlay applied (opacity={fg_opacity}, lower body)")
-        else:
-            log(output_dir, "Foreground generation failed — skipping overlay", "WARN")
-
-    composite = Image.fromarray(np.clip(composite_arr, 0, 255).astype(np.uint8))
-    composite.save(os.path.join(output_dir, "5_composite.jpg"), "JPEG", quality=95)
-
-    timings["composite"] = time.time() - t0
-    log(output_dir, f"Step 5 done ({timings['composite']:.1f}s)")
-
-    # --- Step 6: Evaluate & output ---
-    t0 = time.time()
-    log(output_dir, "--- Step 6/6: Quality evaluation & output ---")
-
-    quality_final = check_image_quality(composite, "FINAL", output_dir)
-
+    # Gemini evaluation
     eval_result = None
     if args.auto_correct:
-        eval_result = evaluate_with_gemini(composite, output_dir, original_img=img_orig)
-    else:
-        eval_result = evaluate_with_gemini(composite, output_dir, original_img=img_orig)
+        eval_result = evaluate_with_gemini(final_img, output_dir, original_img=img_orig)
 
-    final_img = composite
-    final_path = os.path.join(output_dir, "5_composite.jpg")
-
-    # Copy final to finals folder
+    # Copy to finals
     local_out = args.local_output_dir or os.path.expanduser("~/.openclaw/workspace/shared")
-    finals_dir = os.path.join(os.path.expanduser(local_out), "finals")
+    finals_dir = os.path.join(local_out, "finals")
     os.makedirs(finals_dir, exist_ok=True)
     finals_name = os.path.basename(output_dir) + ".jpg"
     finals_dest = os.path.join(finals_dir, finals_name)
-    with open(final_path, "rb") as f_in:
-        with open(finals_dest, "wb") as f_out:
-            f_out.write(f_in.read())
-    log(output_dir, f"Final copied to: {finals_dest}")
+    final_img.save(finals_dest, "JPEG", quality=95)
+    log(output_dir, f"Final: {finals_dest}")
 
     # Push to phone
     try:
         from notify import push_image
         src_name = os.path.splitext(os.path.basename(args.source))[0]
-        push_image(finals_dest, title=f"Baroque — {src_name}", body=f"{preset_name}")
-        log(output_dir, "Pushed to phone")
+        art_label = f" +{artifact_name}" if artifact_name != "none" else ""
+        push_image(finals_dest, title=f"Baroque {preset_name}{art_label}", body=f"{src_name}")
     except Exception as e:
-        log(output_dir, f"Push notification failed: {e}", "WARN")
+        log(output_dir, f"Push failed: {e}", "WARN")
 
-    # Copy script for reproducibility
+    # Copy script
     try:
-        script_path = os.path.abspath(__file__)
-        shutil.copy2(script_path, os.path.join(output_dir, f"workflow_script_{os.path.basename(script_path)}"))
+        shutil.copy2(os.path.abspath(__file__), os.path.join(output_dir, "baroque-surround.py"))
     except Exception:
         pass
 
-    timings["output"] = time.time() - t0
-    log(output_dir, f"Step 5 done ({timings['output']:.1f}s)")
-
-    # --- Summary ---
-    total = sum(timings.values())
+    # Summary
+    total = t_parallel + t_composite
     score_str = f"{eval_result['score']}/10 — {eval_result.get('critique', '')}" if eval_result else "N/A"
-
     print(f"""
-============================================================
-  BAROQUE SURROUND SUMMARY
-============================================================
-  Source:          {source}
-  Preset:          {preset_name}
-  Strength:        {inpaint_strength}
-  Transition:      {args.transition}
-  Seed:            {seed}
+{'='*60}
+  BAROQUE SURROUND v2 — DONE
+{'='*60}
+  Source:    {source}
+  Preset:    {preset_name}
+  Artifact:  {artifact_name}
+  Seed:      {seed}
 
-  Step Timings:
-    1. Extract subject        {timings.get('extract', 0):>8.1f}s
-    2. Mask expand/feather    {timings.get('mask_prep', 0):>8.1f}s
-    3. Generate/inpaint BG     {timings.get('bg', 0):>8.1f}s
-    4. Color match            {timings.get('color', 0):>8.1f}s
-    5. Composite + FG overlay {timings.get('composite', 0):>8.1f}s
-    6. Evaluate & output      {timings.get('output', 0):>8.1f}s
-    TOTAL                     {total:>8.1f}s
+  Timing:
+    Steps 1+2 (mask+BG parallel)  {t_parallel:>6.1f}s
+    Steps 3-6 (composite local)   {t_composite:>6.1f}s
+    TOTAL                         {total:>6.1f}s
 
-  Quality Report:
-    Final image:   brightness={quality_final['brightness']}  contrast={quality_final['contrast']}  entropy={quality_final['entropy']}
-    Aesthetic:     {score_str}
-
-  Output:
-    Working dir:   {output_dir}
-============================================================""")
+  Quality:   brightness={quality_final['brightness']} contrast={quality_final['contrast']} entropy={quality_final['entropy']}
+  Aesthetic:  {score_str}
+  Output:    {finals_dest}
+{'='*60}""")
 
 
 if __name__ == "__main__":

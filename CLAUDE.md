@@ -1,6 +1,6 @@
 # OpenClaw Scripts
 
-Photo transformation pipeline for portrait/boudoir photography. Eleven tools with unified `--affect`/`--exclude` masking.
+Photo transformation pipeline for portrait/boudoir photography. Thirteen tools with unified `--affect`/`--exclude` masking.
 
 ## Environment
 
@@ -228,31 +228,53 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 **Best with:** Front-facing portraits where FaceLandmarker detects both faces. Adjacent file numbers (same shoot) give best alignment.
 
 ### `scripts/workflows/baroque-surround.py`
-**Generative painterly background.** Extracts subject, generates a new BG from scratch via Flux text-to-image, composites with tight mask + spot bleeds + foreground overlay + LAB color matching.
+**Generative painterly background (v2).** Extracts subject, generates dramatic BG via Flux text-to-image (with optional story elements), composites using Laplacian pyramid blending + light wrap + LAB edge match + LAB 60% color wash. Steps 1+2 run in parallel (~15-20s total, ~$0.04/image).
 
-**STATUS: Work in progress.** The generate-BG-from-scratch approach works (visible amorphic forms) but the composited result still looks like a cutout on many photos, especially dark-BG sources. The core unsolved problem: making subject and BG feel like they belong to the same image (same lighting, same color temperature, same painterly quality).
-
-**What works:** ethereal and silk presets, LAB 70%+ color transfer, the relit-then-composite approach (relight original → extract → LAB match → composite onto generated BG).
-
-**What doesn't work:** Flux inpainting on dark BGs (generates black), Flux img2img on dark photos (also black), IC-Light relighting (replaces BG entirely, doesn't relight the scene).
-
-**Options being explored:**
-1. Gradient-mask inpainting (like Photoshop generative fill) — soft radial mask instead of binary cutout
-2. Tensor Art img2img instead of Flux (different model may handle dark inputs better)
-3. SDXL inpainting with gradient masks
-4. Whole-image img2img at moderate strength with selective blend-back (tested, Flux gives black)
-5. The approach from reference artist: likely heavy PS work with Firefly generative fill + manual blending
+**Pipeline:**
+1. Extract subject mask (BiRefNet) — parallel with step 2
+2. Generate BG (Flux text-to-image) — parallel with step 1
+3. Laplacian pyramid blend (6 levels) — frequency-aware compositing
+4. Light wrap — BG bright areas spill onto subject edges (25%)
+5. LAB edge color match — 40% shift on inner edge band
+6. Full-image LAB 60% wash — unifies color temperature across entire image
 
 **13 presets:** baroque, renaissance, dark-romantic, ethereal, smoke, underwater, ink-water, aurora, silk, embers, curtains, whipped-cream, bubbles
 
+**14 artifacts** (story elements in BG): wings, petals, hands, faces, chains, serpents, butterflies, thorns, feathers, flames, flowers, skulls, ribbons, eyes. Use `--artifact random` for random selection.
+
 **Usage:**
 ```bash
-./scripts/workflows/baroque-surround.py --source photo.jpg --preset ethereal
-./scripts/workflows/baroque-surround.py --source photo.jpg --preset silk --method generate
+./scripts/workflows/baroque-surround.py --source photo.jpg --preset smoke --artifact wings
+./scripts/workflows/baroque-surround.py --source photo.jpg --preset ink-water --artifact butterflies
+./scripts/workflows/baroque-surround.py --source photo.jpg --prompt "custom prompt" --artifact random
 ./scripts/workflows/baroque-surround.py --list-presets
+./scripts/workflows/baroque-surround.py --list-artifacts
 ```
 
-**All flags:** `--source`, `--preset`, `--prompt` (custom), `--negative`, `--strength`, `--method` (generate/inpaint), `--transition`, `--noise`, `--seed`, `--auto-correct`, `--output-to`, `--local-output-dir`, `--list-presets`
+**All flags:** `--source`, `--preset`, `--prompt` (custom), `--negative`, `--artifact` (story element or "random"), `--seed`, `--auto-correct`, `--output-to`, `--local-output-dir`, `--list-presets`, `--list-artifacts`
+
+**Best combos (from testing):** ink-water+butterflies, ink-water+ribbons, silk+petals, curtains+flames, ethereal+wings, dark-romantic+faces, aurora+ribbons. Chains material-swap with baroque-surround for unified ink-body-on-ink-BG effect.
+
+### `scripts/workflows/smart-crop.py`
+**Intelligent photo cropping.** Analyzes subject position (BiRefNet mask + MediaPipe pose), generates 12 crop suggestions including standard compositions and unusual/artistic crops. Dual-panel overlay for easy comparison.
+
+**12 crop types:** tight subject, rule of thirds, square, 4:5 portrait, 16:9 cinematic, face close-up, chin-down (headless), knee-up, chin-to-knee, torso only, waist-down, off-center. Falls back to mask-based body estimation when pose detection fails.
+
+**Usage:**
+```bash
+./scripts/workflows/smart-crop.py --source photo.jpg --show-options          # show numbered options
+./scripts/workflows/smart-crop.py --source photo.jpg --crop 9                # apply crop #9
+./scripts/workflows/smart-crop.py --source photo.jpg --crop 3 --outpaint    # extend canvas with AI fill
+./scripts/workflows/smart-crop.py --source photo.jpg --auto-align --show-options
+./scripts/workflows/smart-crop.py --source photo.jpg --custom 100,200,900,1800
+```
+
+**All flags:** `--source`, `--show-options`, `--crop N`, `--custom x1,y1,x2,y2`, `--outpaint` (AI canvas fill), `--auto-align` (straighten), `--output-to`, `--local-output-dir`
+
+**Tips:**
+- Most useful for unprocessed photos; processed usually don't need cropping
+- `--show-options` produces a dual-panel image (portrait=side-by-side, landscape=stacked)
+- Unusual crops (chin-down, torso only) work even without pose detection via mask shape estimation
 
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.
@@ -274,8 +296,12 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 
 ### What works well — do more of this
 - **Ink dissolution ink-wash** — user's favorite new tool. Radial gradient from face, texture overlay. All favorited.
-- **Baroque: generate-BG-from-scratch** — generating BG independently via Flux text-to-image, then compositing. Much better than inpainting (which generates black on dark photos). Ethereal and silk presets work best.
-- **Baroque: relit-then-composite** — relight original photo to bake warm tones → extract subject → LAB match → composite onto generated BG. Best color integration so far.
+- **Baroque v2 pipeline** — Laplacian pyramid blend + light wrap + LAB edge match + LAB 60% wash. The LAB wash is the key — shifts entire image's color distribution toward BG. Ink-water+butterflies, silk+petals, aurora+ribbons are top combos.
+- **Laplacian pyramid blending** beats simple feathered compositing. Blends each frequency band separately — low frequencies unify color/lighting broadly, high frequencies keep crisp detail edges.
+- **Material-swap → baroque-surround chaining** — make subject ink-splashed, then composite onto ink-water BG. The LAB wash unifies both into one palette.
+- **Poisson blending (cv2.seamlessClone)** — tested but doesn't help when subject and BG have different lighting. Edge blending can't fix a lighting mismatch.
+- **Tensor Art IMAGE_TO_INPAINT stage** — works, respects masks properly (unlike maskImageResourceId in DIFFUSION stage which is ignored). But SD1.5 model can't generate interesting content through inpainting.
+- **Flux inpainting NSFW blocking** — confirmed. SFW photos work, NSFW returns black. enable_safety_checker only disables OUTPUT checking, not INPUT scanning.
 - **Torn reveal** — fractal tear edges + cone shape + fiber bursts. Works best with front-facing portraits, adjacent file numbers.
 - **Bioluminescent + underwater photos** — natural fit, consistently scores 9. The style matches the water context.
 - **Colored gel relighting on shibari** — neon gels, pink+cyan, amber+violet. Very photographic, dramatic.

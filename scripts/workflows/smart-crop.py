@@ -272,68 +272,100 @@ def generate_crop_options(w, h, mask_binary, landmarks, face_bbox):
 
 
 def draw_options_overlay(img, options):
-    """Draw numbered crop rectangles on the image."""
-    overlay = img.copy()
-    draw = ImageDraw.Draw(overlay)
+    """Draw numbered crop rectangles split across two side-by-side (or stacked) panels.
+    Options are sorted top-to-bottom by upper-left Y, then split so spatially
+    close crops land on different panels."""
+    w, h = img.size
+
+    # Sort options by upper-left Y coordinate, renumber
+    sorted_opts = sorted(enumerate(options), key=lambda t: t[1][2])  # sort by y1
+    # Renumber 1..N in top-to-bottom order
+    renumbered = []
+    for new_idx, (orig_idx, opt) in enumerate(sorted_opts):
+        renumbered.append((new_idx + 1, opt))  # (display_number, (name, x1, y1, x2, y2))
+
+    # Split into two groups: alternate so nearby crops go to different panels
+    group_a = [renumbered[i] for i in range(0, len(renumbered), 2)]  # odd positions
+    group_b = [renumbered[i] for i in range(1, len(renumbered), 2)]  # even positions
 
     colors = [
-        (255, 50, 50), (50, 255, 50), (50, 50, 255), (255, 255, 50),
+        (255, 50, 50), (50, 255, 50), (80, 80, 255), (255, 255, 50),
         (255, 50, 255), (50, 255, 255), (255, 150, 50), (150, 50, 255),
-        (50, 255, 150), (255, 100, 100), (100, 255, 100), (100, 100, 255),
+        (50, 255, 150), (255, 100, 100), (100, 255, 100), (150, 150, 255),
     ]
 
-    w, h = img.size
-    font_size = max(16, int(min(w, h) * 0.02))
+    font_size = max(14, int(min(w, h) * 0.018))
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
     except Exception:
         font = ImageFont.load_default()
 
-    # Track label positions to avoid overlap
-    used_label_rects = []
+    def draw_panel(base_img, group):
+        panel = base_img.copy()
+        draw = ImageDraw.Draw(panel)
+        used_rects = []  # track both label AND border rects for overlap
 
-    for i, (name, x1, y1, x2, y2) in enumerate(options):
-        color = colors[i % len(colors)]
-        # Thinner border
-        thickness = max(1, int(min(w, h) * 0.0015))
-        for t in range(thickness):
-            draw.rectangle([x1 + t, y1 + t, x2 - t, y2 - t], outline=color)
+        for num, (name, x1, y1, x2, y2) in group:
+            color = colors[(num - 1) % len(colors)]
+            thickness = max(1, int(min(w, h) * 0.0012))
 
-        # Label with number and name
-        label = f"{i + 1}. {name}"
-        bbox = draw.textbbox((0, 0), label, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            # Draw border
+            for t in range(thickness):
+                draw.rectangle([x1 + t, y1 + t, x2 - t, y2 - t], outline=color)
 
-        # Position label inside top-left of crop rect, offset down 20%
-        label_offset_y = int(th * 0.2)
-        lx = x1 + thickness + 4
-        ly = y1 + thickness + 4 + label_offset_y
+            # Label
+            label = f"{num}. {name}"
+            bbox = draw.textbbox((0, 0), label, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-        # Nudge down if overlapping with existing labels
-        for _ in range(20):
-            label_rect = (lx - 2, ly - 2, lx + tw + 4, ly + th + 4)
-            overlap = False
-            for ur in used_label_rects:
-                if not (label_rect[2] < ur[0] or label_rect[0] > ur[2] or
-                        label_rect[3] < ur[1] or label_rect[1] > ur[3]):
-                    overlap = True
+            # Start position: inside top-left, slightly offset down
+            lx = x1 + thickness + 4
+            ly = y1 + thickness + 4 + int(th * 0.3)
+
+            # Nudge down to avoid overlapping any existing label or border line
+            for _ in range(30):
+                label_rect = (lx - 2, ly - 2, lx + tw + 4, ly + th + 4)
+                overlap = False
+                for ur in used_rects:
+                    if not (label_rect[2] < ur[0] or label_rect[0] > ur[2] or
+                            label_rect[3] < ur[1] or label_rect[1] > ur[3]):
+                        overlap = True
+                        break
+                if not overlap:
                     break
-            if not overlap:
-                break
-            ly += th + 6  # push down below the overlapping label
+                ly += th + 4
 
-        # Clamp to image bounds
-        if ly + th > h:
-            ly = y1 - th - 4
-        if lx + tw > w:
-            lx = x2 - tw - 4
+            # Clamp
+            pw, ph = base_img.size
+            if ly + th > ph:
+                ly = y1 - th - 4
+            if lx + tw > pw:
+                lx = x2 - tw - 4
+            lx = max(2, lx)
+            ly = max(2, ly)
 
-        label_rect = (lx - 2, ly - 2, lx + tw + 4, ly + th + 4)
-        used_label_rects.append(label_rect)
-        draw.rectangle(label_rect, fill=(0, 0, 0, 200))
-        draw.text((lx, ly), label, fill=color, font=font)
+            label_rect = (lx - 2, ly - 2, lx + tw + 4, ly + th + 4)
+            used_rects.append(label_rect)
+            draw.rectangle(label_rect, fill=(0, 0, 0, 200))
+            draw.text((lx, ly), label, fill=color, font=font)
 
-    return overlay
+        return panel
+
+    panel_a = draw_panel(img, group_a)
+    panel_b = draw_panel(img, group_b)
+
+    # Combine: portrait → side by side, landscape → stacked
+    is_portrait = h > w
+    if is_portrait:
+        combined = Image.new("RGB", (w * 2, h))
+        combined.paste(panel_a, (0, 0))
+        combined.paste(panel_b, (w, 0))
+    else:
+        combined = Image.new("RGB", (w, h * 2))
+        combined.paste(panel_a, (0, 0))
+        combined.paste(panel_b, (0, h))
+
+    return combined, renumbered
 
 
 def apply_crop(img, x1, y1, x2, y2):
@@ -477,30 +509,35 @@ def main():
 
     # Generate options
     options = generate_crop_options(w, h, mask_binary, landmarks, face_bbox)
-    print(f"\nGenerated {len(options)} crop options:")
-    for i, (name, x1, y1, x2, y2) in enumerate(options):
-        cw, ch = x2 - x1, y2 - y1
-        extends = ""
-        if x1 < 0 or y1 < 0 or x2 > w or y2 > h:
-            extends = " [NEEDS OUTPAINT]"
-        print(f"  {i + 1:>2}. {name:<25} ({x1},{y1})-({x2},{y2}) = {cw}x{ch}{extends}")
 
     os.makedirs(FINALS, exist_ok=True)
     src_name = os.path.splitext(os.path.basename(source))[0]
 
-    # Show options mode
+    # Show options mode — draw overlay, get renumbered list
+    renumbered = None
     if args.show_options:
-        overlay = draw_options_overlay(img, options)
+        combined, renumbered = draw_options_overlay(img, options)
         out_path = os.path.join(FINALS, f"{src_name}_crop_options.jpg")
-        overlay.save(out_path, quality=95)
+        combined.save(out_path, quality=95)
+        print(f"\nGenerated {len(options)} crop options (sorted top→bottom):")
+        for num, (name, x1, y1, x2, y2) in renumbered:
+            cw, ch = x2 - x1, y2 - y1
+            extends = " [OUTPAINT]" if (x1 < 0 or y1 < 0 or x2 > w or y2 > h) else ""
+            print(f"  {num:>2}. {name:<25} {cw}x{ch}{extends}")
         print(f"\nOptions overlay saved: {out_path}")
         try:
             from notify import push_image
             push_image(out_path, "Crop options", f"{len(options)} suggestions")
         except Exception:
             pass
+    else:
+        # Just print unsorted for reference
+        print(f"\nGenerated {len(options)} crop options:")
+        for i, (name, x1, y1, x2, y2) in enumerate(options):
+            cw, ch = x2 - x1, y2 - y1
+            print(f"  {i + 1:>2}. {name:<25} {cw}x{ch}")
 
-    # Apply crop
+    # Apply crop — use renumbered order if show-options was used
     crop_coords = None
     crop_name = None
 
@@ -514,14 +551,25 @@ def main():
             sys.exit(1)
 
     elif args.crop is not None:
-        idx = args.crop - 1
-        if 0 <= idx < len(options):
-            crop_name, *crop_coords = options[idx]
-            crop_coords = tuple(crop_coords)
-            print(f"\nApplying crop {args.crop}: {crop_name}")
+        # Match against renumbered list if available, else original order
+        if renumbered:
+            match = [opt for num, opt in renumbered if num == args.crop]
+            if match:
+                crop_name, *crop_coords = match[0]
+                crop_coords = tuple(crop_coords)
+                print(f"\nApplying crop {args.crop}: {crop_name}")
+            else:
+                print(f"ERROR: Crop {args.crop} not found (1-{len(options)})")
+                sys.exit(1)
         else:
-            print(f"ERROR: Crop {args.crop} out of range (1-{len(options)})")
-            sys.exit(1)
+            idx = args.crop - 1
+            if 0 <= idx < len(options):
+                crop_name, *crop_coords = options[idx]
+                crop_coords = tuple(crop_coords)
+                print(f"\nApplying crop {args.crop}: {crop_name}")
+            else:
+                print(f"ERROR: Crop {args.crop} out of range (1-{len(options)})")
+                sys.exit(1)
 
     if crop_coords:
         x1, y1, x2, y2 = crop_coords

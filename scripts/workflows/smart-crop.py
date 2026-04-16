@@ -390,7 +390,7 @@ def apply_crop(img, x1, y1, x2, y2):
     return canvas
 
 
-def outpaint_fill(img, original, crop_coords, output_dir):
+def outpaint_fill(img, original, crop_coords, output_dir, prompt=None):
     """Fill black/padded areas using fal.ai inpainting."""
     import fal_client
     import requests
@@ -403,6 +403,28 @@ def outpaint_fill(img, original, crop_coords, output_dir):
     # Create mask: white where we need to fill (black/padded areas)
     gray = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY)
     mask = (gray < 5).astype(np.uint8) * 255
+
+    # Auto-detect outpaint prompt from the visible content if not given
+    if prompt is None:
+        # Sample colors from the non-black area to describe the style
+        visible = gray > 10
+        if visible.any():
+            vis_pixels = img_arr[visible].astype(np.float32)
+            mean_color = vis_pixels.mean(axis=0)
+            # Check if it looks like an art piece vs a photo
+            from PIL import ImageStat
+            entropy = img.convert("L").entropy()
+            if entropy > 6.0:
+                # High entropy = likely artistic/painterly
+                prompt = (f"seamless continuation of artistic painting, "
+                          f"matching colors and brushwork style, "
+                          f"flowing abstract forms, ink watercolor oil painting texture, "
+                          f"same color palette and mood")
+            else:
+                prompt = "natural continuation of the photograph, matching lighting color and style"
+        else:
+            prompt = "natural continuation of the photograph"
+    print(f"  Outpaint prompt: {prompt[:80]}...")
 
     # Check if there's actually anything to fill
     fill_pct = np.mean(mask > 0) * 100
@@ -435,7 +457,8 @@ def outpaint_fill(img, original, crop_coords, output_dir):
             args = {
                 "image_url": img_url,
                 "mask_url": mask_url,
-                "prompt": "natural continuation of the photograph, matching lighting color and style, seamless extension of the scene",
+                "prompt": prompt,
+                "negative_prompt": "person, human, body parts, feet, hands, face, legs, arms, fingers, toes, skin",
                 "strength": 0.95,
                 "num_images": 1,
                 "output_format": "jpeg",
@@ -479,6 +502,8 @@ def main():
                         help="Custom crop: x1,y1,x2,y2")
     parser.add_argument("--outpaint", action="store_true",
                         help="Fill extended canvas areas with AI-generated content")
+    parser.add_argument("--outpaint-prompt", type=str, default=None,
+                        help="Custom prompt for outpainting (auto-detected if not given)")
     parser.add_argument("--auto-align", action="store_true",
                         help="Auto-straighten based on shoulder/eye alignment")
     parser.add_argument("--output-to", choices=["local"], default="local")
@@ -597,7 +622,7 @@ def main():
         # Outpaint if needed and requested
         needs_outpaint = x1 < 0 or y1 < 0 or x2 > w or y2 > h
         if needs_outpaint and args.outpaint:
-            cropped = outpaint_fill(cropped, img, crop_coords, FINALS)
+            cropped = outpaint_fill(cropped, img, crop_coords, FINALS, prompt=args.outpaint_prompt)
         elif needs_outpaint:
             print("  Note: crop extends beyond image. Use --outpaint to fill.")
 

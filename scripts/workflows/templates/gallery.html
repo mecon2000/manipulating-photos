@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gallery</title>
+<style>
+  :root {
+    --bg: #0b0b0c;
+    --fg: #e9e9ea;
+    --dim: #9a9a9e;
+    --accent: #ffb347;
+    --danger: #ef5b5b;
+    --ok: #5ecb8b;
+    --panel: rgba(0,0,0,0.55);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overscroll-behavior: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  body { display: flex; flex-direction: column; height: 100vh; }
+
+  .topbar, .bottombar {
+    position: fixed; left: 0; right: 0; z-index: 10;
+    background: var(--panel); backdrop-filter: blur(8px);
+    padding: 10px 14px; font-size: 13px;
+  }
+  .topbar { top: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .bottombar { bottom: 0; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .meta .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta .sub { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .navbtn { padding: 6px 10px; background: transparent; color: var(--fg);
+    border: 1px solid #444; border-radius: 6px; font-size: 14px; }
+  .count { font-variant-numeric: tabular-nums; color: var(--dim); white-space: nowrap; }
+
+  .photo-wrap { flex: 1; display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100vh; position: relative; overflow: hidden; }
+  .photo-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .photo-wrap.zoomed { overflow: auto; }
+  .photo-wrap.zoomed img { max-width: none; max-height: none; }
+
+  .empty { color: var(--dim); text-align: center; padding: 40px; }
+
+  .btnrow { display: flex; gap: 6px; justify-content: space-between; flex-wrap: wrap; }
+  .btn { flex: 1 1 auto; min-width: 90px; padding: 12px 10px; border-radius: 8px;
+    border: none; font-size: 15px; font-weight: 600; color: #fff; cursor: pointer; }
+  .btn:active { transform: scale(0.97); }
+  .btn-dislike { background: #7a2929; }
+  .btn-fav     { background: #b8851a; }
+  .btn-edit    { background: #2b5a8f; }
+  .btn-ghost   { background: #2a2a2e; color: var(--fg); }
+  .btn-pause   { background: #3a3a40; }
+
+  .second-row { display: flex; gap: 6px; margin-top: 8px; }
+  .more-wrap { position: relative; flex: 2 1 auto; }
+  .more-menu { position: absolute; bottom: 110%; left: 0; right: 0;
+    background: #1c1c1f; border: 1px solid #333; border-radius: 8px;
+    padding: 4px; display: none; }
+  .more-menu.open { display: block; }
+  .more-menu button { display: block; width: 100%; text-align: left;
+    background: transparent; color: var(--fg); border: none; padding: 10px 12px;
+    font-size: 14px; border-radius: 6px; }
+  .more-menu button:hover, .more-menu button:active { background: #2a2a30; }
+
+  .toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); color: var(--fg); padding: 8px 16px; border-radius: 20px;
+    z-index: 20; font-size: 13px; opacity: 0; transition: opacity 0.2s; }
+  .toast.show { opacity: 1; }
+
+  /* Gallery view */
+  .tabs { display: flex; gap: 4px; }
+  .tab { padding: 6px 10px; font-size: 13px; background: transparent;
+    color: var(--dim); border: 1px solid #444; border-radius: 6px; cursor: pointer; }
+  .tab.active { color: var(--fg); background: #2a2a30; border-color: #666; }
+
+  .gallery-view { display: none; padding: 60px 10px 80px; }
+  .gallery-view.active { display: block; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+  .grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; cursor: pointer; }
+  .fav-detail { position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 30;
+    display: none; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+  .fav-detail.open { display: flex; }
+  .fav-detail img { max-width: 100%; max-height: 70vh; object-fit: contain; }
+  .fav-detail pre { background: #1a1a1d; color: #d0d0d0; padding: 10px; border-radius: 6px;
+    max-width: 100%; overflow-x: auto; font-size: 11px; margin-top: 12px; }
+  .fav-detail .close { position: absolute; top: 16px; right: 16px; font-size: 24px;
+    background: transparent; color: #fff; border: none; }
+
+  .review-view.hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="meta" id="meta">
+    <span class="title" id="title">Loading…</span>
+    <span class="sub" id="sub">—</span>
+  </div>
+  <div class="count" id="count">0 / 0</div>
+  <div class="tabs">
+    <button class="tab active" data-view="review" onclick="switchView('review')">Review</button>
+    <button class="tab" data-view="gallery" onclick="switchView('gallery')">Favs</button>
+  </div>
+</div>
+
+<div class="review-view" id="reviewView" style="flex:1; display:flex; flex-direction:column;">
+  <div class="photo-wrap" id="photoWrap">
+    <img id="photo" alt="" />
+    <div class="empty" id="empty" style="display:none;">Waiting for photos…</div>
+  </div>
+</div>
+
+<div class="gallery-view" id="galleryView">
+  <div class="grid" id="favGrid"></div>
+</div>
+
+<div class="bottombar review-view" id="bottombar">
+  <div class="btnrow">
+    <button class="btn btn-dislike" onclick="act('dislike')">👎 Delete</button>
+    <button class="btn btn-fav" onclick="act('like')">⭐ Fav</button>
+    <button class="btn btn-edit" onclick="act('edit')">✏️ Edit</button>
+  </div>
+  <div class="second-row">
+    <button class="navbtn" onclick="nav(-1)">←</button>
+    <div class="more-wrap">
+      <button class="btn btn-ghost" onclick="toggleMore()">▶ More Like This ▼</button>
+      <div class="more-menu" id="moreMenu">
+        <button onclick="more('same-style')">Same style, 4 diff photos</button>
+        <button onclick="more('same-photo')">Same photo, 4 diff styles</button>
+        <button onclick="more('similar')">Similar photos, same style</button>
+      </div>
+    </div>
+    <button class="btn btn-pause" id="pauseBtn" onclick="togglePause()">⏸</button>
+    <button class="navbtn" onclick="nav(1)">→</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="fav-detail" id="favDetail">
+  <button class="close" onclick="closeFav()">✕</button>
+  <img id="favDetailImg" />
+  <div id="favDetailMeta" style="color:#bbb; margin-top:10px; font-size:12px;"></div>
+  <pre id="favDetailCmd"></pre>
+</div>
+
+<script>
+let items = [];
+let idx = 0;
+let paused = false;
+let zoomed = false;
+let currentView = 'review';
+
+function toast(msg, kind) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderLeft = kind === 'err' ? '3px solid var(--danger)' : kind === 'ok' ? '3px solid var(--ok)' : 'none';
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), 1500);
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/queue');
+    const data = await r.json();
+    const newItems = data.pending || [];
+    const curId = items[idx] && items[idx].id;
+
+    items = newItems;
+    paused = !!(data.stats && data.stats.paused);
+    document.getElementById('pauseBtn').textContent = paused ? '▶' : '⏸';
+
+    if (curId) {
+      const ni = items.findIndex(it => it.id === curId);
+      idx = ni >= 0 ? ni : Math.min(idx, Math.max(0, items.length - 1));
+    } else {
+      idx = Math.min(idx, Math.max(0, items.length - 1));
+    }
+    render();
+  } catch (e) { /* ignore */ }
+}
+
+function render() {
+  const img = document.getElementById('photo');
+  const empty = document.getElementById('empty');
+  const count = document.getElementById('count');
+
+  if (!items.length) {
+    img.style.display = 'none';
+    empty.style.display = 'block';
+    document.getElementById('title').textContent = paused ? 'Paused' : 'Waiting for photos…';
+    document.getElementById('sub').textContent = '—';
+    count.textContent = '0 / 0';
+    return;
+  }
+  empty.style.display = 'none';
+  img.style.display = '';
+  const it = items[idx];
+  img.src = '/api/image?path=' + encodeURIComponent(it.output) + '&t=' + Date.now();
+  document.getElementById('title').textContent = it.model + ' — ' + filename(it.source);
+  const bits = [it.tool, it.preset, it.artifact].filter(Boolean).join(' · ');
+  document.getElementById('sub').textContent = bits;
+  count.textContent = (idx + 1) + ' / ' + items.length;
+}
+
+function filename(p) { return (p || '').split('/').pop(); }
+
+function nav(delta) {
+  if (!items.length) return;
+  idx = (idx + delta + items.length) % items.length;
+  zoomed = false;
+  document.getElementById('photoWrap').classList.remove('zoomed');
+  render();
+}
+
+async function act(kind) {
+  if (!items.length) return;
+  const it = items[idx];
+  const endpoint = kind === 'like' ? 'like' : kind === 'edit' ? 'edit' : 'dislike';
+  try {
+    const r = await fetch('/api/queue/' + it.id + '/' + endpoint, { method: 'POST' });
+    if (r.ok) toast(kind === 'like' ? 'Faved!' : kind === 'edit' ? 'Saved for edit' : 'Deleted', 'ok');
+    // Remove locally and advance
+    items.splice(idx, 1);
+    if (idx >= items.length) idx = Math.max(0, items.length - 1);
+    render();
+    refresh();
+  } catch (e) { toast('Error', 'err'); }
+}
+
+async function more(kind) {
+  if (!items.length) return;
+  const it = items[idx];
+  document.getElementById('moreMenu').classList.remove('open');
+  try {
+    const r = await fetch('/api/queue/' + it.id + '/more/' + kind, { method: 'POST' });
+    const data = await r.json();
+    toast('Queued ' + (data.queued || 0) + ' more', 'ok');
+  } catch (e) { toast('Error', 'err'); }
+}
+
+function toggleMore() {
+  document.getElementById('moreMenu').classList.toggle('open');
+}
+
+async function togglePause() {
+  const endpoint = paused ? 'resume' : 'pause';
+  await fetch('/api/' + endpoint, { method: 'POST' });
+  paused = !paused;
+  document.getElementById('pauseBtn').textContent = paused ? '▶' : '⏸';
+  toast(paused ? 'Paused' : 'Resumed');
+}
+
+// Keyboard
+document.addEventListener('keydown', (e) => {
+  if (currentView !== 'review') return;
+  if (e.key === 'ArrowLeft')  nav(-1);
+  else if (e.key === 'ArrowRight') nav(1);
+  else if (e.key === 'f') act('like');
+  else if (e.key === 'd') act('dislike');
+  else if (e.key === 'e') act('edit');
+  else if (e.key === ' ') { e.preventDefault(); togglePause(); }
+  else if (e.key === 'm') toggleMore();
+  else if (e.key === '1') more('same-style');
+  else if (e.key === '2') more('same-photo');
+  else if (e.key === '3') more('similar');
+});
+
+// Swipe
+let touchX = null, touchY = null;
+const wrap = document.getElementById('photoWrap');
+wrap.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1) return;
+  touchX = e.touches[0].clientX; touchY = e.touches[0].clientY;
+}, { passive: true });
+wrap.addEventListener('touchend', (e) => {
+  if (touchX === null) return;
+  const dx = (e.changedTouches[0].clientX - touchX);
+  const dy = (e.changedTouches[0].clientY - touchY);
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+    nav(dx < 0 ? 1 : -1);
+  }
+  touchX = null; touchY = null;
+}, { passive: true });
+
+// Click to zoom
+document.getElementById('photo').addEventListener('click', () => {
+  zoomed = !zoomed;
+  document.getElementById('photoWrap').classList.toggle('zoomed', zoomed);
+});
+
+// View switch
+function switchView(v) {
+  currentView = v;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
+  document.getElementById('reviewView').classList.toggle('hidden', v !== 'review');
+  document.getElementById('bottombar').classList.toggle('hidden', v !== 'review');
+  document.getElementById('galleryView').classList.toggle('active', v === 'gallery');
+  if (v === 'gallery') loadFavorites();
+}
+
+async function loadFavorites() {
+  const r = await fetch('/api/favorites');
+  const data = await r.json();
+  const grid = document.getElementById('favGrid');
+  grid.innerHTML = '';
+  (data.favorites || []).slice().reverse().forEach(f => {
+    const img = document.createElement('img');
+    img.src = '/api/image?path=' + encodeURIComponent('~/.openclaw/workspace/shared/favorites/' + f.file);
+    img.loading = 'lazy';
+    img.onclick = () => openFav(f);
+    grid.appendChild(img);
+  });
+}
+
+function openFav(f) {
+  document.getElementById('favDetailImg').src =
+    '/api/image?path=' + encodeURIComponent('~/.openclaw/workspace/shared/favorites/' + f.file);
+  document.getElementById('favDetailMeta').textContent =
+    [f.model, f.tool, f.style, f.favorited_at].filter(Boolean).join(' · ');
+  document.getElementById('favDetailCmd').textContent = f.command || '';
+  document.getElementById('favDetail').classList.add('open');
+}
+function closeFav() { document.getElementById('favDetail').classList.remove('open'); }
+
+// Close more-menu on outside click
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('moreMenu');
+  if (!menu.parentElement.contains(e.target)) menu.classList.remove('open');
+});
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

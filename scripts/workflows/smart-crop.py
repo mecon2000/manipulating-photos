@@ -424,28 +424,47 @@ def outpaint_fill(img, original, crop_coords, output_dir):
         mask_url = fal_client.upload_file(tmp.name)
         os.unlink(tmp.name)
 
-    # Inpaint using SDXL (works better than Flux for outpainting)
-    try:
-        handle = fal_client.submit("fal-ai/stable-diffusion-v35-large/inpainting", arguments={
-            "image_url": img_url,
-            "mask_url": mask_url,
-            "prompt": "natural continuation of the photograph, matching lighting and style, seamless extension",
-            "negative_prompt": "different style, different lighting, text, watermark",
-            "strength": 0.95,
-            "num_images": 1,
-            "output_format": "jpeg",
-        })
-        result = handle.get()
-        images = result.get("images", [])
-        if images:
-            resp = requests.get(images[0]["url"], timeout=60)
-            filled = Image.open(BytesIO(resp.content)).convert("RGB")
-            if filled.size != (w, h):
-                filled = filled.resize((w, h), Image.LANCZOS)
-            return filled
-    except Exception as e:
-        print(f"  Outpainting failed: {e}")
+    # Try multiple inpainting endpoints
+    endpoints = [
+        "fal-ai/flux-general/inpainting",
+        "fal-ai/inpaint",
+    ]
+    for endpoint in endpoints:
+        try:
+            print(f"  Trying {endpoint}...")
+            args = {
+                "image_url": img_url,
+                "mask_url": mask_url,
+                "prompt": "natural continuation of the photograph, matching lighting color and style, seamless extension of the scene",
+                "strength": 0.95,
+                "num_images": 1,
+                "output_format": "jpeg",
+                "enable_safety_checker": False,
+            }
+            handle = fal_client.submit(endpoint, arguments=args)
+            result = handle.get()
+            images = result.get("images", [])
+            if images:
+                url = images[0].get("url", "")
+                if url:
+                    resp = requests.get(url, timeout=60)
+                    filled = Image.open(BytesIO(resp.content)).convert("RGB")
+                    if filled.size != (w, h):
+                        filled = filled.resize((w, h), Image.LANCZOS)
+                    # Check it's not black
+                    from PIL import ImageStat
+                    brightness = ImageStat.Stat(filled.convert("L")).mean[0]
+                    if brightness > 10:
+                        print(f"  Outpaint OK (brightness={brightness:.0f})")
+                        return filled
+                    print(f"  Result too dark ({brightness:.0f}), trying next...")
+            else:
+                print(f"  No images returned")
+        except Exception as e:
+            print(f"  {endpoint} failed: {e}")
+            continue
 
+    print("  All outpaint endpoints failed — returning unmodified crop")
     return img
 
 

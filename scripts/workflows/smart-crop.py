@@ -171,75 +171,93 @@ def generate_crop_options(w, h, mask_binary, landmarks, face_bbox):
                     *clamp(cin_x1, cin_y1, cin_x1 + cin_w, cin_y1 + cin_h)))
 
     # --- Unusual/artistic crops ---
+    # Estimate body segments from mask when pose detection fails
+    # Use vertical distribution of mask pixels to find head/torso/legs regions
+    chin_y = None
+    knee_y = None
+    shoulder_y = None
+    hip_y = None
 
-    # 6. Face close-up (if face detected)
+    if landmarks:
+        # Use pose landmarks if available
+        if "nose" in landmarks:
+            if face_bbox:
+                chin_y = face_bbox[3]
+            else:
+                chin_y = landmarks["nose"][1] + int(subj_h * 0.05)
+        knee_pts = [landmarks.get("left_knee"), landmarks.get("right_knee")]
+        knee_pts = [p for p in knee_pts if p]
+        if knee_pts:
+            knee_y = max(p[1] for p in knee_pts) + int(short_edge * 0.03)
+        shoulder_pts = [landmarks.get("left_shoulder"), landmarks.get("right_shoulder")]
+        shoulder_pts = [p for p in shoulder_pts if p]
+        if shoulder_pts:
+            shoulder_y = min(p[1] for p in shoulder_pts)
+        hip_pts = [landmarks.get("left_hip"), landmarks.get("right_hip")]
+        hip_pts = [p for p in hip_pts if p]
+        if hip_pts:
+            hip_y = max(p[1] for p in hip_pts)
+
+    # Fallback: estimate from mask vertical profile
+    if chin_y is None or knee_y is None:
+        # Sum mask pixels per row to find vertical distribution
+        row_sums = mask_binary.sum(axis=1)
+        occupied = np.where(row_sums > 0)[0]
+        if len(occupied) > 10:
+            top_y = int(occupied[0])
+            bot_y = int(occupied[-1])
+            body_h = bot_y - top_y
+            # Estimate: head=top 18%, shoulders=22%, hips=55%, knees=78%
+            if chin_y is None:
+                chin_y = top_y + int(body_h * 0.18)
+            if shoulder_y is None:
+                shoulder_y = top_y + int(body_h * 0.22)
+            if hip_y is None:
+                hip_y = top_y + int(body_h * 0.55)
+            if knee_y is None:
+                knee_y = top_y + int(body_h * 0.78)
+
+    # 6. Face close-up
     if face_bbox:
         fx1, fy1, fx2, fy2 = face_bbox
         face_r = max(fx2 - fx1, fy2 - fy1)
         face_pad = int(face_r * 0.8)
         options.append(("Face close-up",
                         *clamp(fx1 - face_pad, fy1 - face_pad, fx2 + face_pad, fy2 + face_pad)))
+    elif chin_y:
+        # Estimate face from mask top to chin
+        face_h = chin_y - subj_y1
+        face_pad = int(face_h * 0.5)
+        options.append(("Face close-up (est.)",
+                        *clamp(subj_cx - face_h, subj_y1 - face_pad, subj_cx + face_h, chin_y + face_pad)))
 
-    # 7. Chin-down (cut above chin, include body)
-    chin_y = None
-    if landmarks and "nose" in landmarks:
-        nose_y = landmarks["nose"][1]
-        # Chin is roughly 15% of face height below nose
-        if face_bbox:
-            face_h_est = face_bbox[3] - face_bbox[1]
-            chin_y = nose_y + int(face_h_est * 0.4)
-    if chin_y is None and face_bbox:
-        chin_y = face_bbox[3]
+    # 7. Chin-down (headless body)
     if chin_y:
         options.append(("Chin-down (headless)",
                         *clamp(subj_x1 - pad, chin_y, subj_x2 + pad, subj_y2 + pad)))
 
-    # 8. Knee-up (cut below knees)
-    knee_y = None
-    if landmarks:
-        knee_pts = [landmarks.get("left_knee"), landmarks.get("right_knee")]
-        knee_pts = [p for p in knee_pts if p]
-        if knee_pts:
-            knee_y = max(p[1] for p in knee_pts) + int(short_edge * 0.03)
+    # 8. Knee-up
     if knee_y:
-        top_y = subj_y1 - pad if not chin_y else chin_y
         options.append(("Knee-up",
                         *clamp(subj_x1 - pad, subj_y1 - pad, subj_x2 + pad, knee_y)))
 
-    # 9. Chin-to-knee (the Daniel crop — no head, no feet)
+    # 9. Chin-to-knee (no head, no feet)
     if chin_y and knee_y:
-        hand_xs = []
-        if landmarks:
-            for k in ["left_wrist", "right_wrist", "left_elbow", "right_elbow"]:
-                if k in landmarks:
-                    hand_xs.append(landmarks[k][0])
-        left_bound = min([subj_x1] + hand_xs) - pad
-        right_bound = max([subj_x2] + hand_xs) + pad
-        options.append(("Chin-to-knee (hands in)",
-                        *clamp(left_bound, chin_y, right_bound, knee_y)))
+        options.append(("Chin-to-knee",
+                        *clamp(subj_x1 - pad * 2, chin_y, subj_x2 + pad * 2, knee_y)))
 
     # 10. Torso only (shoulders to hips)
-    if landmarks:
-        shoulder_pts = [landmarks.get("left_shoulder"), landmarks.get("right_shoulder")]
-        hip_pts = [landmarks.get("left_hip"), landmarks.get("right_hip")]
-        shoulder_pts = [p for p in shoulder_pts if p]
-        hip_pts = [p for p in hip_pts if p]
-        if shoulder_pts and hip_pts:
-            torso_top = min(p[1] for p in shoulder_pts) - int(short_edge * 0.05)
-            torso_bot = max(p[1] for p in hip_pts) + int(short_edge * 0.08)
-            torso_left = min(p[0] for p in shoulder_pts + hip_pts) - int(short_edge * 0.1)
-            torso_right = max(p[0] for p in shoulder_pts + hip_pts) + int(short_edge * 0.1)
-            options.append(("Torso only",
-                            *clamp(torso_left, torso_top, torso_right, torso_bot)))
+    if shoulder_y and hip_y:
+        torso_pad = int(short_edge * 0.08)
+        options.append(("Torso only",
+                        *clamp(subj_x1 - torso_pad, shoulder_y - torso_pad,
+                               subj_x2 + torso_pad, hip_y + torso_pad)))
 
-    # 11. Bottom half (waist down)
-    if landmarks:
-        hip_pts = [landmarks.get("left_hip"), landmarks.get("right_hip")]
-        hip_pts = [p for p in hip_pts if p]
-        if hip_pts:
-            waist_y = min(p[1] for p in hip_pts) - int(short_edge * 0.05)
-            options.append(("Waist-down",
-                            *clamp(subj_x1 - pad * 2, waist_y, subj_x2 + pad * 2, subj_y2 + pad)))
+    # 11. Waist-down
+    if hip_y:
+        options.append(("Waist-down",
+                        *clamp(subj_x1 - pad * 2, hip_y - int(short_edge * 0.05),
+                               subj_x2 + pad * 2, subj_y2 + pad)))
 
     # 12. Off-center dramatic (subject pushed to edge)
     dramatic_w = int(subj_w * 2.0)

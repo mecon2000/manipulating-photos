@@ -369,25 +369,75 @@ def draw_options_overlay(img, options):
 
 
 def apply_crop(img, x1, y1, x2, y2):
-    """Crop the image. If coords extend beyond image, pad with black (outpaint later)."""
+    """Crop the image. If coords extend beyond image, mirror-fill the padded area
+    so the outpainter has context instead of pure black."""
     w, h = img.size
     # If fully within bounds, just crop
     if x1 >= 0 and y1 >= 0 and x2 <= w and y2 <= h:
         return img.crop((x1, y1, x2, y2))
 
-    # Needs outpainting — create padded canvas
+    # Needs outpainting — create canvas with mirrored content for context
     new_w = x2 - x1
     new_h = y2 - y1
-    canvas = Image.new("RGB", (new_w, new_h), (0, 0, 0))
+    img_arr = np.array(img)
+
+    # Create output array
+    canvas = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+
+    # Paste the original region
     paste_x = max(0, -x1)
     paste_y = max(0, -y1)
     src_x1 = max(0, x1)
     src_y1 = max(0, y1)
     src_x2 = min(w, x2)
     src_y2 = min(h, y2)
-    region = img.crop((src_x1, src_y1, src_x2, src_y2))
-    canvas.paste(region, (paste_x, paste_y))
-    return canvas
+    region = img_arr[src_y1:src_y2, src_x1:src_x2]
+    canvas[paste_y:paste_y + region.shape[0], paste_x:paste_x + region.shape[1]] = region
+
+    # Mirror-fill extended areas with flipped content from the edge
+    # Bottom extension
+    if y2 > h:
+        ext_h = y2 - h
+        src_strip = img_arr[max(0, h - ext_h):h, src_x1:src_x2]
+        flipped = src_strip[::-1]  # vertical flip
+        if flipped.shape[0] > ext_h:
+            flipped = flipped[:ext_h]
+        fill_y = paste_y + (h - max(0, y1))
+        fill_h = min(flipped.shape[0], new_h - fill_y)
+        if fill_h > 0:
+            canvas[fill_y:fill_y + fill_h, paste_x:paste_x + flipped.shape[1]] = flipped[:fill_h]
+
+    # Top extension
+    if y1 < 0:
+        ext_h = -y1
+        src_strip = img_arr[0:min(ext_h, h), src_x1:src_x2]
+        flipped = src_strip[::-1]
+        fill_h = min(flipped.shape[0], ext_h)
+        if fill_h > 0:
+            start_y = ext_h - fill_h
+            canvas[start_y:ext_h, paste_x:paste_x + flipped.shape[1]] = flipped[:fill_h]
+
+    # Left extension
+    if x1 < 0:
+        ext_w = -x1
+        src_strip = img_arr[src_y1:src_y2, 0:min(ext_w, w)]
+        flipped = src_strip[:, ::-1]
+        fill_w = min(flipped.shape[1], ext_w)
+        if fill_w > 0:
+            start_x = ext_w - fill_w
+            canvas[paste_y:paste_y + flipped.shape[0], start_x:ext_w] = flipped[:, :fill_w]
+
+    # Right extension
+    if x2 > w:
+        ext_w = x2 - w
+        src_strip = img_arr[src_y1:src_y2, max(0, w - ext_w):w]
+        flipped = src_strip[:, ::-1]
+        fill_w = min(flipped.shape[1], ext_w)
+        fill_x = paste_x + (w - max(0, x1))
+        if fill_w > 0 and fill_x + fill_w <= new_w:
+            canvas[paste_y:paste_y + flipped.shape[0], fill_x:fill_x + fill_w] = flipped[:, :fill_w]
+
+    return Image.fromarray(canvas)
 
 
 def outpaint_fill(img, original, crop_coords, output_dir, prompt=None):
@@ -400,39 +450,44 @@ def outpaint_fill(img, original, crop_coords, output_dir, prompt=None):
     w, h = img.size
     img_arr = np.array(img)
 
-    # Create mask: white where we need to fill (black/padded areas)
-    gray = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY)
-    mask = (gray < 5).astype(np.uint8) * 255
+    # Build mask from crop coordinates (not brightness — mirror-fill means no black areas)
+    x1, y1, x2, y2 = crop_coords
+    orig_w, orig_h = original.size
+    paste_x = max(0, -x1)
+    paste_y = max(0, -y1)
+    orig_region_w = min(orig_w, x2) - max(0, x1)
+    orig_region_h = min(orig_h, y2) - max(0, y1)
+
+    # Binary: 255 = fill area, 0 = keep
+    fill_binary = np.ones((h, w), dtype=np.uint8) * 255
+    fill_binary[paste_y:paste_y + orig_region_h, paste_x:paste_x + orig_region_w] = 0
+
+    # Gradient feather at the boundary
+    from scipy.ndimage import distance_transform_edt
+    feather_px = max(40, int(min(w, h) * 0.04))
+    dist = distance_transform_edt(fill_binary > 0)
+    mask = np.clip(dist / feather_px, 0, 1) * 255
+    mask = mask.astype(np.uint8)
 
     # Auto-detect outpaint prompt from the visible content if not given
     if prompt is None:
-        # Sample colors from the non-black area to describe the style
-        visible = gray > 10
-        if visible.any():
-            vis_pixels = img_arr[visible].astype(np.float32)
-            mean_color = vis_pixels.mean(axis=0)
-            # Check if it looks like an art piece vs a photo
-            from PIL import ImageStat
-            entropy = img.convert("L").entropy()
-            if entropy > 6.0:
-                # High entropy = likely artistic/painterly
-                prompt = (f"seamless continuation of artistic painting, "
-                          f"matching colors and brushwork style, "
-                          f"flowing abstract forms, ink watercolor oil painting texture, "
-                          f"same color palette and mood")
-            else:
-                prompt = "natural continuation of the photograph, matching lighting color and style"
+        from PIL import ImageStat
+        entropy = img.convert("L").entropy()
+        if entropy > 6.0:
+            prompt = ("seamless continuation of artistic painting, "
+                      "matching colors and brushwork style, "
+                      "flowing abstract forms, ink watercolor oil painting texture, "
+                      "same color palette and mood, NO person NO body parts")
         else:
-            prompt = "natural continuation of the photograph"
+            prompt = "natural continuation of the photograph, matching lighting color and style, NO person NO body parts"
     print(f"  Outpaint prompt: {prompt[:80]}...")
 
-    # Check if there's actually anything to fill
-    fill_pct = np.mean(mask > 0) * 100
+    fill_pct = np.mean(mask > 10) * 100
     if fill_pct < 1:
         print("  No outpainting needed (< 1% fill area)")
         return img
 
-    print(f"  Outpainting {fill_pct:.1f}% of canvas...")
+    print(f"  Outpainting {fill_pct:.1f}% of canvas (feather={feather_px}px)...")
 
     # Upload image and mask
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:

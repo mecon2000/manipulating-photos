@@ -1,6 +1,6 @@
 # OpenClaw Scripts
 
-Photo transformation pipeline for portrait/boudoir photography. Eight tools with unified `--affect`/`--exclude` masking.
+Photo transformation pipeline for portrait/boudoir photography. Eleven tools with unified `--affect`/`--exclude` masking.
 
 ## Environment
 
@@ -196,6 +196,64 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 - Shadow casting is implemented but parked — procedural approach doesn't generalize well across poses
 - IC-Light prompt direction can be unintuitive — describe what's illuminated, not light position
 
+### `scripts/workflows/ink-dissolution.py`
+**Frequency-band dissolution.** Decomposes photo into Laplacian pyramid, suppresses texture bands, overlays medium texture. Radial gradient from face: face stays sharp, dissolution increases with distance. Background fully dissolved.
+
+**Usage:**
+```bash
+./scripts/workflows/ink-dissolution.py --source photo.jpg --medium ink-wash
+./scripts/workflows/ink-dissolution.py --source photo.jpg --medium charcoal --dissolve-strength 0.5
+./scripts/workflows/ink-dissolution.py --source photo.jpg --medium canvas --fade-distance 7.0
+./scripts/workflows/ink-dissolution.py --list-media
+```
+
+**5 media:** ink-wash (user favorite), watercolor, canvas, charcoal, graphite. All local PIL/numpy/scipy + BiRefNet mask + MediaPipe body segmentation. No Tensor Art calls.
+
+**Key flags:** `--dissolve-strength` (0-1, default 0.85), `--face-preserve` (0-1, default 0.85), `--fade-distance` (multiplier for preserve radius, default 3.5 — higher = more body preserved), `--levels` (pyramid depth, default 5), `--seed`
+
+### `scripts/workflows/torn-reveal.py`
+**Two-layer portrait composite with paper tear.** Top: color photo. Bottom: high-contrast B&W. A torn-paper strip across the eye area reveals the B&W layer beneath. Fractal midpoint displacement for realistic tear edges, cone-shaped tear, fiber burst zones, drop shadow, film grain.
+
+**Usage:**
+```bash
+./scripts/workflows/torn-reveal.py --top color.jpg --bottom bw.jpg
+./scripts/workflows/torn-reveal.py --top photo.jpg --bottom photo.jpg --tear-angle 15
+./scripts/workflows/torn-reveal.py --top photo.jpg --bottom photo.jpg --extra-tear-y 0.72 --extra-tear-fill dark
+```
+
+**Key flags:** `--tear-height` (fraction, default 0.10), `--tear-angle` (degrees or "auto"), `--tear-jitter` (0-1, default 0.5), `--bw-contrast` (default 1.5), `--grain` (default 0.04), `--extra-tear-y` (fraction for second tear), `--extra-tear-fill` (dark/bw/black)
+
+**Eye detection:** FaceLandmarker (iris landmarks) → body-segment face-skin fallback → center fallback. Alignment capped at ±15° rotation. Translation-only when detection methods differ.
+
+**Best with:** Front-facing portraits where FaceLandmarker detects both faces. Adjacent file numbers (same shoot) give best alignment.
+
+### `scripts/workflows/baroque-surround.py`
+**Generative painterly background.** Extracts subject, generates a new BG from scratch via Flux text-to-image, composites with tight mask + spot bleeds + foreground overlay + LAB color matching.
+
+**STATUS: Work in progress.** The generate-BG-from-scratch approach works (visible amorphic forms) but the composited result still looks like a cutout on many photos, especially dark-BG sources. The core unsolved problem: making subject and BG feel like they belong to the same image (same lighting, same color temperature, same painterly quality).
+
+**What works:** ethereal and silk presets, LAB 70%+ color transfer, the relit-then-composite approach (relight original → extract → LAB match → composite onto generated BG).
+
+**What doesn't work:** Flux inpainting on dark BGs (generates black), Flux img2img on dark photos (also black), IC-Light relighting (replaces BG entirely, doesn't relight the scene).
+
+**Options being explored:**
+1. Gradient-mask inpainting (like Photoshop generative fill) — soft radial mask instead of binary cutout
+2. Tensor Art img2img instead of Flux (different model may handle dark inputs better)
+3. SDXL inpainting with gradient masks
+4. Whole-image img2img at moderate strength with selective blend-back (tested, Flux gives black)
+5. The approach from reference artist: likely heavy PS work with Firefly generative fill + manual blending
+
+**13 presets:** baroque, renaissance, dark-romantic, ethereal, smoke, underwater, ink-water, aurora, silk, embers, curtains, whipped-cream, bubbles
+
+**Usage:**
+```bash
+./scripts/workflows/baroque-surround.py --source photo.jpg --preset ethereal
+./scripts/workflows/baroque-surround.py --source photo.jpg --preset silk --method generate
+./scripts/workflows/baroque-surround.py --list-presets
+```
+
+**All flags:** `--source`, `--preset`, `--prompt` (custom), `--negative`, `--strength`, `--method` (generate/inpaint), `--transition`, `--noise`, `--seed`, `--auto-correct`, `--output-to`, `--local-output-dir`, `--list-presets`
+
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.
 
@@ -215,6 +273,10 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 ## Lessons Learned (from testing, April 2026)
 
 ### What works well — do more of this
+- **Ink dissolution ink-wash** — user's favorite new tool. Radial gradient from face, texture overlay. All favorited.
+- **Baroque: generate-BG-from-scratch** — generating BG independently via Flux text-to-image, then compositing. Much better than inpainting (which generates black on dark photos). Ethereal and silk presets work best.
+- **Baroque: relit-then-composite** — relight original photo to bake warm tones → extract subject → LAB match → composite onto generated BG. Best color integration so far.
+- **Torn reveal** — fractal tear edges + cone shape + fiber bursts. Works best with front-facing portraits, adjacent file numbers.
 - **Bioluminescent + underwater photos** — natural fit, consistently scores 9. The style matches the water context.
 - **Colored gel relighting on shibari** — neon gels, pink+cyan, amber+violet. Very photographic, dramatic.
 - **Ghost dissolve** (time-corruption, dissolve mode) — body echoes along arc while ropes stay sharp. Powerful for shibari.
@@ -229,6 +291,10 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 - **SDXL inpainting ignores prompts.** Asked for "doorframe" → got foliage. The model preserves surrounding context more than following the text prompt. Strength=0.95 helps but doesn't fully solve it.
 - **Effects that blur-in-place are invisible.** Motion trails and melt applied within a body mask just blur the body in the same location — no visible change. Effects need to SPREAD BEYOND the mask boundary to be visible.
 - **Relighting removes the original BG entirely.** IC-Light generates a new scene. Hair edges look cut. Fix: --bg-blend 0.4-0.5 with soft mask blur (~2% of image). But even then, hair can look pasted.
+- **Flux inpainting/img2img on dark-BG photos → black.** Tried BG lifting, noise, blur, multiple strengths (0.5-0.93). Flux always gravitates back to black on dark inputs. Not usable for photos with dark backgrounds.
+- **Binary mask compositing always looks like a cutout.** Even with feathering, bleed spots, light wrap, LAB color transfer — two separately-created elements don't feel like one image. The reference artist likely uses gradient masks + generative fill (Photoshop Firefly) for unified lighting/color.
+- **LAB color transfer needs 70%+ strength.** Below 70% the shift is invisible. Apply to entire subject (stronger at edges, 40% minimum at center). RGB shift needs 50%+ to be visible.
+- **Complementary color wash must be on entire composite, not just subject.** Washing only the subject is invisible. Full-image wash creates overall tonal unity.
 - **Auto blur radius on large images.** 2048+ px images get blur radius 120+ which makes everything look like abstract blobs. Cap blur at 60px max.
 - **Color matching too aggressive.** 60% color shift toward scene edges washes out intended tones (e.g., brown doorframe becomes generic grey). Reduced to 30%.
 

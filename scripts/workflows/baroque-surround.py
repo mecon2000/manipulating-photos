@@ -111,6 +111,21 @@ PRESETS = {
         "negative": "text, watermark, flat, bright, daylight, cold",
         "strength": 0.93,
     },
+    "curtains": {
+        "prompt": "large crumpled heavy velvet curtains and draped theatrical fabric, rich burgundy crimson deep purple and gold fabric folds, dramatic stage lighting from above, luxurious textile wrinkles and creases, baroque theater",
+        "negative": "text, watermark, flat, modern, smooth, digital",
+        "strength": 0.93,
+    },
+    "whipped-cream": {
+        "prompt": "massive mountains and peaks of glossy white whipped cream, organic flowing cream swirls and peaks, soft volumetric meringue forms, creamy vanilla and soft pink highlights, dreamy confection landscape",
+        "negative": "text, watermark, flat, dark, gritty, dry",
+        "strength": 0.93,
+    },
+    "bubbles": {
+        "prompt": "large floating iridescent soap bubbles and heavy foam clusters, translucent spheres with rainbow reflections, thick soapy lather and bubble masses, soft diffused light through transparent orbs, dreamy bathroom atmosphere",
+        "negative": "text, watermark, flat, dry, dark, harsh",
+        "strength": 0.93,
+    },
 }
 
 _log_lock = threading.Lock()
@@ -606,18 +621,20 @@ def main():
                 s_std = orig_lab[:, :, ch][subj_pixels].std() + 1e-8
                 b_mean = bg_lab[:, :, ch][bg_pixels_m].mean()
                 b_std = bg_lab[:, :, ch][bg_pixels_m].std() + 1e-8
-                # Partial transfer: 25% shift toward BG distribution
-                shift = 0.25
+                # Partial transfer: 40% shift toward BG distribution
+                shift = 0.40
                 new_mean = s_mean + (b_mean - s_mean) * shift
-                new_std = s_std + (b_std - s_std) * shift * 0.5
-                # Apply only to subject area
+                new_std = s_std + (b_std - s_std) * shift * 0.3
                 shifted = (orig_lab[:, :, ch] - s_mean) * (new_std / s_std) + new_mean
-                # Blend: full effect in transition zone, zero deep inside subject
-                edge_w = np.clip(1.0 - (mask_arr_f - 0.3) / 0.5, 0, 1)  # 1 at edge, 0 deep inside
+                # Apply across entire subject, stronger at edges:
+                # edges=100% of shift, center of subject=40% of shift
+                edge_w = np.clip(1.0 - (mask_arr_f - 0.2) / 0.6, 0.4, 1.0)
                 orig_lab[:, :, ch] = orig_lab[:, :, ch] * (1 - edge_w) + shifted * edge_w
+            # Only shift chrominance (a, b channels), preserve luminance (L)
+            # Actually keep L shift too but at half strength — we want tonal harmony
             orig_lab = np.clip(orig_lab, 0, 255).astype(np.uint8)
             orig_arr = cv2.cvtColor(orig_lab, cv2.COLOR_LAB2RGB).astype(np.float32)
-            log(output_dir, "LAB color transfer: 25% shift toward BG colors at subject edges")
+            log(output_dir, "LAB color transfer: 40% shift (edges) / 16% (center) toward BG")
     except Exception as e:
         log(output_dir, f"LAB color transfer failed: {e}", "WARN")
 

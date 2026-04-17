@@ -231,6 +231,8 @@ class State:
             data = json.loads(STATE_PATH.read_text())
             for item in data.get("queue", []):
                 self.queue.append(item)
+            for item in data.get("priority", []):
+                self.priority.append(item)
             self.stats.update(data.get("stats", {}))
         except Exception:
             pass
@@ -240,6 +242,7 @@ class State:
         tmp = STATE_PATH.with_suffix(".tmp")
         data = {
             "queue": list(self.queue),
+            "priority": list(self.priority),
             "stats": self.stats,
             "saved_at": now_str(),
         }

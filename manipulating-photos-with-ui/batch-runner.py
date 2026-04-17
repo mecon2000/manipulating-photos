@@ -65,7 +65,7 @@ PYTHON = "/home/rong/openclaw-venv/bin/python3"
 # preset_weights: None -> uniform. Otherwise dict name->weight.
 # Per-run cost estimate in USD (fal.ai + Tensor Art API calls; local-only tools near 0)
 TOOL_COST = {
-    "baroque-surround": 0.04,
+    "baroque-surround": 0.003,
     "ink-dissolution": 0.002,
     "relighting": 0.05,
     "material-swap": 0.04,
@@ -81,7 +81,7 @@ TOOL_COST = {
 
 TOOLS = {
     "baroque-surround": {
-        "weight": 50,
+        "weight": 45,
         "preset_flag": "--preset",
         "presets": ["baroque", "renaissance", "dark-romantic", "ethereal", "smoke",
                     "underwater", "ink-water", "aurora", "silk", "embers",
@@ -94,7 +94,7 @@ TOOLS = {
         "artifact_prob": 0.75,
     },
     "ink-dissolution": {
-        "weight": 15,
+        "weight": 30,
         "preset_flag": "--medium",
         "presets": ["ink-wash", "watercolor", "canvas", "charcoal", "graphite"],
         "preset_weights": {"ink-wash": 50, "watercolor": 20, "charcoal": 15,
@@ -117,20 +117,11 @@ TOOLS = {
                     "marble", "liquid metal", "porcelain", "ice", "gold", "obsidian"],
     },
     "time-corruption": {
-        "weight": 5,
+        "weight": 10,
         "preset_flag": "--effect",
         "presets": ["ghost", "melt", "trails", "glitch", "full"],
-    },
-    "noir-paint": {
-        "weight": 5,
-        "preset_flag": None,  # no required preset
-        "presets": [None],
-    },
-    "pose-geometry": {
-        "weight": 5,
-        "preset_flag": "--geometry",
-        "presets": ["wireframe", "lowpoly", "crystal", "shatter", "refine",
-                    "blocks", "contour"],
+        "preset_weights": {"ghost": 50, "full": 20, "melt": 15, "trails": 10, "glitch": 5},
+        "extra_args": ["--mode", "dissolve"],
     },
 }
 

@@ -273,10 +273,57 @@ def extract_mask_thread(img_orig, w, h, output_dir, result_dict):
         result_dict["error"] = str(e)
 
 
+BG_CACHE_DIR = os.path.expanduser("~/.openclaw/workspace/shared/bg_cache")
+
+def load_cached_bg(preset_name, artifact_name, w, h):
+    """Pick a cached BG matching preset (+artifact if possible). Returns PIL.Image or None."""
+    idx_path = os.path.join(BG_CACHE_DIR, "index.json")
+    if not os.path.isfile(idx_path):
+        return None
+    try:
+        with open(idx_path) as f:
+            entries = json.load(f)
+    except Exception:
+        return None
+    target_aspect = w / h
+    def score(e):
+        s = 0
+        if e.get("preset") == preset_name: s += 100
+        if artifact_name and artifact_name != "none" and e.get("artifact") == artifact_name: s += 50
+        # aspect penalty
+        a = e.get("aspect", 1.0)
+        s -= abs(a - target_aspect) * 10
+        return s
+    matches = [e for e in entries if e.get("preset") == preset_name and os.path.isfile(os.path.join(BG_CACHE_DIR, e["file"]))]
+    if not matches:
+        return None
+    matches.sort(key=score, reverse=True)
+    # sample from top 3 to vary
+    top = matches[:3]
+    pick = random.choice(top)
+    try:
+        img = Image.open(os.path.join(BG_CACHE_DIR, pick["file"])).convert("RGB")
+        # center-crop to target aspect, then resize
+        iw, ih = img.size
+        src_aspect = iw / ih
+        if src_aspect > target_aspect:
+            new_w = int(ih * target_aspect)
+            left = (iw - new_w) // 2
+            img = img.crop((left, 0, left + new_w, ih))
+        else:
+            new_h = int(iw / target_aspect)
+            top_ = (ih - new_h) // 2
+            img = img.crop((0, top_, iw, top_ + new_h))
+        img = img.resize((w, h), Image.LANCZOS)
+        return img, pick["file"]
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Step 2: Generate BG (runs in thread)
 # ---------------------------------------------------------------------------
-def generate_bg_thread(prompt, w, h, output_dir, seed, result_dict):
+def generate_bg_thread(prompt, w, h, output_dir, seed, result_dict, flux_model="dev"):
     import requests as req_lib
     try:
         # Flux dimensions: cap at 1024 on long edge, maintain aspect ratio
@@ -285,17 +332,21 @@ def generate_bg_thread(prompt, w, h, output_dir, seed, result_dict):
         flux_h = (flux_h // 8) * 8
         flux_w = (flux_w // 8) * 8
 
-        log(output_dir, f"Generating BG: {flux_w}x{flux_h}")
-        handle = fal_client.submit("fal-ai/flux/dev", arguments={
+        endpoint = "fal-ai/flux/schnell" if flux_model == "schnell" else "fal-ai/flux/dev"
+        steps = 4 if flux_model == "schnell" else 28
+        log(output_dir, f"Generating BG: {flux_w}x{flux_h} via {endpoint} ({steps} steps)")
+        fa = {
             "prompt": prompt,
             "image_size": {"width": flux_w, "height": flux_h},
-            "num_inference_steps": 28,
-            "guidance_scale": 3.5,
+            "num_inference_steps": steps,
             "num_images": 1,
             "output_format": "jpeg",
             "enable_safety_checker": False,
             "seed": seed,
-        })
+        }
+        if flux_model != "schnell":
+            fa["guidance_scale"] = 3.5
+        handle = fal_client.submit(endpoint, arguments=fa)
         result = handle.get()
         images = result.get("images", [])
         if not images:
@@ -416,6 +467,8 @@ def main():
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
     parser.add_argument("--list-presets", action="store_true", help="List all presets")
     parser.add_argument("--list-artifacts", action="store_true", help="List all artifacts")
+    parser.add_argument("--flux-model", choices=["dev", "schnell"], default="schnell", help="Flux model: schnell (default, ~$0.003) or dev (quality, ~$0.04)")
+    parser.add_argument("--use-cached-bg", action="store_true", help="Use a pre-generated BG from bg_cache/ (~$0 for BG, falls back to Flux if no match)")
     args = parser.parse_args()
 
     if args.list_presets:
@@ -518,11 +571,24 @@ def main():
     mask_result = {}
     bg_result = {}
     t_mask = threading.Thread(target=extract_mask_thread, args=(img_orig, w, h, output_dir, mask_result))
-    t_bg = threading.Thread(target=generate_bg_thread, args=(bg_prompt, w, h, output_dir, seed, bg_result))
     t_mask.start()
-    t_bg.start()
-    t_mask.join()
-    t_bg.join()
+
+    cached = None
+    if args.use_cached_bg:
+        cached = load_cached_bg(preset_name, artifact_name, w, h)
+    if cached is not None:
+        bg_img_cached, cached_file = cached
+        bg_img_cached.save(os.path.join(output_dir, "2_bg.jpg"), "JPEG", quality=95)
+        bg_result["bg"] = bg_img_cached
+        log(output_dir, f"Using cached BG: {cached_file}")
+        t_mask.join()
+    else:
+        if args.use_cached_bg:
+            log(output_dir, "No cached BG match — falling back to Flux")
+        t_bg = threading.Thread(target=generate_bg_thread, args=(bg_prompt, w, h, output_dir, seed, bg_result, args.flux_model))
+        t_bg.start()
+        t_mask.join()
+        t_bg.join()
 
     if "error" in mask_result:
         log(output_dir, f"Mask extraction failed: {mask_result['error']}", "ERROR")
@@ -540,7 +606,7 @@ def main():
     if not bg_quality["ok"]:
         log(output_dir, "BG quality check failed — retrying with different seed", "WARN")
         bg_result2 = {}
-        generate_bg_thread(bg_prompt, w, h, output_dir, seed + 1, bg_result2)
+        generate_bg_thread(bg_prompt, w, h, output_dir, seed + 1, bg_result2, args.flux_model)
         if "bg" in bg_result2:
             bg_img = bg_result2["bg"]
         else:

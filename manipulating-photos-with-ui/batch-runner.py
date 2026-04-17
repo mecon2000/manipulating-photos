@@ -31,7 +31,9 @@ from pathlib import Path
 from flask import Flask, Response, abort, jsonify, render_template, request, send_file
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR))
+# Workflow tools live in the parent repo at ../scripts/workflows/
+WORKFLOWS_DIR = (SCRIPT_DIR.parent / "scripts" / "workflows").resolve()
+sys.path.insert(0, str(WORKFLOWS_DIR))
 
 try:
     from notify import push_image, push_text  # type: ignore
@@ -270,7 +272,7 @@ STATE = State()
 def build_command(tool_name, source_path, preset, artifact):
     """Build subprocess args to run a tool. Returns (cmd_list, cmd_str, metadata)."""
     tool = TOOLS[tool_name]
-    script = SCRIPT_DIR / f"{tool_name}.py"
+    script = WORKFLOWS_DIR / f"{tool_name}.py"
     cmd = [PYTHON, str(script), "--source", str(source_path)]
     if tool.get("preset_flag") and preset:
         cmd += [tool["preset_flag"], str(preset)]
@@ -479,7 +481,7 @@ def api_like(item_id):
     # git hash
     try:
         git_hash = subprocess.check_output(
-            ["git", "-C", str(SCRIPT_DIR.parent.parent), "rev-parse", "--short", "HEAD"],
+            ["git", "-C", str(WORKFLOWS_DIR), "rev-parse", "--short", "HEAD"],
             text=True, timeout=5,
         ).strip()
     except Exception:

@@ -101,6 +101,8 @@ def push_image(file_path, title="", body=""):
     Returns:
         True if sent successfully, False otherwise
     """
+    if os.environ.get("NOTIFY_DISABLE_IMAGE") or os.environ.get("NOTIFY_DISABLE"):
+        return False
     token = _get_token()
     if not token:
         return False

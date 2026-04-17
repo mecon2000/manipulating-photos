@@ -63,6 +63,22 @@ PYTHON = "/home/rong/openclaw-venv/bin/python3"
 # --- Tool registry ---------------------------------------------------------
 
 # preset_weights: None -> uniform. Otherwise dict name->weight.
+# Per-run cost estimate in USD (fal.ai + Tensor Art API calls; local-only tools near 0)
+TOOL_COST = {
+    "baroque-surround": 0.04,
+    "ink-dissolution": 0.002,
+    "relighting": 0.05,
+    "material-swap": 0.04,
+    "time-corruption": 0.002,
+    "noir-paint": 0.05,
+    "pose-geometry": 0.002,
+    "foreground-framing": 0.05,
+    "stylizing-bg-model-separately": 0.07,
+    "smart-crop": 0.01,
+    "torn-reveal": 0.002,
+    "body-segment": 0.0,
+}
+
 TOOLS = {
     "baroque-surround": {
         "weight": 50,
@@ -204,7 +220,7 @@ class State:
         self.priority = deque()        # priority (front) items
         self.stats = {"generated": 0, "liked": 0, "disliked": 0,
                       "edit_later": 0, "running": True, "paused": False,
-                      "failures": 0}
+                      "failures": 0, "cost_today": 0.0, "cost_date": ""}
         self.backpressure_notified = False
         self.load()
 
@@ -237,7 +253,16 @@ class State:
             else:
                 self.queue.append(item)
             self.stats["generated"] += 1
+            self._accrue_cost(item.get("tool"))
             self.save()
+
+    def _accrue_cost(self, tool_name):
+        today = datetime.now(ISRAEL_TZ).strftime("%Y-%m-%d")
+        if self.stats.get("cost_date") != today:
+            self.stats["cost_date"] = today
+            self.stats["cost_today"] = 0.0
+        self.stats["cost_today"] = round(
+            self.stats.get("cost_today", 0.0) + TOOL_COST.get(tool_name, 0.01), 4)
 
     def all_pending(self):
         with self.lock:
@@ -357,7 +382,9 @@ def generate_one(job_id, tool_name, model_name, photo, preset, artifact,
     print(f"[gen] [{job_id}] {tool_name} / {preset} / {artifact} on {model_name}/{src_stem}", flush=True)
     start_ts = time.time()
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        child_env = {**os.environ, "NOTIFY_DISABLE_IMAGE": "1"}
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                             env=child_env)
     except subprocess.TimeoutExpired:
         print(f"[gen] [{job_id}] TIMEOUT", flush=True)
         return None

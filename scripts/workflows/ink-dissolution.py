@@ -626,7 +626,7 @@ def main():
                         help="Random seed for reproducibility")
     parser.add_argument("--output-to", default="local", choices=["local", "gdrive", "both"])
     parser.add_argument("--local-output-dir",
-                        default=os.path.expanduser("~/.openclaw/workspace/shared"))
+                        default=os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates"))
     parser.add_argument("--list-media", action="store_true",
                         help="List available dissolution media")
 

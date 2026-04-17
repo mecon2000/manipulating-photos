@@ -909,7 +909,7 @@ def main():
                         help="Fill for extra tear: 'dark' (very dark blur), 'bw' (B&W of same area), 'black' (default: dark)")
     parser.add_argument("--output-to", default="local", choices=["local", "gdrive", "both"],
                         help="Output destination (default: local)")
-    parser.add_argument("--local-output-dir", default=os.path.expanduser("~/.openclaw/workspace/shared"),
+    parser.add_argument("--local-output-dir", default=os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates"),
                         help="Local output directory (default: ~/.openclaw/workspace/shared)")
 
     args = parser.parse_args()

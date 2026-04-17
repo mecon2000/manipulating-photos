@@ -596,7 +596,7 @@ def main():
     if args.local_output_dir:
         output_dir = os.path.join(os.path.expanduser(args.local_output_dir), folder_name)
     else:
-        output_dir = os.path.join(os.path.expanduser("~/.openclaw/workspace/shared"), folder_name)
+        output_dir = os.path.join(os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates"), folder_name)
     os.makedirs(output_dir, exist_ok=True)
 
     timings = {}
@@ -688,7 +688,7 @@ def main():
     log(output_dir, "--- Step 5/5: Output ---")
 
     # Copy to finals
-    local_out = args.local_output_dir or os.path.expanduser("~/.openclaw/workspace/shared")
+    local_out = args.local_output_dir or os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates")
     finals_dir = os.path.join(local_out, "finals")
     os.makedirs(finals_dir, exist_ok=True)
     finals_name = os.path.basename(output_dir) + ".jpg"

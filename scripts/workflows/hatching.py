@@ -803,7 +803,7 @@ def main():
     )
     parser.add_argument(
         "--local-output-dir",
-        default=os.path.expanduser("~/.openclaw/workspace/shared"),
+        default=os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates"),
     )
     parser.add_argument(
         "--list-styles", action="store_true", help="List available hatching styles"

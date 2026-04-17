@@ -465,7 +465,7 @@ def parse_args():
     )
     parser.add_argument(
         "--local-output-dir", type=str,
-        default=os.path.expanduser("~/.openclaw/workspace/shared"),
+        default=os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates"),
         help="Local output directory"
     )
     parser.add_argument(

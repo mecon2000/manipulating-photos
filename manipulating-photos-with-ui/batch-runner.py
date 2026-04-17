@@ -77,6 +77,9 @@ TOOL_COST = {
     "smart-crop": 0.01,
     "torn-reveal": 0.002,
     "body-segment": 0.0,
+    "color-bath": 0.0,
+    "silhouette-backdrop": 0.002,
+    "botanical-overlay": 0.0,
 }
 
 TOOLS = {
@@ -122,6 +125,29 @@ TOOLS = {
         "presets": ["ghost", "melt", "trails", "glitch", "full"],
         "preset_weights": {"ghost": 50, "full": 20, "melt": 15, "trails": 10, "glitch": 5},
         "extra_args": ["--mode", "dissolve"],
+    },
+    "color-bath": {
+        "weight": 15,
+        "preset_flag": "--preset",
+        "presets": ["red-film", "ochre", "teal-moody", "amber", "blue-hour",
+                    "rose", "sepia", "emerald", "magenta-dusk", "cyan-ice"],
+        "preset_weights": {"red-film": 25, "ochre": 20, "teal-moody": 20,
+                           "amber": 15, "rose": 10, "blue-hour": 10},
+    },
+    "silhouette-backdrop": {
+        "weight": 8,
+        "preset_flag": "--preset",
+        "presets": ["moon", "spotlight", "pedestal", "sunset", "triangle",
+                    "red-wall", "arch"],
+    },
+    "botanical-overlay": {
+        "weight": 10,
+        "preset_flag": "--preset",
+        "presets": ["spine-flowers", "torso-petals", "covering-leaves",
+                    "shoulder-trail", "constellation"],
+        "preset_weights": {"spine-flowers": 30, "torso-petals": 25,
+                           "constellation": 20, "shoulder-trail": 15,
+                           "covering-leaves": 10},
     },
 }
 

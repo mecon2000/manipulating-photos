@@ -145,7 +145,7 @@ def run(args):
 
     # Copy to finals/
     try:
-        finals_dir = os.path.join(out_root, "finals")
+        finals_dir = os.path.expanduser("~/.openclaw/workspace/shared/finals")
         os.makedirs(finals_dir, exist_ok=True)
         finals_path = os.path.join(finals_dir, f"{folder}.jpg")
         shutil.copy2(final_path, finals_path)

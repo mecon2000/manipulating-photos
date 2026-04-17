@@ -966,7 +966,7 @@ def main():
 
     # Copy final to shared finals/ folder
     if args.local_output_dir:
-        finals_dir = os.path.join(args.local_output_dir, "finals")
+        finals_dir = os.path.expanduser("~/.openclaw/workspace/shared/finals")
     else:
         finals_dir = os.path.join(output_dir, "finals")
     os.makedirs(finals_dir, exist_ok=True)

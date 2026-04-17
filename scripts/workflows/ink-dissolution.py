@@ -580,7 +580,7 @@ def run_pipeline(args):
     log("INFO", f"Saved: {out_path}")
 
     # Copy to finals
-    finals_dir = os.path.join(out_dir, "finals")
+    finals_dir = os.path.expanduser("~/.openclaw/workspace/shared/finals")
     os.makedirs(finals_dir, exist_ok=True)
     finals_path = os.path.join(finals_dir, out_name)
     result.save(finals_path, quality=95)

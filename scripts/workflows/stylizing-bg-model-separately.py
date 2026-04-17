@@ -1353,7 +1353,7 @@ def run_workflow(args):
 
         # Copy final image to a "finals" folder for easy browsing
         if args.local_output_dir and final_path and os.path.exists(final_path):
-            finals_dir = os.path.join(args.local_output_dir, "finals")
+            finals_dir = os.path.expanduser("~/.openclaw/workspace/shared/finals")
             os.makedirs(finals_dir, exist_ok=True)
             finals_name = os.path.basename(output_dir) + ".jpg"
             finals_dest = os.path.join(finals_dir, finals_name)

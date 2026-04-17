@@ -681,7 +681,7 @@ def main():
     # Copy final to finals folder
     local_out = args.local_output_dir or os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates")
     if os.path.exists(final_path):
-        finals_dir = os.path.join(local_out, "finals")
+        finals_dir = os.path.expanduser("~/.openclaw/workspace/shared/finals")
         os.makedirs(finals_dir, exist_ok=True)
         finals_name = os.path.basename(output_dir) + ".jpg"
         finals_dest = os.path.join(finals_dir, finals_name)

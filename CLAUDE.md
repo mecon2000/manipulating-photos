@@ -1,6 +1,6 @@
 # OpenClaw Scripts
 
-Photo transformation pipeline for portrait/boudoir photography. Thirteen tools with unified `--affect`/`--exclude` masking.
+Photo transformation pipeline for portrait/boudoir photography. Fourteen active tools with unified `--affect`/`--exclude` masking. See `~/.openclaw/workspace/shared/tools_tree.md` for the full map with status (active/paused/dropped).
 
 ## Environment
 
@@ -276,6 +276,25 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 - `--show-options` produces a dual-panel image (portrait=side-by-side, landscape=stacked)
 - Unusual crops (chin-down, torso only) work even without pose detection via mask shape estimation
 
+### `scripts/workflows/color-bath.py`
+**Whole-scene LAB color wash.** Shifts the entire image toward a single dominant hue in LAB space while preserving luminance structure. Matches the user's taste for red-tinted 35mm, ochre walls, teal moody rooms — single-color-bath references from the reference-screenshot batch.
+
+**Usage:**
+```bash
+./scripts/workflows/color-bath.py --source photo.jpg --preset red-film
+./scripts/workflows/color-bath.py --source photo.jpg --preset teal-moody --strength 0.85
+./scripts/workflows/color-bath.py --source photo.jpg --custom-hue 80,20,100 --preserve-shadows
+./scripts/workflows/color-bath.py --list-presets
+```
+
+**10 presets:** red-film, ochre, teal-moody, amber, blue-hour, rose, sepia, emerald, magenta-dusk, cyan-ice. `--preserve-shadows` keeps L<30 neutral for chiaroscuro feel. Pure local, ~$0 per image.
+
+### `scripts/workflows/cache-baroque-bgs.py`
+**Pre-generate a pool of baroque BGs** for reuse by `baroque-surround.py --use-cached-bg`. Generates Flux Schnell BGs across preset+artifact combos at multiple aspects, saves to `~/.openclaw/workspace/shared/bg_cache/` with `index.json`. Amortizes Flux cost across many composites (run once for ~$0.65, then baroque BG calls become free).
+
+### `scripts/workflows/silhouette-backdrop.py` (⏸ paused)
+**Silhouette on simple backdrop with graphic element** (moon, pedestal, sunset, etc.). Works, but the suitability filter (pose extension + clothing coverage) segfaults under parallel MediaPipe+BiRefNet load — currently not in batch-runner rotation. Usable as a single-run tool with `--force`.
+
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.
 
@@ -360,10 +379,11 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 ## Output Structure
 
 All scripts output to `~/.openclaw/workspace/shared/` (visible from Windows):
-- Each run creates a timestamped folder with intermediate files + workflow log
-- Final images are also copied to `shared/finals/` for easy side-by-side browsing
-- fal.ai CDN URLs are logged for remote viewing (temporary public links)
-- Favorites are tracked in `shared/favorites/favorites.json` with full reconstruction commands
+- Intermediate files (timestamped folders with masks, BG, workflow log) go to `shared/tool-outputs-intermediates/`
+- **Final images always go to `shared/finals/`** regardless of `--local-output-dir` — this is pinned
+- `shared/favorites/` holds liked outputs + `favorites.json` with full reconstruction commands
+- `shared/bg_cache/` holds pre-generated baroque BGs for `--use-cached-bg`
+- Scripts push to phone via Pushbullet by default; set `NOTIFY_DISABLE=1` to silence
 
 ## Recommended Settings
 

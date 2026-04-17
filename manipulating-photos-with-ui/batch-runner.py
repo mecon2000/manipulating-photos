@@ -78,8 +78,6 @@ TOOL_COST = {
     "torn-reveal": 0.002,
     "body-segment": 0.0,
     "color-bath": 0.0,
-    "silhouette-backdrop": 0.002,
-    "botanical-overlay": 0.0,
 }
 
 TOOLS = {
@@ -134,21 +132,8 @@ TOOLS = {
         "preset_weights": {"red-film": 25, "ochre": 20, "teal-moody": 20,
                            "amber": 15, "rose": 10, "blue-hour": 10},
     },
-    "silhouette-backdrop": {
-        "weight": 8,
-        "preset_flag": "--preset",
-        "presets": ["moon", "spotlight", "pedestal", "sunset", "triangle",
-                    "red-wall", "arch"],
-    },
-    "botanical-overlay": {
-        "weight": 10,
-        "preset_flag": "--preset",
-        "presets": ["spine-flowers", "torso-petals", "covering-leaves",
-                    "shoulder-trail", "constellation"],
-        "preset_weights": {"spine-flowers": 30, "torso-petals": 25,
-                           "constellation": 20, "shoulder-trail": 15,
-                           "covering-leaves": 10},
-    },
+    # silhouette-backdrop: paused — suitability filter (pose/clothing) unstable with parallel MediaPipe
+    # botanical-overlay: dropped — petals landed on clothes, aesthetic didn't work
 }
 
 # --- Helpers ---------------------------------------------------------------

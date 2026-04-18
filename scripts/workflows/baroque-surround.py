@@ -477,6 +477,44 @@ def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
 
 
 # ---------------------------------------------------------------------------
+# Grain match — extract high-freq from original, add to final to unify grain
+# ---------------------------------------------------------------------------
+def apply_grain_match(final_img, original_img, strength, output_dir):
+    """Extract sensor grain from original (high-pass) and add to final.
+
+    Fixes the 'AI-glued-on' look — the photo's sensor noise covers both
+    subject and BG, so the composite reads as one capture instead of
+    'clean generated BG + noisy photo subject'.
+    """
+    orig_f = np.array(original_img).astype(np.float32)
+    final_f = np.array(final_img).astype(np.float32)
+
+    # High-pass grain from original (two-level: fine texture + slightly coarser)
+    blur_fine = cv2.GaussianBlur(orig_f, (0, 0), 1.2)
+    grain_fine = orig_f - blur_fine  # sub-pixel sensor noise
+
+    blur_coarse = cv2.GaussianBlur(orig_f, (0, 0), 3.0)
+    grain_coarse = orig_f - blur_coarse - grain_fine * 0.5  # mid-freq texture
+
+    grain = grain_fine + grain_coarse * 0.4
+
+    # Normalize to zero-mean so we're only adding noise, not shifting brightness
+    grain = grain - grain.mean(axis=(0, 1), keepdims=True)
+
+    out = final_f + grain * strength
+    result = np.clip(out, 0, 255).astype(np.uint8)
+
+    # Debug: save grain layer visualized
+    try:
+        g_vis = np.clip(grain * 6 + 128, 0, 255).astype(np.uint8)
+        Image.fromarray(g_vis).save(os.path.join(output_dir, "8_grain_layer.jpg"), "JPEG", quality=85)
+    except Exception:
+        pass
+
+    return Image.fromarray(result)
+
+
+# ---------------------------------------------------------------------------
 # Foreground wisp — 2nd BG variant, heavily blurred, masked to avoid face
 # ---------------------------------------------------------------------------
 def apply_foreground_wisp(final_img, fg_bg_img, mask_binary, w, h, short_edge,
@@ -555,6 +593,8 @@ def main():
     parser.add_argument("--list-artifacts", action="store_true", help="List all artifacts")
     parser.add_argument("--flux-model", choices=["dev", "schnell"], default="schnell", help="Flux model: schnell (default, ~$0.003) or dev (quality, ~$0.04)")
     parser.add_argument("--use-cached-bg", action="store_true", help="Use a pre-generated BG from bg_cache/ (~$0 for BG, falls back to Flux if no match)")
+    parser.add_argument("--grain-match", type=float, default=0.5,
+                        help="Grain match strength 0.0-1.0 (default 0.5). Extracts sensor grain from original and adds to final to unify 'AI-glued-on' look. Set 0 to disable.")
     parser.add_argument("--foreground-wisp", type=float, default=0.0,
                         help="Foreground wisp opacity 0.0-1.0 (default 0.0=off). Generates 2nd BG, blurs, masks to avoid face. Good: 0.3-0.5")
     parser.add_argument("--fg-holes", type=int, default=5, help="Number of feathered bg-showthrough holes in FG wisp mask (default 5)")
@@ -742,6 +782,14 @@ def main():
             )
             final_img.save(final_path, "JPEG", quality=95)
             log(output_dir, f"Step 7 done ({time.time()-t0:.1f}s)")
+
+    # Step 8: grain match (default on)
+    if args.grain_match > 0:
+        t0 = time.time()
+        log(output_dir, f"Step 8: grain match (strength={args.grain_match})")
+        final_img = apply_grain_match(final_img, img_orig, args.grain_match, output_dir)
+        final_img.save(final_path, "JPEG", quality=95)
+        log(output_dir, f"Step 8 done ({time.time()-t0:.2f}s)")
 
     # Quality check
     quality_final = check_image_quality(final_img, "FINAL", output_dir)

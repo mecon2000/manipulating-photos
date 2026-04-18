@@ -82,18 +82,20 @@ PYTHON = "/home/rong/openclaw-venv/bin/python3"
 
 # preset_weights: None -> uniform. Otherwise dict name->weight.
 # Per-run cost estimate in USD (fal.ai + Tensor Art API calls; local-only tools near 0)
+# Calibration: watch fal.ai dashboard balance drop ~$5, divide by run count in that window
+# Measured: baroque-surround ~$0.01/run (2026-04-18, 9 runs cost ~$0.09)
 TOOL_COST = {
-    "baroque-surround": 0.003,
-    "ink-dissolution": 0.002,
-    "relighting": 0.05,
+    "baroque-surround": 0.01,
+    "ink-dissolution": 0.003,
+    "relighting": 0.06,
     "material-swap": 0.04,
-    "time-corruption": 0.002,
-    "noir-paint": 0.05,
-    "pose-geometry": 0.002,
-    "foreground-framing": 0.05,
-    "stylizing-bg-model-separately": 0.07,
+    "time-corruption": 0.003,
+    "noir-paint": 0.08,
+    "pose-geometry": 0.003,
+    "foreground-framing": 0.04,
+    "stylizing-bg-model-separately": 0.08,
     "smart-crop": 0.01,
-    "torn-reveal": 0.002,
+    "torn-reveal": 0.005,
     "body-segment": 0.0,
     "color-bath": 0.0,
 }

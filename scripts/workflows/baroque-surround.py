@@ -117,6 +117,42 @@ PRESETS = {
         "prompt": "large floating iridescent soap bubbles and heavy foam clusters, translucent spheres with rainbow reflections, thick soapy lather and bubble masses, soft diffused light through transparent orbs, dreamy bathroom atmosphere",
         "negative": "text, watermark, flat, dry, dark, harsh",
     },
+    "velvet-fog": {
+        "prompt": "deep burgundy and navy mist in soft heavy velvet folds, dense moody fog draped in layered folds, low-frequency volumetric haze, rich jewel tones dissolving into shadow, dark romantic atmosphere",
+        "negative": "text, watermark, flat, bright, daylight, sharp edges, solid color",
+    },
+    "coral-smoke": {
+        "prompt": "warm terracotta and dusty rose smoke in loose organic coils, flowing amorphous smoke plumes, soft peach cream ochre swirling through warm air, gentle turbulent coils, sunset-lit haze",
+        "negative": "text, watermark, flat, blue, cold, sharp, solid color",
+    },
+    "neon-smoke-rings": {
+        "prompt": "layered rings and curls of electric pink and cyan neon smoke unraveling in darkness, glowing magenta and turquoise smoke forms, volumetric neon glow on black, dreamy cyberpunk haze, luminous colored vapor",
+        "negative": "text, watermark, flat, daylight, sun, pastel, solid color",
+    },
+    "burning-silk": {
+        "prompt": "sheer white fabric mid-disintegration with glowing orange-red burning edges on deep black background, ember-lit holes in translucent silk, smoldering fabric dissolving into sparks, dramatic high contrast",
+        "negative": "text, watermark, flat, bright daylight, intact fabric, solid color",
+    },
+    "frozen-breath": {
+        "prompt": "delicate pale white condensation wisps suspended in cold blue air, frozen exhale trails drifting slowly, soft icy blue mist, subtle crystalline haze against deep cold twilight background, quiet atmospheric cold",
+        "negative": "text, watermark, flat, warm, sunny, sharp, solid color",
+    },
+    "torn-cloud": {
+        "prompt": "thick white cloud blanket ripped open at center with warm golden light pouring through the tear, billowing cloud edges curling around a luminous gap, sunlit rays breaking through overcast sky, Turner dramatic heaven",
+        "negative": "text, watermark, flat, clear sky, solid color, digital",
+    },
+    "spun-sugar": {
+        "prompt": "translucent white and blush pink fibrous wisps of spun sugar dissolving at edges, fine candy floss strands stretched across soft pastel haze, delicate confection threads, pale lavender highlights",
+        "negative": "text, watermark, flat, dark, gritty, sharp, solid color",
+    },
+    "powdered-pigment": {
+        "prompt": "dense clouds of dry ochre cobalt and crimson pigment caught mid-explosion, powder paint particles scattering in mid-air, layered holi powder bursts, fine colored dust in slow motion, rich saturated pigment clouds",
+        "negative": "text, watermark, flat, wet, liquid, solid color, sharp",
+    },
+    "glacial-veil": {
+        "prompt": "transparent sheets of cold water cascading in layered veils, pale blue green meltwater flowing in slow waves, glassy ice-cold liquid curtains with soft distortion, cold northern light filtering through water",
+        "negative": "text, watermark, flat, warm, dry, sharp, solid color",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -449,6 +485,64 @@ def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
 
 
 # ---------------------------------------------------------------------------
+# Foreground wisp — 2nd BG variant, heavily blurred, masked to avoid face
+# ---------------------------------------------------------------------------
+def apply_foreground_wisp(final_img, fg_bg_img, mask_binary, w, h, short_edge,
+                          opacity, num_holes, seed, output_dir):
+    """Composite a heavily-blurred 2nd BG variant on top, with face/shoulders protected."""
+    # Find head position: top-center of subject mask bbox
+    ys, xs = np.where(mask_binary > 0)
+    if len(xs) == 0:
+        cx, cy = w // 2, int(h * 0.3)
+    else:
+        top_y = int(np.percentile(ys, 5))
+        top_band = mask_binary[top_y:top_y + max(1, h // 20)]
+        band_xs = np.where(top_band > 0)[1]
+        cx = int(band_xs.mean()) if len(band_xs) else int(xs.mean())
+        cy = top_y + short_edge // 30
+
+    # Build FG alpha mask: start at full opacity white, subtract face-protect radial, add holes
+    fg_alpha = np.ones((h, w), dtype=np.float32)
+
+    # Face/shoulders protection: soft radial gradient, radius covers head + shoulders
+    protect_r = short_edge * 0.32
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    dist = np.sqrt((xx - cx) ** 2 + ((yy - cy) * 0.85) ** 2)
+    protect = np.clip(1.0 - (dist / protect_r), 0.0, 1.0)
+    protect = protect ** 1.5  # sharper center, softer falloff
+    fg_alpha *= (1.0 - protect)
+
+    # Random feathered holes so bg peeks through
+    rng = random.Random(seed + 99)
+    min_hole = int(short_edge * 0.04)
+    max_hole = int(short_edge * 0.14)
+    for _ in range(num_holes):
+        hx = rng.randint(0, w - 1)
+        hy = rng.randint(0, h - 1)
+        hr = rng.randint(min_hole, max_hole)
+        hd = np.sqrt((xx - hx) ** 2 + (yy - hy) ** 2)
+        hole = np.clip(1.0 - (hd / hr), 0.0, 1.0) ** 1.2
+        fg_alpha *= (1.0 - hole)
+
+    # Heavy blur on both FG image and alpha for soft "out-of-focus" feel
+    blur_r = max(15, int(short_edge * 0.025))
+    fg_f = np.array(fg_bg_img).astype(np.float32)
+    fg_blur = cv2.GaussianBlur(fg_f, (0, 0), blur_r)
+    fg_alpha = cv2.GaussianBlur(fg_alpha, (0, 0), max(5, blur_r // 2))
+
+    # Save mask for debugging
+    Image.fromarray((fg_alpha * 255).astype(np.uint8)).save(
+        os.path.join(output_dir, "4_fgwisp_mask.png"))
+    fg_bg_img.save(os.path.join(output_dir, "4_fgwisp_bg.jpg"), "JPEG", quality=90)
+
+    # Composite: final * (1 - a*opacity) + fg_blur * (a*opacity)
+    a = (fg_alpha * opacity)[:, :, np.newaxis]
+    final_f = np.array(final_img).astype(np.float32)
+    out = final_f * (1 - a) + fg_blur * a
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -469,6 +563,9 @@ def main():
     parser.add_argument("--list-artifacts", action="store_true", help="List all artifacts")
     parser.add_argument("--flux-model", choices=["dev", "schnell"], default="schnell", help="Flux model: schnell (default, ~$0.003) or dev (quality, ~$0.04)")
     parser.add_argument("--use-cached-bg", action="store_true", help="Use a pre-generated BG from bg_cache/ (~$0 for BG, falls back to Flux if no match)")
+    parser.add_argument("--foreground-wisp", type=float, default=0.0,
+                        help="Foreground wisp opacity 0.0-1.0 (default 0.0=off). Generates 2nd BG, blurs, masks to avoid face. Good: 0.3-0.5")
+    parser.add_argument("--fg-holes", type=int, default=5, help="Number of feathered bg-showthrough holes in FG wisp mask (default 5)")
     args = parser.parse_args()
 
     if args.list_presets:
@@ -576,19 +673,32 @@ def main():
     cached = None
     if args.use_cached_bg:
         cached = load_cached_bg(preset_name, artifact_name, w, h)
+    fg_bg_result = {}
+    t_fg = None
     if cached is not None:
         bg_img_cached, cached_file = cached
         bg_img_cached.save(os.path.join(output_dir, "2_bg.jpg"), "JPEG", quality=95)
         bg_result["bg"] = bg_img_cached
         log(output_dir, f"Using cached BG: {cached_file}")
+        if args.foreground_wisp > 0:
+            t_fg = threading.Thread(target=generate_bg_thread, args=(bg_prompt, w, h, output_dir, seed + 1, fg_bg_result, args.flux_model))
+            t_fg.start()
         t_mask.join()
     else:
         if args.use_cached_bg:
             log(output_dir, "No cached BG match — falling back to Flux")
         t_bg = threading.Thread(target=generate_bg_thread, args=(bg_prompt, w, h, output_dir, seed, bg_result, args.flux_model))
         t_bg.start()
+        if args.foreground_wisp > 0:
+            t_fg = threading.Thread(target=generate_bg_thread, args=(bg_prompt, w, h, output_dir, seed + 1, fg_bg_result, args.flux_model))
+            t_fg.start()
         t_mask.join()
         t_bg.join()
+    if t_fg is not None:
+        t_fg.join()
+        # Re-save main BG to canonical path (threads may have collided on 2_bg.jpg)
+        if "bg" in bg_result:
+            bg_result["bg"].save(os.path.join(output_dir, "2_bg.jpg"), "JPEG", quality=95)
 
     if "error" in mask_result:
         log(output_dir, f"Mask extraction failed: {mask_result['error']}", "ERROR")
@@ -625,6 +735,21 @@ def main():
     # Save composite
     final_path = os.path.join(output_dir, "3_final.jpg")
     final_img.save(final_path, "JPEG", quality=95)
+
+    # Step 7: foreground wisp (optional)
+    if args.foreground_wisp > 0:
+        if "bg" not in fg_bg_result:
+            log(output_dir, f"FG wisp BG generation failed: {fg_bg_result.get('error', '?')} — skipping", "WARN")
+        else:
+            t0 = time.time()
+            log(output_dir, f"Step 7: FG wisp (opacity={args.foreground_wisp}, holes={args.fg_holes})")
+            final_img = apply_foreground_wisp(
+                final_img, fg_bg_result["bg"], mask_binary, w, h, short_edge,
+                opacity=max(0.0, min(1.0, args.foreground_wisp)),
+                num_holes=args.fg_holes, seed=seed, output_dir=output_dir,
+            )
+            final_img.save(final_path, "JPEG", quality=95)
+            log(output_dir, f"Step 7 done ({time.time()-t0:.1f}s)")
 
     # Quality check
     quality_final = check_image_quality(final_img, "FINAL", output_dir)

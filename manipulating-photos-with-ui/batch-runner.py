@@ -173,27 +173,45 @@ def all_models():
         out.append(d)
     return out
 
-def pick_random_photo(avoid_model=None):
-    """Pick a random (model_name, Path), weighted by photo count.
+_recent_models = deque(maxlen=15)  # don't repeat these models
+_recent_photos = deque(maxlen=60)  # don't repeat these photos
 
-    70% chance to draw from the global Processed pool, 30% from Unprocessed
-    (falls back to the other pool if empty). Each photo in the chosen pool
-    has equal probability — so folders with more photos appear proportionally
-    more often. Avoids the old "same small sets keep showing up" bias from
-    picking uniformly by model first.
+def pick_random_photo(avoid_model=None):
+    """Pick a random (model_name, Path) with model-diversity enforcement.
+
+    Two-stage sampling:
+      1. Pick a model uniformly among models with photos, excluding the
+         last ~15 used. This forces variety across sessions — no model
+         repeats until ~15 other models have been tried.
+      2. Pick a photo within the chosen model, 70% from Processed / 30%
+         from Unprocessed, also avoiding the last ~60 photos used.
+
+    The per-model uniform pick (not by photo count) keeps big folders like
+    Neta/Gali & Henia/Omry from dominating the queue.
     """
-    proc_pool, unproc_pool = [], []
+    candidates = []
     for md in all_models():
         if avoid_model and md.name == avoid_model:
             continue
+        if md.name in _recent_models:
+            continue
         proc, unproc = list_photos_for_model(md)
-        proc_pool.extend((md.name, p) for p in proc)
-        unproc_pool.extend((md.name, p) for p in unproc)
-    if not proc_pool and not unproc_pool:
-        return None, None
+        if proc or unproc:
+            candidates.append((md.name, proc, unproc))
+    if not candidates:
+        # Everything is on cooldown; drain history and retry
+        _recent_models.clear()
+        return pick_random_photo(avoid_model=avoid_model)
+
+    model_name, proc, unproc = random.choice(candidates)
     want_proc = random.random() < 0.70
-    pool = (proc_pool if want_proc else unproc_pool) or proc_pool or unproc_pool
-    return random.choice(pool)
+    photos = (proc if want_proc else unproc) or proc or unproc
+    fresh = [p for p in photos if str(p) not in _recent_photos]
+    photo = random.choice(fresh or photos)
+
+    _recent_models.append(model_name)
+    _recent_photos.append(str(photo))
+    return model_name, photo
 
 def pick_tool(allowed=None):
     names = [n for n in TOOLS if not allowed or n in allowed]

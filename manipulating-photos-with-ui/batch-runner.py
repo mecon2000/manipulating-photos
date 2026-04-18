@@ -54,6 +54,24 @@ FAVORITES_JSON = FAVORITES_DIR / "favorites.json"
 EDIT_LATER_DIR = SHARED_DIR / "edit-later"
 STATE_PATH = SHARED_DIR / "batch_state.json"
 FINALS_DIR = SHARED_DIR / "finals"
+BLACKLIST_PATH = SHARED_DIR / "blacklisted_models.json"
+
+
+def load_blacklist():
+    if not BLACKLIST_PATH.is_file():
+        return set()
+    try:
+        return set(json.loads(BLACKLIST_PATH.read_text()).get("models", []))
+    except Exception:
+        return set()
+
+
+def save_blacklist(models):
+    SHARED_DIR.mkdir(parents=True, exist_ok=True)
+    BLACKLIST_PATH.write_text(json.dumps({"models": sorted(models)}, indent=2))
+
+
+BLACKLIST = load_blacklist()
 
 PHOTO_EXTS = {".jpg", ".jpeg", ".png"}
 SKIP_FILES = {"desktop.ini", "thumbs.db", ".ds_store"}
@@ -131,6 +149,7 @@ TOOLS = {
                     "rose", "sepia", "emerald", "magenta-dusk", "cyan-ice"],
         "preset_weights": {"red-film": 25, "ochre": 20, "teal-moody": 20,
                            "amber": 15, "rose": 10, "blue-hour": 10},
+        "extra_args": ["--analog", "--preserve-shadows"],
     },
     # silhouette-backdrop: paused — suitability filter (pose/clothing) unstable with parallel MediaPipe
     # botanical-overlay: dropped — petals landed on clothes, aesthetic didn't work
@@ -192,6 +211,8 @@ def pick_random_photo(avoid_model=None):
     candidates = []
     for md in all_models():
         if avoid_model and md.name == avoid_model:
+            continue
+        if md.name in BLACKLIST:
             continue
         if md.name in _recent_models:
             continue
@@ -331,8 +352,8 @@ def build_command(tool_name, source_path, preset, artifact):
         cmd += [tool["preset_flag"], str(preset)]
     if tool.get("artifact_flag") and artifact:
         cmd += [tool["artifact_flag"], str(artifact)]
-    # Always output locally to shared/
-    cmd += ["--output-to", "local", "--local-output-dir", str(SHARED_DIR)]
+    # Intermediates go to shared/tool-outputs-intermediates; finals are pinned in tools to shared/finals/
+    cmd += ["--output-to", "local", "--local-output-dir", str(SHARED_DIR / "tool-outputs-intermediates")]
     for extra in tool.get("extra_args", []):
         cmd.append(extra)
     cmd_str = " ".join(f"'{c}'" if " " in c else c for c in cmd)
@@ -508,6 +529,37 @@ def api_dislike(item_id):
     STATE.stats["disliked"] = STATE.stats.get("disliked", 0) + 1
     STATE.save()
     return jsonify({"ok": True})
+
+@app.route("/api/queue/<item_id>/blacklist", methods=["POST"])
+def api_blacklist(item_id):
+    """Blacklist the item's model (session) — future picks skip it, and
+    all currently-queued items from that model are removed + deleted."""
+    it = STATE.find(item_id)
+    if not it:
+        abort(404)
+    model = it.get("model")
+    if not model:
+        abort(400)
+    BLACKLIST.add(model)
+    save_blacklist(BLACKLIST)
+    removed = 0
+    with STATE.lock:
+        for lst in (STATE.priority, STATE.queue):
+            i = 0
+            while i < len(lst):
+                cur = lst[i]
+                if cur.get("model") == model:
+                    try:
+                        Path(cur["output"]).unlink()
+                    except OSError:
+                        pass
+                    del lst[i]
+                    removed += 1
+                else:
+                    i += 1
+        STATE.save()
+    return jsonify({"ok": True, "model": model, "removed": removed})
+
 
 @app.route("/api/queue/<item_id>/like", methods=["POST"])
 def api_like(item_id):

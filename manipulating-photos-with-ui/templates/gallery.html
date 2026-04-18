@@ -54,6 +54,7 @@
   .btn-dislike { background: #7a2929; }
   .btn-fav     { background: #b8851a; }
   .btn-edit    { background: #2b5a8f; }
+  .btn-blacklist { background: #4a1818; }
   .btn-ghost   { background: #2a2a2e; color: var(--fg); }
   .btn-pause   { background: #3a3a40; }
 
@@ -128,6 +129,7 @@
     <button class="btn btn-dislike" onclick="act('dislike')">👎 Delete</button>
     <button class="btn btn-fav" onclick="act('like')">⭐ Fav</button>
     <button class="btn btn-edit" onclick="act('edit')">✏️ Edit</button>
+    <button class="btn btn-blacklist" onclick="act('blacklist')" title="Blacklist this session — never show again">🚫 Session</button>
   </div>
   <div class="second-row">
     <button class="navbtn" onclick="nav(-1)">←</button>
@@ -248,11 +250,20 @@ function nav(delta) {
 async function act(kind) {
   if (!items.length) return;
   const it = items[idx];
-  const endpoint = kind === 'like' ? 'like' : kind === 'edit' ? 'edit' : 'dislike';
+  const endpoint = kind;
+  const model = it.model;
   try {
     const r = await fetch('/api/queue/' + it.id + '/' + endpoint, { method: 'POST' });
-    if (r.ok) toast(kind === 'like' ? 'Faved!' : kind === 'edit' ? 'Saved for edit' : 'Deleted', 'ok');
-    // Remove locally and advance
+    const msg = kind === 'like' ? 'Faved!'
+              : kind === 'edit' ? 'Saved for edit'
+              : kind === 'blacklist' ? ('Blacklisted ' + model)
+              : 'Deleted';
+    if (r.ok) toast(msg, 'ok');
+    // For blacklist the server removed all items from that model; refetch.
+    if (kind === 'blacklist') {
+      await refresh();
+      return;
+    }
     items.splice(idx, 1);
     if (idx >= items.length) idx = Math.max(0, items.length - 1);
     render();
@@ -297,23 +308,6 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === '2') more('same-photo');
   else if (e.key === '3') more('similar');
 });
-
-// Swipe
-let touchX = null, touchY = null;
-const wrap = document.getElementById('photoWrap');
-wrap.addEventListener('touchstart', (e) => {
-  if (e.touches.length !== 1) return;
-  touchX = e.touches[0].clientX; touchY = e.touches[0].clientY;
-}, { passive: true });
-wrap.addEventListener('touchend', (e) => {
-  if (touchX === null) return;
-  const dx = (e.changedTouches[0].clientX - touchX);
-  const dy = (e.changedTouches[0].clientY - touchY);
-  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
-    nav(dx < 0 ? 1 : -1);
-  }
-  touchX = null; touchY = null;
-}, { passive: true });
 
 // Click to zoom
 document.getElementById('photo').addEventListener('click', () => {

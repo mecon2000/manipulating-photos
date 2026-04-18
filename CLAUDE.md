@@ -238,7 +238,7 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 5. LAB edge color match — 40% shift on inner edge band
 6. Full-image LAB 60% wash — unifies color temperature across entire image
 
-**22 presets:** baroque, renaissance, dark-romantic, ethereal, smoke, underwater, ink-water, aurora, silk, embers, curtains, whipped-cream, bubbles, velvet-fog, coral-smoke, neon-smoke-rings, burning-silk, frozen-breath, torn-cloud, spun-sugar, powdered-pigment, glacial-veil
+**20 presets:** baroque, renaissance, dark-romantic, ethereal, smoke, underwater, ink-water, aurora, silk, embers, curtains, whipped-cream, bubbles, velvet-fog, coral-smoke, neon-smoke-rings, burning-silk, torn-cloud, spun-sugar, powdered-pigment. (glacial-veil and frozen-breath removed — too tame.)
 
 **Foreground wisp (`--foreground-wisp 0.0-1.0`):** Optional 3rd layer — generates a 2nd BG variant (seed+1, same prompt → same substance, different pattern), heavily blurs it, masks with radial face/shoulders protection + N random feathered holes (`--fg-holes`, default 5) for BG show-through, composites on top. Mimics shallow-DoF foreground wisps. Good range: 0.3-0.5. Adds one Flux call (~$0.003 schnell).
 

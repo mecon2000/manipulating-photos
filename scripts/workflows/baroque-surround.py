@@ -133,10 +133,6 @@ PRESETS = {
         "prompt": "sheer white fabric mid-disintegration with glowing orange-red burning edges on deep black background, ember-lit holes in translucent silk, smoldering fabric dissolving into sparks, dramatic high contrast",
         "negative": "text, watermark, flat, bright daylight, intact fabric, solid color",
     },
-    "frozen-breath": {
-        "prompt": "delicate pale white condensation wisps suspended in cold blue air, frozen exhale trails drifting slowly, soft icy blue mist, subtle crystalline haze against deep cold twilight background, quiet atmospheric cold",
-        "negative": "text, watermark, flat, warm, sunny, sharp, solid color",
-    },
     "torn-cloud": {
         "prompt": "thick white cloud blanket ripped open at center with warm golden light pouring through the tear, billowing cloud edges curling around a luminous gap, sunlit rays breaking through overcast sky, Turner dramatic heaven",
         "negative": "text, watermark, flat, clear sky, solid color, digital",
@@ -148,10 +144,6 @@ PRESETS = {
     "powdered-pigment": {
         "prompt": "dense clouds of dry ochre cobalt and crimson pigment caught mid-explosion, powder paint particles scattering in mid-air, layered holi powder bursts, fine colored dust in slow motion, rich saturated pigment clouds",
         "negative": "text, watermark, flat, wet, liquid, solid color, sharp",
-    },
-    "glacial-veil": {
-        "prompt": "transparent sheets of cold water cascading in layered veils, pale blue green meltwater flowing in slow waves, glassy ice-cold liquid curtains with soft distortion, cold northern light filtering through water",
-        "negative": "text, watermark, flat, warm, dry, sharp, solid color",
     },
 }
 

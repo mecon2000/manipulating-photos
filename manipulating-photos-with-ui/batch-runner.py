@@ -174,21 +174,26 @@ def all_models():
     return out
 
 def pick_random_photo(avoid_model=None):
-    """Pick a random (model_name, Path). 70% processed, 30% unprocessed."""
-    models = all_models()
-    random.shuffle(models)
-    for md in models:
+    """Pick a random (model_name, Path), weighted by photo count.
+
+    70% chance to draw from the global Processed pool, 30% from Unprocessed
+    (falls back to the other pool if empty). Each photo in the chosen pool
+    has equal probability — so folders with more photos appear proportionally
+    more often. Avoids the old "same small sets keep showing up" bias from
+    picking uniformly by model first.
+    """
+    proc_pool, unproc_pool = [], []
+    for md in all_models():
         if avoid_model and md.name == avoid_model:
             continue
         proc, unproc = list_photos_for_model(md)
-        if not proc and not unproc:
-            continue
-        if proc and unproc:
-            photos = proc if random.random() < 0.70 else unproc
-        else:
-            photos = proc or unproc
-        return md.name, random.choice(photos)
-    return None, None
+        proc_pool.extend((md.name, p) for p in proc)
+        unproc_pool.extend((md.name, p) for p in unproc)
+    if not proc_pool and not unproc_pool:
+        return None, None
+    want_proc = random.random() < 0.70
+    pool = (proc_pool if want_proc else unproc_pool) or proc_pool or unproc_pool
+    return random.choice(pool)
 
 def pick_tool(allowed=None):
     names = [n for n in TOOLS if not allowed or n in allowed]

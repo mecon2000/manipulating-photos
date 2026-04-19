@@ -81,23 +81,32 @@ PYTHON = "/home/rong/openclaw-venv/bin/python3"
 # --- Tool registry ---------------------------------------------------------
 
 # preset_weights: None -> uniform. Otherwise dict name->weight.
-# Per-run cost estimate in USD (fal.ai + Tensor Art API calls; local-only tools near 0)
-# Calibration: watch fal.ai dashboard balance drop ~$5, divide by run count in that window
-# Measured: baroque-surround ~$0.01/run (2026-04-18, 9 runs cost ~$0.09)
+# Per-run cost estimate in USD for the typical/default invocation of each tool.
+# The dict key maps 1:1 to a tool name; batch-runner adds TOOL_COST[tool] on each job
+# without inspecting flags, so under-reports when expensive optional flags are enabled
+# (e.g. --tile-refine, --foreground-wisp) and over-reports when opted out.
+#
+# Calibrated 2026-04-19 from $1.21 spent over known workload (see memory file
+# project_fal_calibration.md). Derived unit costs:
+#   Flux schnell ~$0.009/call, BiRefNet ~$0.001/call, fal face-swap ~$0.095/call
+# baroque-surround: 1 Flux + 1 BiRefNet = ~$0.01. With --foreground-wisp: ~$0.02.
+# With --tile-refine (default denoise>=0.2 triggers face-swap): ~$0.10.
+# polish: 0 Flux + 0 BiRefNet + 1 face-swap = ~$0.10 (Tensor credits extra).
 TOOL_COST = {
     "baroque-surround": 0.01,
     "ink-dissolution": 0.003,
     "relighting": 0.06,
     "material-swap": 0.04,
     "time-corruption": 0.003,
-    "noir-paint": 0.08,
+    "noir-paint": 0.10,
     "pose-geometry": 0.003,
     "foreground-framing": 0.04,
-    "stylizing-bg-model-separately": 0.08,
+    "stylizing-bg-model-separately": 0.12,
     "smart-crop": 0.01,
     "torn-reveal": 0.005,
     "body-segment": 0.0,
     "color-bath": 0.0,
+    "polish": 0.10,
 }
 
 TOOLS = {

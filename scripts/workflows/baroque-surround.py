@@ -477,6 +477,178 @@ def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
 
 
 # ---------------------------------------------------------------------------
+# Tensor Art tile-refine — ControlNet Tile workflow for de-AI-ification
+# ---------------------------------------------------------------------------
+TENSOR_BASE_URL = "https://ap-east-1.tensorart.cloud/v1"
+TILE_REFINE_TEMPLATE_ID = "761883020545458610"
+
+def _get_tensor_key():
+    return os.environ.get("TENSOR_API_KEY", "")
+
+def _get_fal_key():
+    return os.environ.get("FAL_API_KEY", "") or os.environ.get("FAL_KEY", "")
+
+
+def tensor_upload_image(image_pil, output_dir):
+    """Upload a PIL image to Tensor Art, return resourceId."""
+    import requests as req
+    buf = BytesIO()
+    image_pil.save(buf, format="PNG")
+    headers = {"Authorization": f"Bearer {_get_tensor_key()}", "Content-Type": "application/json"}
+    try:
+        res = req.post(f"{TENSOR_BASE_URL}/resource/image", json={}, headers=headers, timeout=30)
+        if res.status_code != 200:
+            log(output_dir, f"Tensor upload init failed ({res.status_code}): {res.text[:200]}", "ERROR")
+            return None
+        data = res.json()
+        put = req.put(data["putUrl"], data=buf.getvalue(), headers=data["headers"], timeout=120)
+        if put.status_code not in (200, 201):
+            log(output_dir, f"Tensor upload PUT failed ({put.status_code})", "ERROR")
+            return None
+        return data["resourceId"]
+    except Exception as e:
+        log(output_dir, f"Tensor upload failed: {e}", "ERROR")
+        return None
+
+
+def tensor_tile_refine(image_pil, denoise, positive_prompt, output_dir):
+    """Run the Ultimate SD Upscale + ControlNet Tile workflow. Returns refined PIL.Image or None.
+
+    Denoise 0.15-0.35 range. Higher = more refinement but more face drift.
+    """
+    import requests as req
+    resource_id = tensor_upload_image(image_pil, output_dir)
+    if not resource_id:
+        return None
+    w, h = image_pil.size
+    # Tile sizes must be <= image dims, multiples of 8
+    tile_w = max(512, min(1024, (w // 16) * 8))
+    tile_h = max(512, min(1024, (h // 16) * 8))
+    seed = random.randint(1, 2**31 - 1)
+
+    import hashlib as _h
+    payload = {
+        "requestId": _h.md5(f"{time.time()}-{seed}".encode()).hexdigest(),
+        "templateId": TILE_REFINE_TEMPLATE_ID,
+        "fields": {"fieldAttrs": [
+            {"nodeId": "1", "fieldName": "upscale_by", "fieldValue": 1},
+            {"nodeId": "1", "fieldName": "seed", "fieldValue": seed},
+            {"nodeId": "1", "fieldName": "steps", "fieldValue": 20},
+            {"nodeId": "1", "fieldName": "cfg", "fieldValue": 6},
+            {"nodeId": "1", "fieldName": "sampler_name", "fieldValue": "dpmpp_2m"},
+            {"nodeId": "1", "fieldName": "scheduler", "fieldValue": "karras"},
+            {"nodeId": "1", "fieldName": "denoise", "fieldValue": float(denoise)},
+            {"nodeId": "1", "fieldName": "mode_type", "fieldValue": "Linear"},
+            {"nodeId": "1", "fieldName": "tile_width", "fieldValue": tile_w},
+            {"nodeId": "1", "fieldName": "tile_height", "fieldValue": tile_h},
+            {"nodeId": "1", "fieldName": "mask_blur", "fieldValue": 8},
+            {"nodeId": "1", "fieldName": "tile_padding", "fieldValue": 32},
+            {"nodeId": "1", "fieldName": "seam_fix_mode", "fieldValue": "None"},
+            {"nodeId": "1", "fieldName": "seam_fix_denoise", "fieldValue": 1},
+            {"nodeId": "1", "fieldName": "seam_fix_width", "fieldValue": 64},
+            {"nodeId": "1", "fieldName": "seam_fix_mask_blur", "fieldValue": 8},
+            {"nodeId": "1", "fieldName": "seam_fix_padding", "fieldValue": 16},
+            {"nodeId": "1", "fieldName": "force_uniform_tiles", "fieldValue": True},
+            {"nodeId": "1", "fieldName": "tiled_decode", "fieldValue": False},
+            {"nodeId": "2", "fieldName": "image", "fieldValue": resource_id},
+            {"nodeId": "3", "fieldName": "ckpt_name", "fieldValue": "600315593373002855"},
+            {"nodeId": "4", "fieldName": "text", "fieldValue": positive_prompt},
+            {"nodeId": "5", "fieldName": "text", "fieldValue": "plastic, cgi, painting, illustration, blurry, low quality, deformed, extra fingers"},
+            {"nodeId": "6", "fieldName": "model_name", "fieldValue": "4x-UltraSharp.pth"},
+            {"nodeId": "7", "fieldName": "filename_prefix", "fieldValue": "baroque-refine"},
+            {"nodeId": "12", "fieldName": "strength", "fieldValue": 1},
+            {"nodeId": "12", "fieldName": "start_percent", "fieldValue": 0},
+            {"nodeId": "12", "fieldName": "end_percent", "fieldValue": 1},
+            {"nodeId": "15", "fieldName": "image", "fieldValue": resource_id},
+            {"nodeId": "20", "fieldName": "control_net_name", "fieldValue": "control_v11f1e_sd15_tile.pth"},
+        ]},
+    }
+    headers = {"Authorization": f"Bearer {_get_tensor_key()}", "Content-Type": "application/json"}
+    try:
+        r = req.post(f"{TENSOR_BASE_URL}/jobs/workflow/template", headers=headers, json=payload, timeout=30)
+        if r.status_code != 200:
+            log(output_dir, f"Tile-refine submit failed ({r.status_code}): {r.text[:300]}", "ERROR")
+            return None
+        job_id = r.json().get("job", {}).get("id")
+        if not job_id:
+            log(output_dir, f"Tile-refine no job id: {r.text[:200]}", "ERROR")
+            return None
+    except Exception as e:
+        log(output_dir, f"Tile-refine submit exception: {e}", "ERROR")
+        return None
+
+    # Poll
+    for i in range(90):
+        time.sleep(3)
+        try:
+            res = req.get(f"{TENSOR_BASE_URL}/jobs/{job_id}", headers=headers, timeout=15).json()
+        except Exception:
+            continue
+        job = res.get("job", {})
+        status = job.get("status")
+        if status == "SUCCESS":
+            images = job.get("successInfo", {}).get("images") or job.get("resultSets") or []
+            # Try common shapes
+            url = None
+            if isinstance(images, list) and images:
+                first = images[0]
+                url = first.get("url") if isinstance(first, dict) else None
+            if not url:
+                # fallback: scan dict for any url
+                import json as _j
+                txt = _j.dumps(job)
+                import re as _re
+                m = _re.search(r'"url"\s*:\s*"([^"]+)"', txt)
+                if m:
+                    url = m.group(1)
+            if not url:
+                log(output_dir, f"Tile-refine SUCCESS but no url: {str(job)[:300]}", "ERROR")
+                return None
+            try:
+                img = Image.open(BytesIO(req.get(url, timeout=60).content)).convert("RGB")
+                if img.size != image_pil.size:
+                    img = img.resize(image_pil.size, Image.LANCZOS)
+                return img
+            except Exception as e:
+                log(output_dir, f"Tile-refine download failed: {e}", "ERROR")
+                return None
+        if status in ("FAILED", "CANCELED"):
+            log(output_dir, f"Tile-refine {status}: {job.get('failedInfo', {})}", "ERROR")
+            return None
+    log(output_dir, "Tile-refine poll timeout", "ERROR")
+    return None
+
+
+def fal_face_swap(source_path, target_pil, output_dir):
+    """Swap source face onto target. Returns PIL or None."""
+    import requests as req
+    # Save target to temp
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
+        target_pil.save(tf.name, "JPEG", quality=95)
+        target_path = tf.name
+    try:
+        with open(source_path, "rb") as f:
+            src_b64 = base64.b64encode(f.read()).decode("utf-8")
+        with open(target_path, "rb") as f:
+            tgt_b64 = base64.b64encode(f.read()).decode("utf-8")
+        headers = {"Authorization": f"Key {_get_fal_key()}", "Content-Type": "application/json"}
+        payload = {
+            "base_image_url": f"data:image/jpeg;base64,{tgt_b64}",
+            "swap_image_url": f"data:image/jpeg;base64,{src_b64}",
+        }
+        r = req.post("https://fal.run/fal-ai/face-swap", headers=headers, json=payload, timeout=180)
+        if r.status_code == 200:
+            url = r.json().get("image", {}).get("url")
+            if url:
+                return Image.open(req.get(url, stream=True, timeout=30).raw).convert("RGB")
+        log(output_dir, f"Face swap failed ({r.status_code}): {r.text[:200]}", "ERROR")
+        return None
+    finally:
+        try: os.unlink(target_path)
+        except OSError: pass
+
+
+# ---------------------------------------------------------------------------
 # Grain match — extract high-freq from original, add to final to unify grain
 # ---------------------------------------------------------------------------
 def apply_grain_match(final_img, original_img, strength, output_dir):
@@ -593,6 +765,10 @@ def main():
     parser.add_argument("--list-artifacts", action="store_true", help="List all artifacts")
     parser.add_argument("--flux-model", choices=["dev", "schnell"], default="schnell", help="Flux model: schnell (default, ~$0.003) or dev (quality, ~$0.04)")
     parser.add_argument("--use-cached-bg", action="store_true", help="Use a pre-generated BG from bg_cache/ (~$0 for BG, falls back to Flux if no match)")
+    parser.add_argument("--tile-refine", type=float, default=0.0,
+                        help="Tensor Art ControlNet Tile refine denoise (0.0=off, 0.15-0.35 typical). De-AI-ifies composite. Face-swap runs after if denoise>=0.2. Adds ~$0.02 Tensor + ~$0.03 fal = ~$0.05.")
+    parser.add_argument("--tile-refine-prompt", default="raw photo, detailed skin texture, photographic, film grain, natural lighting, sharp focus, masterpiece, best quality",
+                        help="Positive prompt for tile refine pass")
     parser.add_argument("--grain-match", type=float, default=0.5,
                         help="Grain match strength 0.0-1.0 (default 0.5). Extracts sensor grain from original and adds to final to unify 'AI-glued-on' look. Set 0 to disable.")
     parser.add_argument("--foreground-wisp", type=float, default=0.0,
@@ -782,6 +958,28 @@ def main():
             )
             final_img.save(final_path, "JPEG", quality=95)
             log(output_dir, f"Step 7 done ({time.time()-t0:.1f}s)")
+
+    # Step 7b: Tensor Art tile-refine (optional — de-AI-ify via ControlNet Tile)
+    if args.tile_refine > 0:
+        t0 = time.time()
+        log(output_dir, f"Step 7b: Tensor Art tile-refine (denoise={args.tile_refine})")
+        refined = tensor_tile_refine(final_img, args.tile_refine, args.tile_refine_prompt, output_dir)
+        if refined is not None:
+            refined.save(os.path.join(output_dir, "7b_tile_refined.jpg"), "JPEG", quality=95)
+            # Face-swap original back on if denoise was high enough to drift face
+            if args.tile_refine >= 0.2:
+                log(output_dir, "Step 7c: Face-swap to restore identity")
+                swapped = fal_face_swap(source, refined, output_dir)
+                if swapped is not None:
+                    refined = swapped
+                    refined.save(os.path.join(output_dir, "7c_face_swapped.jpg"), "JPEG", quality=95)
+                else:
+                    log(output_dir, "Face-swap failed — keeping tile-refined without swap", "WARN")
+            final_img = refined
+            final_img.save(final_path, "JPEG", quality=95)
+            log(output_dir, f"Step 7b+c done ({time.time()-t0:.1f}s)")
+        else:
+            log(output_dir, "Tile-refine failed — skipping", "WARN")
 
     # Step 8: grain match (default on)
     if args.grain_match > 0:

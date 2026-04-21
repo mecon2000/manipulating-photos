@@ -105,6 +105,93 @@ def long_exposure_stack(body_arr, body_alpha, angle_deg, max_shift_px, ghosts=10
     return accum
 
 
+POSE_MODEL = os.path.expanduser("~/openclaw-venv/mediapipe_models/pose_landmarker.task")
+LIMB_LANDMARKS = {
+    "left-arm":  (11, 13, 15),  # shoulder, elbow, wrist (model's left = viewer's right)
+    "right-arm": (12, 14, 16),
+    "left-leg":  (23, 25, 27),  # hip, knee, ankle
+    "right-leg": (24, 26, 28),
+}
+
+
+def detect_limb_points(img_arr, limb_name):
+    """Run MediaPipe pose, return pixel coords of (root, mid, tip) for chosen limb."""
+    import mediapipe as mp
+    idxs = LIMB_LANDMARKS[limb_name]
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_arr.astype(np.uint8))
+    base = mp.tasks.BaseOptions(model_asset_path=POSE_MODEL)
+    opts = mp.tasks.vision.PoseLandmarkerOptions(base_options=base, num_poses=1)
+    detector = mp.tasks.vision.PoseLandmarker.create_from_options(opts)
+    result = detector.detect(mp_img)
+    detector.close()
+    if not result.pose_landmarks:
+        return None
+    lms = result.pose_landmarks[0]
+    h, w = img_arr.shape[:2]
+    return [(lms[i].x * w, lms[i].y * h) for i in idxs]
+
+
+def limb_mask_and_gradient(img_size, pts, radius_px):
+    """Build a soft mask along polyline (root→mid→tip) with gradient from tip (1.0) to root (0).
+
+    Returns (mask, strength, tangent_deg).
+      mask: HxW float 0-1 — which pixels are "in the limb"
+      strength: HxW float 0-1 — how much streak to apply (max near tip)
+      tangent_deg: unit direction root→tip in degrees (for streak angle)
+    """
+    w, h = img_size
+    root, mid, tip = [np.array(p, dtype=np.float32) for p in pts]
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+
+    def seg_dist_and_t(a, b):
+        ab = b - a
+        L2 = float(ab[0] ** 2 + ab[1] ** 2) or 1.0
+        t = ((xx - a[0]) * ab[0] + (yy - a[1]) * ab[1]) / L2
+        t = np.clip(t, 0, 1)
+        closest_x = a[0] + t * ab[0]
+        closest_y = a[1] + t * ab[1]
+        d = np.sqrt((xx - closest_x) ** 2 + (yy - closest_y) ** 2)
+        return d, t
+
+    d1, t1 = seg_dist_and_t(root, mid)
+    d2, t2 = seg_dist_and_t(mid, tip)
+    # for each pixel pick the closer segment; compute param-along-limb in [0,1] (0=root, 1=tip)
+    use_seg2 = d2 < d1
+    d = np.where(use_seg2, d2, d1)
+    param = np.where(use_seg2, 0.5 + 0.5 * t2, 0.5 * t1)  # 0 root → 1 tip
+
+    mask = np.clip(1.0 - d / radius_px, 0, 1).astype(np.float32)
+    strength = (mask * param).astype(np.float32)  # gradient: 0 near root, max near tip
+
+    # streak direction: tip → root (trail behind as limb swept outward)
+    dx, dy = float(root[0] - tip[0]), float(root[1] - tip[1])
+    tangent_deg = float(np.degrees(np.arctan2(-dy, dx)))  # 0=right, 90=up
+    return mask, strength, tangent_deg
+
+
+def limb_streak_effect(bw_arr, limb_mask, limb_strength, tangent_deg, length_px, ghosts):
+    """Stacked directional streak applied only inside limb_mask, weighted by limb_strength."""
+    h, w, _ = bw_arr.shape
+    body_layer = bw_arr * limb_mask[..., None]
+    rad = np.deg2rad(tangent_deg)
+    dx, dy = np.cos(rad), -np.sin(rad)
+    accum = body_layer.copy()
+    for i in range(1, ghosts + 1):
+        frac = (i / ghosts) ** 0.85
+        shift_px = frac * length_px
+        tx, ty = int(round(dx * shift_px)), int(round(dy * shift_px))
+        shifted = np.roll(body_layer, (ty, tx), axis=(0, 1))
+        shifted_s = np.roll(limb_strength, (ty, tx), axis=(0, 1))
+        if tx > 0: shifted[:, :tx] = 0; shifted_s[:, :tx] = 0
+        elif tx < 0: shifted[:, tx:] = 0; shifted_s[:, tx:] = 0
+        if ty > 0: shifted[:ty, :] = 0; shifted_s[:ty, :] = 0
+        elif ty < 0: shifted[ty:, :] = 0; shifted_s[ty:, :] = 0
+        fade = (1.0 - i / (ghosts + 1)) ** 1.2
+        ghost = shifted * fade * shifted_s[..., None]
+        accum = 255.0 - (255.0 - accum) * (1.0 - ghost / 255.0)
+    return accum
+
+
 def slitscan_warp(img_arr, body_alpha, n_slices=6, max_jitter_pct=0.12, seed=None):
     """Fake slit-scan: each column sampled from a different Y offset, stacked.
 
@@ -143,7 +230,7 @@ def add_grain(img_arr, strength=0.025, seed=None):
     return np.clip(img_arr.astype(np.float32) + mod, 0, 255).astype(np.uint8)
 
 
-def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="streak", slitscan_slices=6, slitscan_jitter=0.12):
+def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="streak", slitscan_slices=6, slitscan_jitter=0.12, limb="right-arm", limb_radius_pct=6.0):
     t0 = time.time()
     name = os.path.splitext(os.path.basename(source))[0]
     tag = f"streak_a{int(angle)}_l{int(length_pct)}_g{ghosts}_s{up_to_step}"
@@ -208,6 +295,24 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
                                 n_slices=slitscan_slices,
                                 max_jitter_pct=slitscan_jitter, seed=seed)
         print(f"  step5 slitscan: {slitscan_slices} slices, jitter={slitscan_jitter*100:.0f}%")
+    elif mode == "limb-streak":
+        pts = detect_limb_points(np.asarray(img), limb)
+        if pts is None:
+            print(f"  limb-streak: pose not detected, falling back to full-body stacking")
+            stacked = long_exposure_stack(body_layer, body_alpha, angle,
+                                          max_shift_px=length_px * 2.5, ghosts=ghosts)
+        else:
+            radius_px = min(w, h) * limb_radius_pct / 100.0
+            lmask, lstrength, tangent = limb_mask_and_gradient((w, h), pts, radius_px)
+            # save debug viz
+            Image.fromarray((lstrength * 255).astype(np.uint8)).save(
+                os.path.join(out_dir, "4_limb_strength.png"))
+            # intersect with subject mask to not streak outside body
+            lstrength = lstrength * subj_arr
+            lmask = lmask * subj_arr
+            stacked = limb_streak_effect(bw_arr, lmask, lstrength, tangent,
+                                         length_px * 3.0, ghosts)
+            print(f"  step5 limb-streak: limb={limb} tangent={tangent:.0f}° radius={radius_px:.0f}px")
     else:
         stacked = long_exposure_stack(body_layer, body_alpha, angle,
                                       max_shift_px=length_px * 2.5, ghosts=ghosts)
@@ -261,10 +366,14 @@ if __name__ == "__main__":
                    help="stop after this step (1=bw, 2=mask, 3=face, 4=smear, 5=stack, 6=face-punch, 7=grain)")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--suffix", default="", help="extra tag for output filename")
-    p.add_argument("--mode", choices=["streak", "slitscan"], default="streak",
-                   help="streak=long-exposure stacking along angle; slitscan=vertical time-compression stripes")
+    p.add_argument("--mode", choices=["streak", "slitscan", "limb-streak"], default="streak",
+                   help="streak=full-body stacking; slitscan=vertical time-stripes; limb-streak=one limb only")
     p.add_argument("--slitscan-slices", type=int, default=6)
     p.add_argument("--slitscan-jitter", type=float, default=0.12, help="max Y jitter as fraction of image height")
+    p.add_argument("--limb", choices=list(LIMB_LANDMARKS.keys()), default="right-arm")
+    p.add_argument("--limb-radius-pct", type=float, default=6.0,
+                   help="limb mask radius as %% of min(w,h)")
     a = p.parse_args()
     run(a.source, a.angle, a.length_pct, a.ghosts, a.up_to_step, a.seed, a.suffix,
-        mode=a.mode, slitscan_slices=a.slitscan_slices, slitscan_jitter=a.slitscan_jitter)
+        mode=a.mode, slitscan_slices=a.slitscan_slices, slitscan_jitter=a.slitscan_jitter,
+        limb=a.limb, limb_radius_pct=a.limb_radius_pct)

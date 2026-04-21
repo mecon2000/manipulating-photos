@@ -105,6 +105,35 @@ def long_exposure_stack(body_arr, body_alpha, angle_deg, max_shift_px, ghosts=10
     return accum
 
 
+def slitscan_warp(img_arr, body_alpha, n_slices=6, max_jitter_pct=0.12, seed=None):
+    """Fake slit-scan: each column sampled from a different Y offset, stacked.
+
+    Mimics the temporal-compression look where X-axis becomes time — body
+    stretches into vertical striations.
+    """
+    h, w, _ = img_arr.shape
+    rng = np.random.default_rng(seed)
+    max_jitter = h * max_jitter_pct
+    yy = np.arange(h, dtype=np.int32)
+    xs = np.linspace(0, 1, w, dtype=np.float32)
+    accum = img_arr.copy()
+    for i in range(n_slices):
+        # smooth per-column offset: sum of a few sine components
+        off = np.zeros(w, dtype=np.float32)
+        for k in range(1, 5):
+            amp = rng.standard_normal() * max_jitter / k
+            phase = rng.uniform(0, 2 * np.pi)
+            off += amp * np.sin(k * np.pi * xs + phase)
+        ys = np.clip(yy[:, None] - off[None, :].astype(np.int32), 0, h - 1)
+        # sample per-column
+        warped = np.take_along_axis(img_arr, ys[..., None].repeat(3, axis=-1), axis=0)
+        alpha = np.take_along_axis(body_alpha, ys, axis=0)
+        fade = (1.0 - i / (n_slices + 1)) ** 1.2
+        ghost = warped * alpha[..., None] * fade
+        accum = 255.0 - (255.0 - accum) * (1.0 - ghost / 255.0)
+    return accum
+
+
 def add_grain(img_arr, strength=0.025, seed=None):
     rng = np.random.default_rng(seed)
     h, w = img_arr.shape[:2]
@@ -114,7 +143,7 @@ def add_grain(img_arr, strength=0.025, seed=None):
     return np.clip(img_arr.astype(np.float32) + mod, 0, 255).astype(np.uint8)
 
 
-def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix):
+def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="streak", slitscan_slices=6, slitscan_jitter=0.12):
     t0 = time.time()
     name = os.path.splitext(os.path.basename(source))[0]
     tag = f"streak_a{int(angle)}_l{int(length_pct)}_g{ghosts}_s{up_to_step}"
@@ -171,14 +200,20 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix):
     if up_to_step == 4:
         return _finalize(out_dir, name, tag, np.clip(composite_4, 0, 255).astype(np.uint8))
 
-    # Step 5: long-exposure stacking
+    # Step 5: long-exposure stacking (or slitscan if mode=slitscan)
     body_layer = bw_arr * subj_arr[..., None]  # body luminance on black
     body_alpha = subj_arr * (1.0 - fall)        # fade body alpha near face
-    stacked = long_exposure_stack(body_layer, body_alpha, angle,
-                                  max_shift_px=length_px * 2.5, ghosts=ghosts)
+    if mode == "slitscan":
+        stacked = slitscan_warp(body_layer, body_alpha,
+                                n_slices=slitscan_slices,
+                                max_jitter_pct=slitscan_jitter, seed=seed)
+        print(f"  step5 slitscan: {slitscan_slices} slices, jitter={slitscan_jitter*100:.0f}%")
+    else:
+        stacked = long_exposure_stack(body_layer, body_alpha, angle,
+                                      max_shift_px=length_px * 2.5, ghosts=ghosts)
+        print(f"  step5 stacking: {ghosts} ghosts, max_shift={length_px * 2.5:.0f}px")
     # blend stacked with smear for soft seams
     effect = 0.65 * stacked + 0.35 * smeared * body_w
-    print(f"  step5 stacking: {ghosts} ghosts, max_shift={length_px * 2.5:.0f}px")
     # composite: stacked body over BG, sharp face punched back
     composite_5 = (bw_arr * (1.0 - subj_arr[..., None])  # BG preserved
                    + effect                                 # stacked body
@@ -226,5 +261,10 @@ if __name__ == "__main__":
                    help="stop after this step (1=bw, 2=mask, 3=face, 4=smear, 5=stack, 6=face-punch, 7=grain)")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--suffix", default="", help="extra tag for output filename")
+    p.add_argument("--mode", choices=["streak", "slitscan"], default="streak",
+                   help="streak=long-exposure stacking along angle; slitscan=vertical time-compression stripes")
+    p.add_argument("--slitscan-slices", type=int, default=6)
+    p.add_argument("--slitscan-jitter", type=float, default=0.12, help="max Y jitter as fraction of image height")
     a = p.parse_args()
-    run(a.source, a.angle, a.length_pct, a.ghosts, a.up_to_step, a.seed, a.suffix)
+    run(a.source, a.angle, a.length_pct, a.ghosts, a.up_to_step, a.seed, a.suffix,
+        mode=a.mode, slitscan_slices=a.slitscan_slices, slitscan_jitter=a.slitscan_jitter)

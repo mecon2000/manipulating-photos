@@ -111,7 +111,7 @@ function showToast(msg) {
 async function refresh() {
   try {
     const [q, l] = await Promise.all([
-      fetch('/api/queue').then(r => r.json()),
+      fetch('/api/candidates/queue').then(r => r.json()),
       fetch('/api/candidates/list').then(r => r.json()),
     ]);
     items = q.pending || [];

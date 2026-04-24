@@ -53,6 +53,7 @@ FAVORITES_DIR = SHARED_DIR / "favorites"
 FAVORITES_JSON = FAVORITES_DIR / "favorites.json"
 EDIT_LATER_DIR = SHARED_DIR / "edit-later"
 STATE_PATH = SHARED_DIR / "batch_state.json"
+MS_STATE_PATH = SHARED_DIR / "batch_state_candidates.json"
 FINALS_DIR = SHARED_DIR / "finals"
 BLACKLIST_PATH = SHARED_DIR / "blacklisted_models.json"
 
@@ -379,7 +380,8 @@ def now_str():
 # --- State -----------------------------------------------------------------
 
 class State:
-    def __init__(self):
+    def __init__(self, path=STATE_PATH):
+        self.path = path
         self.lock = threading.RLock()
         self.queue = deque()           # pending items (newest appended to right)
         self.history = deque(maxlen=200)  # recently-decided items (for undo/context)
@@ -391,10 +393,10 @@ class State:
         self.load()
 
     def load(self):
-        if not STATE_PATH.is_file():
+        if not self.path.is_file():
             return
         try:
-            data = json.loads(STATE_PATH.read_text())
+            data = json.loads(self.path.read_text())
             for item in data.get("queue", []):
                 self.queue.append(item)
             for item in data.get("priority", []):
@@ -405,7 +407,7 @@ class State:
 
     def save(self):
         SHARED_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = STATE_PATH.with_suffix(".tmp")
+        tmp = self.path.with_suffix(".tmp")
         data = {
             "queue": list(self.queue),
             "priority": list(self.priority),
@@ -413,7 +415,7 @@ class State:
             "saved_at": now_str(),
         }
         tmp.write_text(json.dumps(data, indent=2))
-        tmp.replace(STATE_PATH)
+        tmp.replace(self.path)
 
     def add(self, item, priority=False):
         with self.lock:
@@ -459,7 +461,8 @@ class State:
         with self.lock:
             return len(self.queue) + len(self.priority)
 
-STATE = State()
+STATE = State(STATE_PATH)
+MS_STATE = State(MS_STATE_PATH)
 
 # --- Command builder -------------------------------------------------------
 
@@ -545,22 +548,22 @@ def generation_loop(allowed_tools=None):
 
 def ms_candidate_loop():
     """Continuously generate motion-streak B&W previews for candidate review."""
-    while STATE.stats.get("running", True):
+    while MS_STATE.stats.get("running", True):
         try:
-            if STATE.stats.get("paused"):
+            if MS_STATE.stats.get("paused"):
                 time.sleep(2)
                 continue
-            pending = STATE.pending_count()
+            pending = MS_STATE.pending_count()
             if pending >= 15:
-                if not STATE.backpressure_notified:
+                if not MS_STATE.backpressure_notified:
                     push_text("Candidate queue full", f"{pending} waiting for review")
-                    STATE.backpressure_notified = True
-                while STATE.pending_count() >= 10 and STATE.stats.get("running", True):
-                    if STATE.stats.get("paused"):
+                    MS_STATE.backpressure_notified = True
+                while MS_STATE.pending_count() >= 10 and MS_STATE.stats.get("running", True):
+                    if MS_STATE.stats.get("paused"):
                         break
                     time.sleep(3)
-                if STATE.pending_count() < 10:
-                    STATE.backpressure_notified = False
+                if MS_STATE.pending_count() < 10:
+                    MS_STATE.backpressure_notified = False
                 continue
 
             model_name, photo = pick_ms_candidate_photo()
@@ -572,7 +575,7 @@ def ms_candidate_loop():
             generate_ms_candidate(job_id, model_name, photo)
         except Exception as e:
             print(f"[ms] loop error: {e}", flush=True)
-            STATE.stats["failures"] = STATE.stats.get("failures", 0) + 1
+            MS_STATE.stats["failures"] = MS_STATE.stats.get("failures", 0) + 1
             time.sleep(5)
 
 
@@ -594,7 +597,7 @@ def generate_ms_candidate(job_id, model_name, photo):
     if res.returncode != 0:
         print(f"[ms] [{job_id}] FAILED rc={res.returncode}", flush=True)
         print((res.stderr or "")[-400:], flush=True)
-        STATE.stats["failures"] = STATE.stats.get("failures", 0) + 1
+        MS_STATE.stats["failures"] = MS_STATE.stats.get("failures", 0) + 1
         return None
 
     out_path = find_output_after(start_ts, hint_model=model_name, hint_source=src_stem)
@@ -615,7 +618,7 @@ def generate_ms_candidate(job_id, model_name, photo):
         "generated_at": now_str(),
         "status": "pending",
     }
-    STATE.add(item, priority=False)
+    MS_STATE.add(item, priority=False)
     print(f"[ms] [{job_id}] OK -> {out_path.name}", flush=True)
     return item
 
@@ -678,8 +681,6 @@ app = Flask(__name__, template_folder=str(SCRIPT_DIR / "templates"))
 
 @app.route("/")
 def index():
-    if MODE == "candidates":
-        return render_template("candidates.html")
     return render_template("gallery.html")
 
 @app.route("/candidates")
@@ -715,7 +716,7 @@ def api_ms_list():
 
 @app.route("/api/candidates/<item_id>/good", methods=["POST"])
 def api_ms_good(item_id):
-    it = STATE.find(item_id)
+    it = MS_STATE.find(item_id)
     if not it:
         abort(404)
     source = it["source"]
@@ -729,22 +730,20 @@ def api_ms_good(item_id):
             "marked_at": now_str(),
         })
         save_ms_candidates(entries)
-    # One-time boost per session
     if model and model not in MS_BOOSTS:
         MS_BOOSTS[model] = 1.5
-    # Remove preview from queue + delete preview file (path is saved in json)
     try:
         Path(it["output"]).unlink()
     except OSError:
         pass
-    STATE.remove(item_id)
-    STATE.stats["liked"] = STATE.stats.get("liked", 0) + 1
-    STATE.save()
+    MS_STATE.remove(item_id)
+    MS_STATE.stats["liked"] = MS_STATE.stats.get("liked", 0) + 1
+    MS_STATE.save()
     return jsonify({"ok": True, "saved": len(entries), "boost": MS_BOOSTS.get(model)})
 
 @app.route("/api/candidates/<item_id>/bad", methods=["POST"])
 def api_ms_bad(item_id):
-    it = STATE.find(item_id)
+    it = MS_STATE.find(item_id)
     if not it:
         abort(404)
     MS_REJECTS.add(it["source"])
@@ -753,14 +752,14 @@ def api_ms_bad(item_id):
         Path(it["output"]).unlink()
     except OSError:
         pass
-    STATE.remove(item_id)
-    STATE.stats["disliked"] = STATE.stats.get("disliked", 0) + 1
-    STATE.save()
+    MS_STATE.remove(item_id)
+    MS_STATE.stats["disliked"] = MS_STATE.stats.get("disliked", 0) + 1
+    MS_STATE.save()
     return jsonify({"ok": True, "rejects": len(MS_REJECTS)})
 
 @app.route("/api/candidates/<item_id>/bad-session", methods=["POST"])
 def api_ms_bad_session(item_id):
-    it = STATE.find(item_id)
+    it = MS_STATE.find(item_id)
     if not it:
         abort(404)
     model = it.get("model")
@@ -769,8 +768,8 @@ def api_ms_bad_session(item_id):
     MS_BLACKLIST.add(model)
     ms_save_blacklist(MS_BLACKLIST)
     removed = 0
-    with STATE.lock:
-        for lst in (STATE.priority, STATE.queue):
+    with MS_STATE.lock:
+        for lst in (MS_STATE.priority, MS_STATE.queue):
             i = 0
             while i < len(lst):
                 cur = lst[i]
@@ -783,8 +782,16 @@ def api_ms_bad_session(item_id):
                     removed += 1
                 else:
                     i += 1
-        STATE.save()
+        MS_STATE.save()
     return jsonify({"ok": True, "model": model, "removed": removed})
+
+@app.route("/api/candidates/queue")
+def api_ms_queue():
+    return jsonify({
+        "pending": MS_STATE.all_pending(),
+        "pending_count": MS_STATE.pending_count(),
+        "stats": MS_STATE.stats,
+    })
 
 @app.route("/api/queue")
 def api_queue():
@@ -1099,12 +1106,10 @@ def main():
     p.add_argument("--tools", default=None,
                    help="Comma-separated subset of tools to use")
     p.add_argument("--no-tunnel", action="store_true")
-    p.add_argument("--no-gen", action="store_true", help="Skip generation loop (UI only)")
-    p.add_argument("--mode", choices=["gallery", "candidates"], default="gallery",
-                   help="gallery=default stylized queue; candidates=motion-streak candidate picker")
+    p.add_argument("--no-gen", action="store_true", help="Skip generation loops (UI only)")
+    p.add_argument("--no-gallery-gen", action="store_true", help="Skip gallery generator")
+    p.add_argument("--no-candidates-gen", action="store_true", help="Skip motion-streak candidate picker")
     args = p.parse_args()
-    global MODE
-    MODE = args.mode
 
     SHARED_DIR.mkdir(parents=True, exist_ok=True)
     FINALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1117,21 +1122,19 @@ def main():
             print(f"Unknown tools: {bad}. Known: {sorted(TOOLS)}")
             sys.exit(2)
 
-    STATE.stats["running"] = True
-    STATE.stats["paused"] = False
-    STATE.save()
+    for s in (STATE, MS_STATE):
+        s.stats["running"] = True
+        s.stats["paused"] = False
+        s.save()
 
-    # Start cloudflared
     if not args.no_tunnel:
         start_cloudflared(args.port)
 
-    # Start generation thread
     if not args.no_gen:
-        if MODE == "candidates":
-            t = threading.Thread(target=ms_candidate_loop, daemon=True)
-        else:
-            t = threading.Thread(target=generation_loop, args=(allowed,), daemon=True)
-        t.start()
+        if not args.no_gallery_gen:
+            threading.Thread(target=generation_loop, args=(allowed,), daemon=True).start()
+        if not args.no_candidates_gen:
+            threading.Thread(target=ms_candidate_loop, daemon=True).start()
 
     print(f"[flask] serving on http://0.0.0.0:{args.port}", flush=True)
     app.run(host="0.0.0.0", port=args.port, threaded=True, use_reloader=False)

@@ -2,7 +2,7 @@
 
 ```mermaid
 mindmap
-  root((OpenClaw))
+  root((START))
     Foundation
       🔧 masking
       🔧 body-segment

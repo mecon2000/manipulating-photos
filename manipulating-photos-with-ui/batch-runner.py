@@ -824,6 +824,49 @@ def api_image():
         abort(404)
     return send_file(str(p))
 
+@app.route("/api/queue/<item_id>/crop-options", methods=["POST"])
+def api_crop_options(item_id):
+    it = GALLERY_STATE.find(item_id)
+    if not it:
+        abort(404)
+    src = it["output"]
+    cmd = [PYTHON, str(WORKFLOWS_DIR / "smart-crop.py"),
+           "--source", src, "--show-options"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        abort(504)
+    if res.returncode != 0:
+        return jsonify({"ok": False, "error": (res.stderr or "")[-400:]}), 500
+    m = re.search(r"Options overlay saved:\s*(\S.+)", res.stdout)
+    if not m:
+        return jsonify({"ok": False, "error": "could not parse output path"}), 500
+    return jsonify({"ok": True, "options_path": m.group(1).strip()})
+
+@app.route("/api/queue/<item_id>/crop/<int:n>", methods=["POST"])
+def api_crop_apply(item_id, n):
+    it = GALLERY_STATE.find(item_id)
+    if not it:
+        abort(404)
+    src = it["output"]
+    cmd = [PYTHON, str(WORKFLOWS_DIR / "smart-crop.py"),
+           "--source", src, "--crop", str(n)]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        abort(504)
+    if res.returncode != 0:
+        return jsonify({"ok": False, "error": (res.stderr or "")[-400:]}), 500
+    m = re.search(r"→\s*(\S.+)", res.stdout)
+    if not m:
+        return jsonify({"ok": False, "error": "could not parse output path"}), 500
+    new_out = m.group(1).strip()
+    with GALLERY_STATE.lock:
+        it["output"] = new_out
+        it["command"] = (it.get("command", "") + f" && smart-crop --crop {n}").strip()
+        GALLERY_STATE.save()
+    return jsonify({"ok": True, "output": new_out})
+
 @app.route("/api/queue/<item_id>/dislike", methods=["POST"])
 def api_dislike(item_id):
     it = GALLERY_STATE.remove(item_id)

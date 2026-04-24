@@ -148,6 +148,7 @@ document.addEventListener('click', () => {
     <button class="btn btn-dislike" onclick="act('dislike')">👎 Delete</button>
     <button class="btn btn-fav" onclick="act('like')">⭐ Fav</button>
     <button class="btn btn-edit" onclick="act('edit')">✏️ Edit</button>
+    <button class="btn btn-edit" onclick="openCrop()" title="Get 12 crop options, pick one, then fav the cropped result">✂️ Crop</button>
     <button class="btn btn-blacklist" onclick="act('blacklist')" title="Blacklist this session — never show again">🚫 Session</button>
   </div>
   <div class="second-row">
@@ -376,6 +377,58 @@ document.addEventListener('click', (e) => {
 
 refresh();
 setInterval(refresh, 3000);
+</script>
+<div id="cropModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92);
+     z-index:50; flex-direction:column; align-items:center; padding:10px; gap:10px;">
+  <div style="color:#e7e7ea; font-size:13px;">Pick a crop 1–12 (or Cancel)</div>
+  <img id="cropImg" style="max-width:100%; max-height:60vh; object-fit:contain;" />
+  <div style="display:grid; grid-template-columns:repeat(6,1fr); gap:6px; width:100%; max-width:420px;">
+    <button onclick="pickCrop(1)">1</button><button onclick="pickCrop(2)">2</button>
+    <button onclick="pickCrop(3)">3</button><button onclick="pickCrop(4)">4</button>
+    <button onclick="pickCrop(5)">5</button><button onclick="pickCrop(6)">6</button>
+    <button onclick="pickCrop(7)">7</button><button onclick="pickCrop(8)">8</button>
+    <button onclick="pickCrop(9)">9</button><button onclick="pickCrop(10)">10</button>
+    <button onclick="pickCrop(11)">11</button><button onclick="pickCrop(12)">12</button>
+  </div>
+  <button onclick="closeCrop()" style="padding:10px 20px;">Cancel</button>
+  <div id="cropStatus" style="color:#8a8a90; font-size:12px;"></div>
+</div>
+<script>
+let cropItemId = null;
+async function openCrop() {
+  if (!current) return;
+  cropItemId = current.id;
+  document.getElementById('cropModal').style.display = 'flex';
+  document.getElementById('cropStatus').textContent = 'Generating crop options…';
+  document.getElementById('cropImg').style.display = 'none';
+  try {
+    const r = await fetch(`/api/queue/${cropItemId}/crop-options`, {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'failed');
+    document.getElementById('cropImg').src = '/api/image?path=' + encodeURIComponent(d.options_path) + '&_=' + Date.now();
+    document.getElementById('cropImg').style.display = 'block';
+    document.getElementById('cropStatus').textContent = 'Tap a number to apply that crop.';
+  } catch (e) {
+    document.getElementById('cropStatus').textContent = 'Error: ' + e.message;
+  }
+}
+async function pickCrop(n) {
+  if (!cropItemId) return;
+  document.getElementById('cropStatus').textContent = `Applying crop ${n}…`;
+  try {
+    const r = await fetch(`/api/queue/${cropItemId}/crop/${n}`, {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'failed');
+    closeCrop();
+    await refresh();
+  } catch (e) {
+    document.getElementById('cropStatus').textContent = 'Error: ' + e.message;
+  }
+}
+function closeCrop() {
+  document.getElementById('cropModal').style.display = 'none';
+  cropItemId = null;
+}
 </script>
 </body>
 </html>

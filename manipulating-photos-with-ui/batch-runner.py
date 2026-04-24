@@ -696,7 +696,7 @@ def tree_page():
 
 @app.route("/api/tree")
 def api_tree():
-    tree_path = Path("~/.openclaw/workspace/shared/tools_tree.md").expanduser()
+    tree_path = SCRIPT_DIR.parent / "tools_tree.md"
     if not tree_path.is_file():
         return jsonify({"mermaid": "", "updated": None, "error": "tools_tree.md not found"})
     text = tree_path.read_text()

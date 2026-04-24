@@ -1,6 +1,6 @@
 # OpenClaw Scripts
 
-Photo transformation pipeline for portrait/boudoir photography. Fourteen active tools with unified `--affect`/`--exclude` masking. See `~/.openclaw/workspace/shared/tools_tree.md` for the full map with status (active/paused/dropped).
+Photo transformation pipeline for portrait/boudoir photography. Fourteen active tools with unified `--affect`/`--exclude` masking. See `tools_tree.md` (at repo root) for the full map with status (active/paused/dropped).
 
 ## Environment
 

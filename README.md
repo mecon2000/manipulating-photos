@@ -2,7 +2,7 @@
 
 Organized collection of photography workflow and automation scripts for Ronnie (Ron P. Wilder).
 
-Tool map and status (active / paused / dropped / ideas): `~/.openclaw/workspace/shared/tools_tree.md`.
+Tool map and status (active / paused / dropped / ideas): [`tools_tree.md`](tools_tree.md).
 Tool reference docs: `CLAUDE.md`.
 
 ## Structure

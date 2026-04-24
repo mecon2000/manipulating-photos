@@ -328,12 +328,16 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
         stacked = long_exposure_stack(body_layer, body_alpha, angle,
                                       max_shift_px=length_px * 2.5, ghosts=ghosts)
         print(f"  step5 stacking: {ghosts} ghosts, max_shift={length_px * 2.5:.0f}px")
-    # blend stacked with smear for soft seams
-    effect = 0.65 * stacked + 0.35 * smeared * body_w
-    # composite: stacked body over BG, sharp face punched back
-    composite_5 = (bw_arr * (1.0 - subj_arr[..., None])  # BG preserved
-                   + effect                                 # stacked body
-                   + bw_arr * face_w * subj_arr[..., None]) # face on top (additive-ish)
+    if mode == "limb-streak":
+        # stacked already contains original BW maxed with streaks — use directly
+        composite_5 = stacked
+    else:
+        # blend stacked with smear for soft seams
+        effect = 0.65 * stacked + 0.35 * smeared * body_w
+        # composite: stacked body over BG, sharp face punched back
+        composite_5 = (bw_arr * (1.0 - subj_arr[..., None])  # BG preserved
+                       + effect                                 # stacked body
+                       + bw_arr * face_w * subj_arr[..., None]) # face on top (additive-ish)
     composite_5 = np.clip(composite_5, 0, 255)
     if up_to_step == 5:
         return _finalize(out_dir, name, tag, composite_5.astype(np.uint8))

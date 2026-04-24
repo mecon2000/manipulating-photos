@@ -169,25 +169,34 @@ def limb_mask_and_gradient(img_size, pts, radius_px):
     return mask, strength, tangent_deg
 
 
-def limb_streak_effect(bw_arr, limb_mask, limb_strength, tangent_deg, length_px, ghosts):
-    """Stacked directional streak applied only inside limb_mask, weighted by limb_strength."""
+def limb_streak_effect(bw_arr, limb_mask, limb_strength, tangent_deg, length_px,
+                        ghosts, bright_threshold=170):
+    """Smear the limb's brightest pixels in a straight line across the image.
+
+    Isolates highlights inside the limb (pixels >= bright_threshold), then
+    projects them along tangent direction with decaying alpha. Shifted copies
+    are NOT re-gated by the limb mask, so streaks extend beyond the limb
+    silhouette — mimicking long-exposure motion trails on highlights.
+    """
     h, w, _ = bw_arr.shape
-    body_layer = bw_arr * limb_mask[..., None]
     rad = np.deg2rad(tangent_deg)
     dx, dy = np.cos(rad), -np.sin(rad)
-    accum = body_layer.copy()
+    lum = bw_arr.mean(axis=2)
+    soft = np.clip((lum - bright_threshold) / (255.0 - bright_threshold), 0, 1)
+    source_alpha = (soft * limb_strength).astype(np.float32)
+    source_rgb = bw_arr * source_alpha[..., None]
+    accum = bw_arr.copy()
     for i in range(1, ghosts + 1):
         frac = (i / ghosts) ** 0.85
         shift_px = frac * length_px
         tx, ty = int(round(dx * shift_px)), int(round(dy * shift_px))
-        shifted = np.roll(body_layer, (ty, tx), axis=(0, 1))
-        shifted_s = np.roll(limb_strength, (ty, tx), axis=(0, 1))
-        if tx > 0: shifted[:, :tx] = 0; shifted_s[:, :tx] = 0
-        elif tx < 0: shifted[:, tx:] = 0; shifted_s[:, tx:] = 0
-        if ty > 0: shifted[:ty, :] = 0; shifted_s[:ty, :] = 0
-        elif ty < 0: shifted[ty:, :] = 0; shifted_s[ty:, :] = 0
+        shifted = np.roll(source_rgb, (ty, tx), axis=(0, 1))
+        if tx > 0: shifted[:, :tx] = 0
+        elif tx < 0: shifted[:, tx:] = 0
+        if ty > 0: shifted[:ty, :] = 0
+        elif ty < 0: shifted[ty:, :] = 0
         fade = (1.0 - i / (ghosts + 1)) ** 1.2
-        ghost = shifted * fade * shifted_s[..., None]
+        ghost = shifted * fade
         accum = 255.0 - (255.0 - accum) * (1.0 - ghost / 255.0)
     return accum
 
@@ -311,7 +320,7 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
             lstrength = lstrength * subj_arr
             lmask = lmask * subj_arr
             stacked = limb_streak_effect(bw_arr, lmask, lstrength, tangent,
-                                         length_px * 3.0, ghosts)
+                                         length_px * 6.0, ghosts)
             print(f"  step5 limb-streak: limb={limb} tangent={tangent:.0f}° radius={radius_px:.0f}px")
     else:
         stacked = long_exposure_stack(body_layer, body_alpha, angle,

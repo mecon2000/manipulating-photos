@@ -91,6 +91,12 @@ document.addEventListener('click', () => {
     <button class="btn" style="background:#333; max-width:60px;" onclick="nav(1)"
             title="Next candidate (doesn't change saved/rejected state)">→</button>
   </div>
+  <div class="btnrow" style="margin-top:6px;">
+    <button class="btn" style="background:#c49a1a;" onclick="act('fav-as-is')"
+            title="Favorite this B&W preview as-is (saves to favorites with reconstruction command)">⭐ Fav as-is</button>
+    <button class="btn" style="background:#1e5a7a;" onclick="act('similar')"
+            title="Queue 4 adjacent photos from the same session for motion-streak preview">🔁 Similar photos</button>
+  </div>
   <div style="display:flex; justify-content:center; margin-top:6px;">
     <button class="btn" id="pauseBtn" style="background:#555; max-width:120px;"
             onclick="togglePause()"
@@ -174,6 +180,8 @@ async function act(kind) {
     if (kind === 'good') showToast(`Saved (${data.saved})`);
     else if (kind === 'bad') showToast('Rejected');
     else if (kind === 'bad-session') showToast(`Session blacklisted (-${data.removed})`);
+    else if (kind === 'fav-as-is') showToast(`Favorited: ${data.file}`);
+    else if (kind === 'similar') { showToast(`Queued ${data.queued} similar`); return; }
   } catch (e) {
     showToast('Error');
     console.error(e);

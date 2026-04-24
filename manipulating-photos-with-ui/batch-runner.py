@@ -787,6 +787,87 @@ def api_ms_bad_session(item_id):
         CANDIDATES_STATE.save()
     return jsonify({"ok": True, "model": model, "removed": removed})
 
+@app.route("/api/candidates/<item_id>/fav-as-is", methods=["POST"])
+def api_ms_fav_as_is(item_id):
+    it = CANDIDATES_STATE.find(item_id)
+    if not it:
+        abort(404)
+    FAVORITES_DIR.mkdir(parents=True, exist_ok=True)
+    src = Path(it["output"])
+    model_tag = re.sub(r"[^\w]+", "_", it.get("model") or "").strip("_")
+    src_stem = Path(it["source"]).stem
+    fav_name = re.sub(r"[<>:\"/\\|?*]", "_",
+                      "__".join([p for p in [model_tag, src_stem, "motion-streak", "bw-preview"] if p]) + src.suffix)
+    fav_path = FAVORITES_DIR / fav_name
+    try:
+        shutil.copy2(src, fav_path)
+    except Exception:
+        from PIL import Image
+        Image.open(src).save(fav_path, quality=95)
+    try:
+        git_hash = subprocess.check_output(
+            ["git", "-C", str(WORKFLOWS_DIR), "rev-parse", "--short", "HEAD"],
+            text=True, timeout=5).strip()
+    except Exception:
+        git_hash = None
+    entry = {
+        "file": fav_name, "source": it["source"], "model": it.get("model"),
+        "style": "bw-preview", "tool": "motion-streak", "score": None,
+        "git_commit": git_hash, "favorited_at": now_str(),
+        "command": it["command"], "artifact": None, "seed": None,
+    }
+    data = {"favorites": []}
+    if FAVORITES_JSON.is_file():
+        try:
+            data = json.loads(FAVORITES_JSON.read_text())
+        except Exception:
+            pass
+    data.setdefault("favorites", []).append(entry)
+    FAVORITES_JSON.write_text(json.dumps(data, indent=2))
+    CANDIDATES_STATE.remove(item_id)
+    CANDIDATES_STATE.stats["liked"] = CANDIDATES_STATE.stats.get("liked", 0) + 1
+    CANDIDATES_STATE.save()
+    return jsonify({"ok": True, "file": fav_name})
+
+@app.route("/api/candidates/<item_id>/similar", methods=["POST"])
+def api_ms_similar(item_id):
+    it = CANDIDATES_STATE.find(item_id)
+    if not it:
+        abort(404)
+    src = Path(it["source"])
+    model_dir = src.parent.parent
+    m = re.search(r"(\d+)(?=\D*$)", src.stem)
+    if not m:
+        return jsonify({"queued": 0, "reason": "no number in filename"})
+    base_num = int(m.group(1))
+    num_span = m.span(1)
+    prefix = src.stem[:num_span[0]]
+    suffix = src.stem[num_span[1]:]
+    digit_w = num_span[1] - num_span[0]
+    roots = [p for p in [model_dir / "Processed", model_dir / "processed",
+                         model_dir / "Unprocessed", model_dir / "unprocessed"]
+             if p.is_dir()]
+    found = []
+    for offset in [-2, -1, 1, 2, 3, 4]:
+        n = base_num + offset
+        cand_stem = f"{prefix}{str(n).zfill(digit_w)}{suffix}"
+        for root in roots:
+            for ext in [".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG"]:
+                p = root / (cand_stem + ext)
+                if p.is_file():
+                    found.append(p)
+                    break
+        if len(found) >= 4:
+            break
+    queued = 0
+    for photo in found[:4]:
+        jid = uuid.uuid4().hex[:8]
+        threading.Thread(target=generate_ms_candidate,
+                         args=(jid, it.get("model") or "Unknown", photo),
+                         daemon=True).start()
+        queued += 1
+    return jsonify({"queued": queued})
+
 @app.route("/api/candidates/queue")
 def api_ms_queue():
     return jsonify({

@@ -480,23 +480,25 @@ def build_command(tool_name, source_path, preset, artifact):
     cmd_str = " ".join(f"'{c}'" if " " in c else c for c in cmd)
     return cmd, cmd_str
 
-def find_output_after(start_ts, hint_model=None, hint_source=None):
-    """Find the newest .jpg in shared/finals/ with mtime >= start_ts."""
-    if not FINALS_DIR.is_dir():
-        return None
+def find_output_after(start_ts, hint_model=None, hint_source=None, search_dirs=None):
+    """Find newest .jpg with mtime >= start_ts in any of the search dirs."""
+    dirs = search_dirs or [FINALS_DIR, SHARED_DIR / "motion-streak-finals"]
     candidates = []
-    for f in FINALS_DIR.iterdir():
-        if f.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+    for d in dirs:
+        if not d.is_dir():
             continue
-        try:
-            st = f.stat()
-        except OSError:
-            continue
-        if st.st_mtime >= start_ts - 2:
-            score = st.st_mtime
-            if hint_source and hint_source in f.name:
-                score += 100000
-            candidates.append((score, f))
+        for f in d.iterdir():
+            if f.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+                continue
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            if st.st_mtime >= start_ts - 2:
+                score = st.st_mtime
+                if hint_source and hint_source in f.name:
+                    score += 100000
+                candidates.append((score, f))
     if not candidates:
         return None
     candidates.sort(reverse=True)

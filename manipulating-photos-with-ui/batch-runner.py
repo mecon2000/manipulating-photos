@@ -52,8 +52,8 @@ SHARED_DIR = Path("~/.openclaw/workspace/shared").expanduser()
 FAVORITES_DIR = SHARED_DIR / "favorites"
 FAVORITES_JSON = FAVORITES_DIR / "favorites.json"
 EDIT_LATER_DIR = SHARED_DIR / "edit-later"
-STATE_PATH = SHARED_DIR / "batch_state.json"
-MS_STATE_PATH = SHARED_DIR / "batch_state_candidates.json"
+GALLERY_STATE_PATH = SHARED_DIR / "batch_state.json"
+CANDIDATES_STATE_PATH = SHARED_DIR / "batch_state_candidates.json"
 FINALS_DIR = SHARED_DIR / "finals"
 BLACKLIST_PATH = SHARED_DIR / "blacklisted_models.json"
 
@@ -62,8 +62,6 @@ MS_CANDIDATES_JSON = SHARED_DIR / "motion_streak_candidates.json"
 MS_REJECTS_JSON = SHARED_DIR / "motion_streak_rejects.json"
 MS_BLACKLIST_PATH = SHARED_DIR / "motion_streak_blacklist.json"
 
-# Global mode flag (set in main). "gallery" (default) or "candidates".
-MODE = "gallery"
 # Per-session boost multiplier for motion-streak model picking (one-time per session).
 MS_BOOSTS = {}
 
@@ -380,7 +378,7 @@ def now_str():
 # --- State -----------------------------------------------------------------
 
 class State:
-    def __init__(self, path=STATE_PATH):
+    def __init__(self, path=GALLERY_STATE_PATH):
         self.path = path
         self.lock = threading.RLock()
         self.queue = deque()           # pending items (newest appended to right)
@@ -461,8 +459,8 @@ class State:
         with self.lock:
             return len(self.queue) + len(self.priority)
 
-STATE = State(STATE_PATH)
-MS_STATE = State(MS_STATE_PATH)
+GALLERY_STATE = State(GALLERY_STATE_PATH)
+CANDIDATES_STATE = State(CANDIDATES_STATE_PATH)
 
 # --- Command builder -------------------------------------------------------
 
@@ -507,24 +505,24 @@ def find_output_after(start_ts, hint_model=None, hint_source=None):
 # --- Generation worker -----------------------------------------------------
 
 def generation_loop(allowed_tools=None):
-    while STATE.stats.get("running", True):
+    while GALLERY_STATE.stats.get("running", True):
         try:
             # Backpressure
-            pending = STATE.pending_count()
-            if STATE.stats.get("paused"):
+            pending = GALLERY_STATE.pending_count()
+            if GALLERY_STATE.stats.get("paused"):
                 time.sleep(2)
                 continue
             if pending >= 15:
-                if not STATE.backpressure_notified:
+                if not GALLERY_STATE.backpressure_notified:
                     push_text("Gallery backed up", f"{pending} photos waiting for review")
-                    STATE.backpressure_notified = True
+                    GALLERY_STATE.backpressure_notified = True
                 # Wait until queue drops to 10
-                while STATE.pending_count() >= 10 and STATE.stats.get("running", True):
-                    if STATE.stats.get("paused"):
+                while GALLERY_STATE.pending_count() >= 10 and GALLERY_STATE.stats.get("running", True):
+                    if GALLERY_STATE.stats.get("paused"):
                         break
                     time.sleep(3)
-                if STATE.pending_count() < 10:
-                    STATE.backpressure_notified = False
+                if GALLERY_STATE.pending_count() < 10:
+                    GALLERY_STATE.backpressure_notified = False
                 continue
 
             # Pick a random job
@@ -543,27 +541,27 @@ def generation_loop(allowed_tools=None):
                          seed, priority=False)
         except Exception as e:
             print(f"[gen] loop error: {e}", flush=True)
-            STATE.stats["failures"] = STATE.stats.get("failures", 0) + 1
+            GALLERY_STATE.stats["failures"] = GALLERY_STATE.stats.get("failures", 0) + 1
             time.sleep(5)
 
 def ms_candidate_loop():
     """Continuously generate motion-streak B&W previews for candidate review."""
-    while MS_STATE.stats.get("running", True):
+    while CANDIDATES_STATE.stats.get("running", True):
         try:
-            if MS_STATE.stats.get("paused"):
+            if CANDIDATES_STATE.stats.get("paused"):
                 time.sleep(2)
                 continue
-            pending = MS_STATE.pending_count()
+            pending = CANDIDATES_STATE.pending_count()
             if pending >= 15:
-                if not MS_STATE.backpressure_notified:
+                if not CANDIDATES_STATE.backpressure_notified:
                     push_text("Candidate queue full", f"{pending} waiting for review")
-                    MS_STATE.backpressure_notified = True
-                while MS_STATE.pending_count() >= 10 and MS_STATE.stats.get("running", True):
-                    if MS_STATE.stats.get("paused"):
+                    CANDIDATES_STATE.backpressure_notified = True
+                while CANDIDATES_STATE.pending_count() >= 10 and CANDIDATES_STATE.stats.get("running", True):
+                    if CANDIDATES_STATE.stats.get("paused"):
                         break
                     time.sleep(3)
-                if MS_STATE.pending_count() < 10:
-                    MS_STATE.backpressure_notified = False
+                if CANDIDATES_STATE.pending_count() < 10:
+                    CANDIDATES_STATE.backpressure_notified = False
                 continue
 
             model_name, photo = pick_ms_candidate_photo()
@@ -575,7 +573,7 @@ def ms_candidate_loop():
             generate_ms_candidate(job_id, model_name, photo)
         except Exception as e:
             print(f"[ms] loop error: {e}", flush=True)
-            MS_STATE.stats["failures"] = MS_STATE.stats.get("failures", 0) + 1
+            CANDIDATES_STATE.stats["failures"] = CANDIDATES_STATE.stats.get("failures", 0) + 1
             time.sleep(5)
 
 
@@ -597,7 +595,7 @@ def generate_ms_candidate(job_id, model_name, photo):
     if res.returncode != 0:
         print(f"[ms] [{job_id}] FAILED rc={res.returncode}", flush=True)
         print((res.stderr or "")[-400:], flush=True)
-        MS_STATE.stats["failures"] = MS_STATE.stats.get("failures", 0) + 1
+        CANDIDATES_STATE.stats["failures"] = CANDIDATES_STATE.stats.get("failures", 0) + 1
         return None
 
     out_path = find_output_after(start_ts, hint_model=model_name, hint_source=src_stem)
@@ -618,7 +616,7 @@ def generate_ms_candidate(job_id, model_name, photo):
         "generated_at": now_str(),
         "status": "pending",
     }
-    MS_STATE.add(item, priority=False)
+    CANDIDATES_STATE.add(item, priority=False)
     print(f"[ms] [{job_id}] OK -> {out_path.name}", flush=True)
     return item
 
@@ -640,7 +638,7 @@ def generate_one(job_id, tool_name, model_name, photo, preset, artifact,
     if res.returncode != 0:
         print(f"[gen] [{job_id}] FAILED rc={res.returncode}", flush=True)
         print((res.stderr or "")[-400:], flush=True)
-        STATE.stats["failures"] = STATE.stats.get("failures", 0) + 1
+        GALLERY_STATE.stats["failures"] = GALLERY_STATE.stats.get("failures", 0) + 1
         return None
 
     # Parse output path from stdout (tools log "Final: <path>")
@@ -671,7 +669,7 @@ def generate_one(job_id, tool_name, model_name, photo, preset, artifact,
         "generated_at": now_str(),
         "status": "pending",
     }
-    STATE.add(item, priority=priority)
+    GALLERY_STATE.add(item, priority=priority)
     print(f"[gen] [{job_id}] OK -> {out_path.name}", flush=True)
     return item
 
@@ -716,7 +714,7 @@ def api_ms_list():
 
 @app.route("/api/candidates/<item_id>/good", methods=["POST"])
 def api_ms_good(item_id):
-    it = MS_STATE.find(item_id)
+    it = CANDIDATES_STATE.find(item_id)
     if not it:
         abort(404)
     source = it["source"]
@@ -736,14 +734,14 @@ def api_ms_good(item_id):
         Path(it["output"]).unlink()
     except OSError:
         pass
-    MS_STATE.remove(item_id)
-    MS_STATE.stats["liked"] = MS_STATE.stats.get("liked", 0) + 1
-    MS_STATE.save()
+    CANDIDATES_STATE.remove(item_id)
+    CANDIDATES_STATE.stats["liked"] = CANDIDATES_STATE.stats.get("liked", 0) + 1
+    CANDIDATES_STATE.save()
     return jsonify({"ok": True, "saved": len(entries), "boost": MS_BOOSTS.get(model)})
 
 @app.route("/api/candidates/<item_id>/bad", methods=["POST"])
 def api_ms_bad(item_id):
-    it = MS_STATE.find(item_id)
+    it = CANDIDATES_STATE.find(item_id)
     if not it:
         abort(404)
     MS_REJECTS.add(it["source"])
@@ -752,14 +750,14 @@ def api_ms_bad(item_id):
         Path(it["output"]).unlink()
     except OSError:
         pass
-    MS_STATE.remove(item_id)
-    MS_STATE.stats["disliked"] = MS_STATE.stats.get("disliked", 0) + 1
-    MS_STATE.save()
+    CANDIDATES_STATE.remove(item_id)
+    CANDIDATES_STATE.stats["disliked"] = CANDIDATES_STATE.stats.get("disliked", 0) + 1
+    CANDIDATES_STATE.save()
     return jsonify({"ok": True, "rejects": len(MS_REJECTS)})
 
 @app.route("/api/candidates/<item_id>/bad-session", methods=["POST"])
 def api_ms_bad_session(item_id):
-    it = MS_STATE.find(item_id)
+    it = CANDIDATES_STATE.find(item_id)
     if not it:
         abort(404)
     model = it.get("model")
@@ -768,8 +766,8 @@ def api_ms_bad_session(item_id):
     MS_BLACKLIST.add(model)
     ms_save_blacklist(MS_BLACKLIST)
     removed = 0
-    with MS_STATE.lock:
-        for lst in (MS_STATE.priority, MS_STATE.queue):
+    with CANDIDATES_STATE.lock:
+        for lst in (CANDIDATES_STATE.priority, CANDIDATES_STATE.queue):
             i = 0
             while i < len(lst):
                 cur = lst[i]
@@ -782,35 +780,35 @@ def api_ms_bad_session(item_id):
                     removed += 1
                 else:
                     i += 1
-        MS_STATE.save()
+        CANDIDATES_STATE.save()
     return jsonify({"ok": True, "model": model, "removed": removed})
 
 @app.route("/api/candidates/queue")
 def api_ms_queue():
     return jsonify({
-        "pending": MS_STATE.all_pending(),
-        "pending_count": MS_STATE.pending_count(),
-        "stats": MS_STATE.stats,
+        "pending": CANDIDATES_STATE.all_pending(),
+        "pending_count": CANDIDATES_STATE.pending_count(),
+        "stats": CANDIDATES_STATE.stats,
     })
 
 @app.route("/api/queue")
 def api_queue():
     return jsonify({
-        "pending": STATE.all_pending(),
-        "pending_count": STATE.pending_count(),
-        "stats": STATE.stats,
+        "pending": GALLERY_STATE.all_pending(),
+        "pending_count": GALLERY_STATE.pending_count(),
+        "stats": GALLERY_STATE.stats,
     })
 
 @app.route("/api/queue/<item_id>")
 def api_item(item_id):
-    it = STATE.find(item_id)
+    it = GALLERY_STATE.find(item_id)
     if not it:
         abort(404)
     return jsonify(it)
 
 @app.route("/api/stats")
 def api_stats():
-    return jsonify({**STATE.stats, "pending": STATE.pending_count()})
+    return jsonify({**GALLERY_STATE.stats, "pending": GALLERY_STATE.pending_count()})
 
 @app.route("/api/image")
 def api_image():
@@ -828,7 +826,7 @@ def api_image():
 
 @app.route("/api/queue/<item_id>/dislike", methods=["POST"])
 def api_dislike(item_id):
-    it = STATE.remove(item_id)
+    it = GALLERY_STATE.remove(item_id)
     if not it:
         abort(404)
     # Delete the output file
@@ -836,15 +834,15 @@ def api_dislike(item_id):
         Path(it["output"]).unlink()
     except OSError:
         pass
-    STATE.stats["disliked"] = STATE.stats.get("disliked", 0) + 1
-    STATE.save()
+    GALLERY_STATE.stats["disliked"] = GALLERY_STATE.stats.get("disliked", 0) + 1
+    GALLERY_STATE.save()
     return jsonify({"ok": True})
 
 @app.route("/api/queue/<item_id>/blacklist", methods=["POST"])
 def api_blacklist(item_id):
     """Blacklist the item's model (session) — future picks skip it, and
     all currently-queued items from that model are removed + deleted."""
-    it = STATE.find(item_id)
+    it = GALLERY_STATE.find(item_id)
     if not it:
         abort(404)
     model = it.get("model")
@@ -853,8 +851,8 @@ def api_blacklist(item_id):
     BLACKLIST.add(model)
     save_blacklist(BLACKLIST)
     removed = 0
-    with STATE.lock:
-        for lst in (STATE.priority, STATE.queue):
+    with GALLERY_STATE.lock:
+        for lst in (GALLERY_STATE.priority, GALLERY_STATE.queue):
             i = 0
             while i < len(lst):
                 cur = lst[i]
@@ -867,13 +865,13 @@ def api_blacklist(item_id):
                     removed += 1
                 else:
                     i += 1
-        STATE.save()
+        GALLERY_STATE.save()
     return jsonify({"ok": True, "model": model, "removed": removed})
 
 
 @app.route("/api/queue/<item_id>/like", methods=["POST"])
 def api_like(item_id):
-    it = STATE.find(item_id)
+    it = GALLERY_STATE.find(item_id)
     if not it:
         abort(404)
     # Copy to favorites + append to favorites.json
@@ -926,14 +924,14 @@ def api_like(item_id):
     data.setdefault("favorites", []).append(entry)
     FAVORITES_JSON.write_text(json.dumps(data, indent=2))
 
-    STATE.remove(item_id)
-    STATE.stats["liked"] = STATE.stats.get("liked", 0) + 1
-    STATE.save()
+    GALLERY_STATE.remove(item_id)
+    GALLERY_STATE.stats["liked"] = GALLERY_STATE.stats.get("liked", 0) + 1
+    GALLERY_STATE.save()
     return jsonify({"ok": True, "file": fav_name})
 
 @app.route("/api/queue/<item_id>/edit", methods=["POST"])
 def api_edit(item_id):
-    it = STATE.find(item_id)
+    it = GALLERY_STATE.find(item_id)
     if not it:
         abort(404)
     EDIT_LATER_DIR.mkdir(parents=True, exist_ok=True)
@@ -946,9 +944,9 @@ def api_edit(item_id):
         from PIL import Image
         Image.open(src).save(dest_img, quality=95)
     dest_meta.write_text(json.dumps(it, indent=2))
-    STATE.remove(item_id)
-    STATE.stats["edit_later"] = STATE.stats.get("edit_later", 0) + 1
-    STATE.save()
+    GALLERY_STATE.remove(item_id)
+    GALLERY_STATE.stats["edit_later"] = GALLERY_STATE.stats.get("edit_later", 0) + 1
+    GALLERY_STATE.save()
     return jsonify({"ok": True})
 
 @app.route("/api/favorites")
@@ -962,14 +960,26 @@ def api_favorites():
 
 @app.route("/api/pause", methods=["POST"])
 def api_pause():
-    STATE.stats["paused"] = True
-    STATE.save()
+    GALLERY_STATE.stats["paused"] = True
+    GALLERY_STATE.save()
     return jsonify({"paused": True})
 
 @app.route("/api/resume", methods=["POST"])
 def api_resume():
-    STATE.stats["paused"] = False
-    STATE.save()
+    GALLERY_STATE.stats["paused"] = False
+    GALLERY_STATE.save()
+    return jsonify({"paused": False})
+
+@app.route("/api/candidates/pause", methods=["POST"])
+def api_candidates_pause():
+    CANDIDATES_STATE.stats["paused"] = True
+    CANDIDATES_STATE.save()
+    return jsonify({"paused": True})
+
+@app.route("/api/candidates/resume", methods=["POST"])
+def api_candidates_resume():
+    CANDIDATES_STATE.stats["paused"] = False
+    CANDIDATES_STATE.save()
     return jsonify({"paused": False})
 
 # --- "More like this" ------------------------------------------------------
@@ -986,7 +996,7 @@ def _queue_priority_job(tool_name, model_name, photo, preset, artifact):
 
 @app.route("/api/queue/<item_id>/more/same-style", methods=["POST"])
 def api_more_same_style(item_id):
-    it = STATE.find(item_id)
+    it = GALLERY_STATE.find(item_id)
     if not it:
         abort(404)
     queued = 0
@@ -1004,7 +1014,7 @@ def api_more_same_style(item_id):
 
 @app.route("/api/queue/<item_id>/more/same-photo", methods=["POST"])
 def api_more_same_photo(item_id):
-    it = STATE.find(item_id)
+    it = GALLERY_STATE.find(item_id)
     if not it:
         abort(404)
     photo = Path(it["source"])
@@ -1026,7 +1036,7 @@ def api_more_same_photo(item_id):
 
 @app.route("/api/queue/<item_id>/more/similar", methods=["POST"])
 def api_more_similar(item_id):
-    it = STATE.find(item_id)
+    it = GALLERY_STATE.find(item_id)
     if not it:
         abort(404)
     src = Path(it["source"])
@@ -1107,8 +1117,6 @@ def main():
                    help="Comma-separated subset of tools to use")
     p.add_argument("--no-tunnel", action="store_true")
     p.add_argument("--no-gen", action="store_true", help="Skip generation loops (UI only)")
-    p.add_argument("--no-gallery-gen", action="store_true", help="Skip gallery generator")
-    p.add_argument("--no-candidates-gen", action="store_true", help="Skip motion-streak candidate picker")
     args = p.parse_args()
 
     SHARED_DIR.mkdir(parents=True, exist_ok=True)
@@ -1122,7 +1130,7 @@ def main():
             print(f"Unknown tools: {bad}. Known: {sorted(TOOLS)}")
             sys.exit(2)
 
-    for s in (STATE, MS_STATE):
+    for s in (GALLERY_STATE, CANDIDATES_STATE):
         s.stats["running"] = True
         s.stats["paused"] = False
         s.save()
@@ -1131,10 +1139,8 @@ def main():
         start_cloudflared(args.port)
 
     if not args.no_gen:
-        if not args.no_gallery_gen:
-            threading.Thread(target=generation_loop, args=(allowed,), daemon=True).start()
-        if not args.no_candidates_gen:
-            threading.Thread(target=ms_candidate_loop, daemon=True).start()
+        threading.Thread(target=generation_loop, args=(allowed,), daemon=True).start()
+        threading.Thread(target=ms_candidate_loop, daemon=True).start()
 
     print(f"[flask] serving on http://0.0.0.0:{args.port}", flush=True)
     app.run(host="0.0.0.0", port=args.port, threaded=True, use_reloader=False)

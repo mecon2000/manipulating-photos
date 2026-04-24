@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Motion-Streak Candidates</title>
+<title>Candidates for motion streaks</title>
 <style>
   :root {
     --bg: #0b0b0c; --fg: #e9e9ea; --dim: #9a9a9e;
@@ -53,7 +53,7 @@
     <div id="modemenu" style="display:none; position:absolute; top:110%; right:0;
          background:#1a1a1f; border:1px solid #333; border-radius:8px; min-width:160px; z-index:20;">
       <a href="/gallery" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;">🖼  Gallery</a>
-      <a href="/candidates" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30; background:#2d4a6d;">📋 Candidates</a>
+      <a href="/candidates" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30; background:#2d4a6d;">📋 Candidates for motion streaks</a>
       <a href="/tree" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">🌳 Tools tree</a>
     </div>
   </div>
@@ -91,6 +91,11 @@ document.addEventListener('click', () => {
     <button class="btn" style="background:#333; max-width:60px;" onclick="nav(1)"
             title="Next candidate (doesn't change saved/rejected state)">→</button>
   </div>
+  <div style="display:flex; justify-content:center; margin-top:6px;">
+    <button class="btn" id="pauseBtn" style="background:#555; max-width:120px;"
+            onclick="togglePause()"
+            title="Pause/resume the background picker that adds new candidates">⏸ Pause</button>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -117,6 +122,8 @@ async function refresh() {
     items = q.pending || [];
     document.getElementById('queue').textContent = items.length;
     document.getElementById('saved').textContent = (l.candidates || []).length;
+    const paused = q.stats && q.stats.paused;
+    document.getElementById('pauseBtn').textContent = paused ? '▶ Resume' : '⏸ Pause';
     render();
   } catch (e) { console.error(e); }
 }
@@ -174,6 +181,13 @@ async function act(kind) {
     acting = false;
     refresh();
   }
+}
+
+async function togglePause() {
+  const label = document.getElementById('pauseBtn').textContent;
+  const isPaused = label.includes('Resume');
+  await fetch(isPaused ? '/api/candidates/resume' : '/api/candidates/pause', {method:'POST'});
+  refresh();
 }
 
 refresh();

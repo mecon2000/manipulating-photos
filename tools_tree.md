@@ -37,6 +37,7 @@ graph TD
     TIMECORR["⏳ time-corruption<br/>ghost / melt / trails / glitch<br/>⭐ ghost-dissolve + shibari"]:::happy
     INKDISS["🖋️ ink-dissolution<br/>Frequency-band dissolution<br/>⭐ 11 favs — ink-wash"]:::happy
     MATSWAP["🪨 material-swap<br/>glass / marble / metal<br/>✅ chains with baroque"]:::done
+    MOTIONSTREAK["🌀 motion-streak<br/>0010x0010 B&W aesthetic<br/>modes: streak / slitscan / limb-streak<br/>⚡ WIP — streak intensity tuning"]:::wip
 
     %% FRAMING
     FGFRAME["🖼️ foreground-framing<br/>Shoot-through depth<br/>😴 SDXL ignores prompts"]:::tired

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes" />
+<title>Tools Tree</title>
+<style>
+  :root { --bg:#0b0b0d; --fg:#e7e7ea; --muted:#8a8a90; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg);
+               font:14px/1.4 -apple-system, system-ui, sans-serif; min-height:100vh; }
+  .topbar { position:sticky; top:0; background:#111; padding:10px 14px;
+            display:flex; align-items:center; gap:12px; border-bottom:1px solid #222; z-index:10; }
+  .topbar h1 { margin:0; font-size:15px; font-weight:600; }
+  .topbar .sub { color:var(--muted); font-size:12px; }
+  .modes { position:relative; margin-left:auto; }
+  .modes button { background:transparent; color:var(--fg); border:1px solid #333;
+                  padding:6px 10px; border-radius:6px; cursor:pointer; font-size:18px; }
+  .modemenu { position:absolute; top:110%; right:0; background:#1a1a1f;
+              border:1px solid #333; border-radius:8px; min-width:160px; display:none; }
+  .modemenu.open { display:block; }
+  .modemenu a { display:block; padding:10px 14px; color:var(--fg);
+                text-decoration:none; border-bottom:1px solid #2a2a30; }
+  .modemenu a:last-child { border-bottom:0; }
+  .modemenu a:hover { background:#2a2a30; }
+  .modemenu a.active { background:#2d4a6d; }
+  .wrap { padding:16px; overflow:auto; }
+  .mermaid { background:#0f0f12; border-radius:8px; padding:16px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+<div class="topbar">
+  <h1>🌳 Tools Tree</h1>
+  <span class="sub" id="updated"></span>
+  <div class="modes">
+    <button onclick="toggleModes()">⋮</button>
+    <div class="modemenu" id="modemenu">
+      <a href="/gallery">🖼  Gallery</a>
+      <a href="/candidates">📋 Candidates</a>
+      <a href="/tree" class="active">🌳 Tools tree</a>
+    </div>
+  </div>
+</div>
+<div class="wrap">
+  <pre class="mermaid" id="mm">Loading…</pre>
+</div>
+<script>
+function toggleModes() {
+  document.getElementById('modemenu').classList.toggle('open');
+}
+document.addEventListener('click', (e) => {
+  const m = document.getElementById('modemenu');
+  if (!e.target.closest('.modes')) m.classList.remove('open');
+});
+mermaid.initialize({ startOnLoad: false, theme: 'dark',
+                     securityLevel: 'loose', maxTextSize: 500000 });
+fetch('/api/tree').then(r => r.json()).then(async (d) => {
+  document.getElementById('updated').textContent = d.updated ? `updated ${d.updated}` : '';
+  const el = document.getElementById('mm');
+  el.textContent = d.mermaid || '(no diagram found)';
+  if (d.mermaid) {
+    const { svg } = await mermaid.render('mm-rendered', d.mermaid);
+    el.innerHTML = svg;
+  }
+}).catch(err => {
+  document.getElementById('mm').textContent = 'Error: ' + err;
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Motion-Streak Candidates</title>
+<style>
+  :root {
+    --bg: #0b0b0c; --fg: #e9e9ea; --dim: #9a9a9e;
+    --ok: #5ecb8b; --danger: #ef5b5b; --warn: #b8851a;
+    --panel: rgba(0,0,0,0.55);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overscroll-behavior: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  body { display: flex; flex-direction: column; height: 100vh; }
+  .topbar, .bottombar { position: fixed; left: 0; right: 0; z-index: 10;
+    background: var(--panel); backdrop-filter: blur(8px); padding: 10px 14px; font-size: 13px; }
+  .topbar { top: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .bottombar { bottom: 0; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .meta .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta .sub { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .count { font-variant-numeric: tabular-nums; color: var(--dim); white-space: nowrap; }
+  .photo-wrap { flex: 1; display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100vh; position: relative; overflow: hidden; }
+  .photo-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .empty { color: var(--dim); text-align: center; padding: 40px; }
+  .btnrow { display: flex; gap: 6px; justify-content: space-between; }
+  .btn { flex: 1 1 auto; min-width: 90px; padding: 14px 10px; border-radius: 8px;
+    border: none; font-size: 15px; font-weight: 600; color: #fff; cursor: pointer; }
+  .btn:active { transform: scale(0.97); }
+  .btn-good { background: #2f7a3f; }
+  .btn-bad  { background: #7a2929; }
+  .btn-session { background: #4a1818; }
+  .toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); color: var(--fg); padding: 8px 16px; border-radius: 20px;
+    z-index: 20; font-size: 13px; opacity: 0; transition: opacity 0.2s; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="meta">
+    <span class="title" id="title">Loading…</span>
+    <span class="sub" id="sub">—</span>
+  </div>
+  <div class="count"><span id="saved">0</span> saved · <span id="queue">0</span>/15</div>
+  <div style="position:relative;">
+    <button onclick="toggleModeMenu(event)" style="background:transparent; color:#e7e7ea; border:1px solid #333; padding:4px 10px; border-radius:6px; font-size:18px;">⋮</button>
+    <div id="modemenu" style="display:none; position:absolute; top:110%; right:0;
+         background:#1a1a1f; border:1px solid #333; border-radius:8px; min-width:160px; z-index:20;">
+      <a href="/gallery" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;">🖼  Gallery</a>
+      <a href="/candidates" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30; background:#2d4a6d;">📋 Candidates</a>
+      <a href="/tree" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">🌳 Tools tree</a>
+    </div>
+  </div>
+</div>
+<script>
+function toggleModeMenu(e) {
+  e.stopPropagation();
+  const m = document.getElementById('modemenu');
+  m.style.display = (m.style.display === 'block') ? 'none' : 'block';
+}
+document.addEventListener('click', () => {
+  const m = document.getElementById('modemenu');
+  if (m) m.style.display = 'none';
+});
+</script>
+
+<div class="photo-wrap" id="photoWrap">
+  <img id="photo" alt="" />
+  <div class="empty" id="empty" style="display:none;">Waiting for previews…</div>
+</div>
+
+<div class="bottombar">
+  <div class="btnrow">
+    <button class="btn btn-bad" onclick="act('bad')">👎 Bad</button>
+    <button class="btn btn-good" onclick="act('good')">✅ Good</button>
+    <button class="btn btn-session" onclick="act('bad-session')">🚫 Session</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let items = [];
+let current = null;
+let acting = false;
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1400);
+}
+
+async function refresh() {
+  try {
+    const [q, l] = await Promise.all([
+      fetch('/api/queue').then(r => r.json()),
+      fetch('/api/candidates/list').then(r => r.json()),
+    ]);
+    items = q.pending || [];
+    document.getElementById('queue').textContent = items.length;
+    document.getElementById('saved').textContent = (l.candidates || []).length;
+    render();
+  } catch (e) { console.error(e); }
+}
+
+function render() {
+  const img = document.getElementById('photo');
+  const empty = document.getElementById('empty');
+  if (!items.length) {
+    current = null;
+    img.style.display = 'none';
+    empty.style.display = 'block';
+    document.getElementById('title').textContent = 'No candidates';
+    document.getElementById('sub').textContent = '—';
+    return;
+  }
+  current = items[0];
+  img.src = '/api/image?path=' + encodeURIComponent(current.output) + '&_=' + current.id;
+  img.style.display = 'block';
+  empty.style.display = 'none';
+  document.getElementById('title').textContent = current.model || '?';
+  document.getElementById('sub').textContent = (current.source || '').split('/').slice(-1)[0];
+}
+
+async function act(kind) {
+  if (!current || acting) return;
+  acting = true;
+  const id = current.id;
+  try {
+    const res = await fetch(`/api/candidates/${id}/${kind}`, {method: 'POST'});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (kind === 'good') showToast(`Saved (${data.saved})`);
+    else if (kind === 'bad') showToast('Rejected');
+    else if (kind === 'bad-session') showToast(`Session blacklisted (-${data.removed})`);
+  } catch (e) {
+    showToast('Error');
+    console.error(e);
+  } finally {
+    acting = false;
+    refresh();
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+
+</body>
+</html>

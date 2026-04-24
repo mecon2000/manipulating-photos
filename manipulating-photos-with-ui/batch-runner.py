@@ -56,6 +56,68 @@ STATE_PATH = SHARED_DIR / "batch_state.json"
 FINALS_DIR = SHARED_DIR / "finals"
 BLACKLIST_PATH = SHARED_DIR / "blacklisted_models.json"
 
+# --- Motion-streak candidate mode state ------------------------------------
+MS_CANDIDATES_JSON = SHARED_DIR / "motion_streak_candidates.json"
+MS_REJECTS_JSON = SHARED_DIR / "motion_streak_rejects.json"
+MS_BLACKLIST_PATH = SHARED_DIR / "motion_streak_blacklist.json"
+
+# Global mode flag (set in main). "gallery" (default) or "candidates".
+MODE = "gallery"
+# Per-session boost multiplier for motion-streak model picking (one-time per session).
+MS_BOOSTS = {}
+
+
+def _load_json_set(path, key):
+    if not Path(path).is_file():
+        return set()
+    try:
+        return set(json.loads(Path(path).read_text()).get(key, []))
+    except Exception:
+        return set()
+
+
+def _save_json_set(path, key, items):
+    SHARED_DIR.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps({key: sorted(items)}, indent=2))
+
+
+def load_ms_candidates():
+    if not MS_CANDIDATES_JSON.is_file():
+        return []
+    try:
+        return json.loads(MS_CANDIDATES_JSON.read_text()).get("candidates", [])
+    except Exception:
+        return []
+
+
+def save_ms_candidates(entries):
+    SHARED_DIR.mkdir(parents=True, exist_ok=True)
+    MS_CANDIDATES_JSON.write_text(json.dumps({"candidates": entries}, indent=2))
+
+
+def ms_candidate_paths():
+    return {e.get("source") for e in load_ms_candidates()}
+
+
+def ms_load_rejects():
+    return _load_json_set(MS_REJECTS_JSON, "paths")
+
+
+def ms_save_rejects(paths):
+    _save_json_set(MS_REJECTS_JSON, "paths", paths)
+
+
+def ms_load_blacklist():
+    return _load_json_set(MS_BLACKLIST_PATH, "models")
+
+
+def ms_save_blacklist(models):
+    _save_json_set(MS_BLACKLIST_PATH, "models", models)
+
+
+MS_REJECTS = ms_load_rejects()
+MS_BLACKLIST = ms_load_blacklist()
+
 
 def load_blacklist():
     if not BLACKLIST_PATH.is_file():
@@ -247,6 +309,51 @@ def pick_random_photo(avoid_model=None):
     _recent_photos.append(str(photo))
     return model_name, photo
 
+def pick_ms_candidate_photo():
+    """Pick a photo for motion-streak candidate mode.
+
+    - Skip models in MS_BLACKLIST
+    - Skip photos already in MS_REJECTS or already saved as candidates
+    - Skip recent models (avoid back-to-back same-session)
+    - Weight models by MS_BOOSTS (one-time bump when a model yields a 'good')
+    """
+    saved_paths = ms_candidate_paths()
+    candidates = []
+    for md in all_models():
+        if md.name in MS_BLACKLIST:
+            continue
+        if md.name in _recent_models:
+            continue
+        proc, unproc = list_photos_for_model(md)
+        photos = [p for p in (proc + unproc)
+                  if str(p) not in MS_REJECTS and str(p) not in saved_paths]
+        if photos:
+            candidates.append((md.name, photos))
+    if not candidates:
+        _recent_models.clear()
+        # Try again once without recent-model filter; if still empty, give up.
+        for md in all_models():
+            if md.name in MS_BLACKLIST:
+                continue
+            proc, unproc = list_photos_for_model(md)
+            photos = [p for p in (proc + unproc)
+                      if str(p) not in MS_REJECTS and str(p) not in saved_paths]
+            if photos:
+                candidates.append((md.name, photos))
+        if not candidates:
+            return None, None
+
+    names = [c[0] for c in candidates]
+    weights = [MS_BOOSTS.get(n, 1.0) for n in names]
+    chosen_name = random.choices(names, weights=weights, k=1)[0]
+    photos = dict(candidates)[chosen_name]
+    fresh = [p for p in photos if str(p) not in _recent_photos]
+    photo = random.choice(fresh or photos)
+    _recent_models.append(chosen_name)
+    _recent_photos.append(str(photo))
+    return chosen_name, photo
+
+
 def pick_tool(allowed=None):
     names = [n for n in TOOLS if not allowed or n in allowed]
     weights = [TOOLS[n]["weight"] for n in names]
@@ -436,6 +543,83 @@ def generation_loop(allowed_tools=None):
             STATE.stats["failures"] = STATE.stats.get("failures", 0) + 1
             time.sleep(5)
 
+def ms_candidate_loop():
+    """Continuously generate motion-streak B&W previews for candidate review."""
+    while STATE.stats.get("running", True):
+        try:
+            if STATE.stats.get("paused"):
+                time.sleep(2)
+                continue
+            pending = STATE.pending_count()
+            if pending >= 15:
+                if not STATE.backpressure_notified:
+                    push_text("Candidate queue full", f"{pending} waiting for review")
+                    STATE.backpressure_notified = True
+                while STATE.pending_count() >= 10 and STATE.stats.get("running", True):
+                    if STATE.stats.get("paused"):
+                        break
+                    time.sleep(3)
+                if STATE.pending_count() < 10:
+                    STATE.backpressure_notified = False
+                continue
+
+            model_name, photo = pick_ms_candidate_photo()
+            if not photo:
+                print("[ms] no candidate photos available, sleeping", flush=True)
+                time.sleep(15)
+                continue
+            job_id = uuid.uuid4().hex[:8]
+            generate_ms_candidate(job_id, model_name, photo)
+        except Exception as e:
+            print(f"[ms] loop error: {e}", flush=True)
+            STATE.stats["failures"] = STATE.stats.get("failures", 0) + 1
+            time.sleep(5)
+
+
+def generate_ms_candidate(job_id, model_name, photo):
+    """Run motion-streak --up-to-step 1 (B&W only) and queue the result."""
+    script = WORKFLOWS_DIR / "motion-streak.py"
+    cmd = [PYTHON, str(script), "--source", str(photo), "--up-to-step", "1"]
+    cmd_str = " ".join(f"'{c}'" if " " in c else c for c in cmd)
+    src_stem = Path(photo).stem
+    print(f"[ms] [{job_id}] {model_name}/{src_stem}", flush=True)
+    start_ts = time.time()
+    try:
+        child_env = {**os.environ, "NOTIFY_DISABLE_IMAGE": "1"}
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                             env=child_env)
+    except subprocess.TimeoutExpired:
+        print(f"[ms] [{job_id}] TIMEOUT", flush=True)
+        return None
+    if res.returncode != 0:
+        print(f"[ms] [{job_id}] FAILED rc={res.returncode}", flush=True)
+        print((res.stderr or "")[-400:], flush=True)
+        STATE.stats["failures"] = STATE.stats.get("failures", 0) + 1
+        return None
+
+    out_path = find_output_after(start_ts, hint_model=model_name, hint_source=src_stem)
+    if out_path is None or not out_path.is_file():
+        print(f"[ms] [{job_id}] could not locate output", flush=True)
+        return None
+
+    item = {
+        "id": job_id,
+        "source": str(photo),
+        "model": model_name,
+        "tool": "motion-streak",
+        "preset": "bw-preview",
+        "artifact": None,
+        "seed": None,
+        "command": cmd_str,
+        "output": str(out_path),
+        "generated_at": now_str(),
+        "status": "pending",
+    }
+    STATE.add(item, priority=False)
+    print(f"[ms] [{job_id}] OK -> {out_path.name}", flush=True)
+    return item
+
+
 def generate_one(job_id, tool_name, model_name, photo, preset, artifact,
                  seed, priority=False):
     """Run one tool and add to queue. Returns the item or None on failure."""
@@ -494,7 +678,113 @@ app = Flask(__name__, template_folder=str(SCRIPT_DIR / "templates"))
 
 @app.route("/")
 def index():
+    if MODE == "candidates":
+        return render_template("candidates.html")
     return render_template("gallery.html")
+
+@app.route("/candidates")
+def candidates_page():
+    return render_template("candidates.html")
+
+@app.route("/gallery")
+def gallery_page():
+    return render_template("gallery.html")
+
+@app.route("/tree")
+def tree_page():
+    return render_template("tree.html")
+
+@app.route("/api/tree")
+def api_tree():
+    tree_path = Path("~/.openclaw/workspace/shared/tools_tree.md").expanduser()
+    if not tree_path.is_file():
+        return jsonify({"mermaid": "", "updated": None, "error": "tools_tree.md not found"})
+    text = tree_path.read_text()
+    import re as _re
+    m = _re.search(r"```mermaid\n(.*?)\n```", text, _re.DOTALL)
+    mmd = m.group(1) if m else ""
+    u = _re.search(r"Last updated:\s*(\S+)", text)
+    return jsonify({"mermaid": mmd, "updated": u.group(1) if u else None})
+
+@app.route("/api/candidates/list")
+def api_ms_list():
+    return jsonify({"candidates": load_ms_candidates(),
+                    "rejects": sorted(MS_REJECTS),
+                    "blacklist": sorted(MS_BLACKLIST),
+                    "boosts": MS_BOOSTS})
+
+@app.route("/api/candidates/<item_id>/good", methods=["POST"])
+def api_ms_good(item_id):
+    it = STATE.find(item_id)
+    if not it:
+        abort(404)
+    source = it["source"]
+    model = it.get("model") or ""
+    entries = load_ms_candidates()
+    if not any(e.get("source") == source for e in entries):
+        entries.append({
+            "source": source,
+            "filename": Path(source).name,
+            "model": model,
+            "marked_at": now_str(),
+        })
+        save_ms_candidates(entries)
+    # One-time boost per session
+    if model and model not in MS_BOOSTS:
+        MS_BOOSTS[model] = 1.5
+    # Remove preview from queue + delete preview file (path is saved in json)
+    try:
+        Path(it["output"]).unlink()
+    except OSError:
+        pass
+    STATE.remove(item_id)
+    STATE.stats["liked"] = STATE.stats.get("liked", 0) + 1
+    STATE.save()
+    return jsonify({"ok": True, "saved": len(entries), "boost": MS_BOOSTS.get(model)})
+
+@app.route("/api/candidates/<item_id>/bad", methods=["POST"])
+def api_ms_bad(item_id):
+    it = STATE.find(item_id)
+    if not it:
+        abort(404)
+    MS_REJECTS.add(it["source"])
+    ms_save_rejects(MS_REJECTS)
+    try:
+        Path(it["output"]).unlink()
+    except OSError:
+        pass
+    STATE.remove(item_id)
+    STATE.stats["disliked"] = STATE.stats.get("disliked", 0) + 1
+    STATE.save()
+    return jsonify({"ok": True, "rejects": len(MS_REJECTS)})
+
+@app.route("/api/candidates/<item_id>/bad-session", methods=["POST"])
+def api_ms_bad_session(item_id):
+    it = STATE.find(item_id)
+    if not it:
+        abort(404)
+    model = it.get("model")
+    if not model:
+        abort(400)
+    MS_BLACKLIST.add(model)
+    ms_save_blacklist(MS_BLACKLIST)
+    removed = 0
+    with STATE.lock:
+        for lst in (STATE.priority, STATE.queue):
+            i = 0
+            while i < len(lst):
+                cur = lst[i]
+                if cur.get("model") == model:
+                    try:
+                        Path(cur["output"]).unlink()
+                    except OSError:
+                        pass
+                    del lst[i]
+                    removed += 1
+                else:
+                    i += 1
+        STATE.save()
+    return jsonify({"ok": True, "model": model, "removed": removed})
 
 @app.route("/api/queue")
 def api_queue():
@@ -810,7 +1100,11 @@ def main():
                    help="Comma-separated subset of tools to use")
     p.add_argument("--no-tunnel", action="store_true")
     p.add_argument("--no-gen", action="store_true", help="Skip generation loop (UI only)")
+    p.add_argument("--mode", choices=["gallery", "candidates"], default="gallery",
+                   help="gallery=default stylized queue; candidates=motion-streak candidate picker")
     args = p.parse_args()
+    global MODE
+    MODE = args.mode
 
     SHARED_DIR.mkdir(parents=True, exist_ok=True)
     FINALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -833,7 +1127,10 @@ def main():
 
     # Start generation thread
     if not args.no_gen:
-        t = threading.Thread(target=generation_loop, args=(allowed,), daemon=True)
+        if MODE == "candidates":
+            t = threading.Thread(target=ms_candidate_loop, daemon=True)
+        else:
+            t = threading.Thread(target=generation_loop, args=(allowed,), daemon=True)
         t.start()
 
     print(f"[flask] serving on http://0.0.0.0:{args.port}", flush=True)

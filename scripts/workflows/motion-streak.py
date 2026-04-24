@@ -170,7 +170,7 @@ def limb_mask_and_gradient(img_size, pts, radius_px):
 
 
 def limb_streak_effect(bw_arr, limb_mask, limb_strength, tangent_deg, length_px,
-                        ghosts, bright_threshold=110, gain=1.6):
+                        ghosts, bright_threshold=80, gain=2.5):
     """Smear the limb's brightest pixels in a straight line across the image.
 
     Isolates highlights inside the limb (pixels >= bright_threshold), then
@@ -196,9 +196,10 @@ def limb_streak_effect(bw_arr, limb_mask, limb_strength, tangent_deg, length_px,
         elif tx < 0: shifted[:, tx:] = 0
         if ty > 0: shifted[:ty, :] = 0
         elif ty < 0: shifted[ty:, :] = 0
-        fade = (1.0 - i / (ghosts + 1)) ** 0.55   # slower falloff = longer visible tail
+        fade = (1.0 - i / (ghosts + 1)) ** 0.35   # very slow falloff
         ghost = shifted * fade
-        accum = 255.0 - (255.0 - accum) * (1.0 - ghost / 255.0)
+        # max blend: streak wins wherever it's brighter than existing pixel
+        accum = np.maximum(accum, ghost)
     return accum
 
 
@@ -321,7 +322,7 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
             lstrength = lstrength * subj_arr
             lmask = lmask * subj_arr
             stacked = limb_streak_effect(bw_arr, lmask, lstrength, tangent,
-                                         length_px * 6.0, ghosts)
+                                         length_px * 10.0, max(ghosts, 20))
             print(f"  step5 limb-streak: limb={limb} tangent={tangent:.0f}° radius={radius_px:.0f}px")
     else:
         stacked = long_exposure_stack(body_layer, body_alpha, angle,

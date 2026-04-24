@@ -24,8 +24,13 @@
   .modemenu a:last-child { border-bottom:0; }
   .modemenu a:hover { background:#2a2a30; }
   .modemenu a.active { background:#2d4a6d; }
-  .wrap { padding:16px; overflow:auto; }
-  .mermaid { background:#0f0f12; border-radius:8px; padding:16px; }
+  .wrap { padding:16px; }
+  .mermaid { background:#0f0f12; border-radius:8px; padding:8px;
+             height: calc(100vh - 180px); overflow:hidden;
+             touch-action:none; cursor:grab; }
+  .mermaid:active { cursor:grabbing; }
+  .mermaid svg { width:100%; height:100%; display:block; }
+  .hint { color:#666; font-size:11px; padding:4px 16px 0; }
   .legend { display:flex; flex-wrap:wrap; gap:8px; padding:12px 16px;
             background:#111; border-bottom:1px solid #222; font-size:12px; }
   .legend .chip { display:inline-flex; align-items:center; gap:6px;
@@ -33,6 +38,7 @@
   .sw { width:10px; height:10px; border-radius:50%; display:inline-block; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
 </head>
 <body>
 <div class="topbar">
@@ -58,8 +64,9 @@
   <span class="chip" style="background:#1a1a3a; border-color:#66f; color:#99f;"><span class="sw" style="background:#66f;"></span>idea — sketched</span>
   <span class="chip" style="background:#1a3a5a; border-color:#48c; color:#fff;"><span class="sw" style="background:#48c;"></span>foundation — shared infra</span>
 </div>
+<div class="hint">Drag to pan · scroll/pinch to zoom · double-click to reset</div>
 <div class="wrap">
-  <pre class="mermaid" id="mm">Loading…</pre>
+  <div class="mermaid" id="mm">Loading…</div>
 </div>
 <script>
 function toggleModes() {
@@ -78,6 +85,18 @@ fetch('/api/tree').then(r => r.json()).then(async (d) => {
   if (d.mermaid) {
     const { svg } = await mermaid.render('mm-rendered', d.mermaid);
     el.innerHTML = svg;
+    const svgEl = el.querySelector('svg');
+    if (svgEl) {
+      svgEl.removeAttribute('height');
+      svgEl.setAttribute('width', '100%');
+      svgEl.style.maxWidth = 'none';
+      const pz = svgPanZoom(svgEl, {
+        zoomEnabled: true, controlIconsEnabled: true,
+        fit: true, center: true, minZoom: 0.2, maxZoom: 20,
+        dblClickZoomEnabled: false,
+      });
+      el.addEventListener('dblclick', () => { pz.resetZoom(); pz.resetPan(); pz.fit(); pz.center(); });
+    }
   }
 }).catch(err => {
   document.getElementById('mm').textContent = 'Error: ' + err;

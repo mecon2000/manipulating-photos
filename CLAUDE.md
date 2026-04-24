@@ -365,6 +365,10 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 - **When user is on phone,** provide fal.ai CDN URLs for remote viewing. Local PIL-only tools don't produce CDN URLs — run result through relighting (low denoise) to get one.
 - **Scale ALL pixel-based parameters to image size.** Never use fixed pixel values for effects that should be proportional.
 
+## Autonomous Gallery (batch-runner)
+
+Launch via `manipulating-photos-with-ui/start-gallery.sh` (no args needed). Starts Flask on :5555, opens a cloudflared tunnel, pushes the public URL to Ronnie's phone via Pushbullet. Background thread continuously generates random tool+preset+photo combos; phone UI for fav / delete / "more like this". Pass-through flags: `--no-tunnel`, `--port`, `--tools baroque-surround,ink-dissolution`, etc.
+
 ## Legacy Scripts (from Echo, V9-V18 iterations)
 
 - `tensor_photo_workflow.py` — The V18 predecessor. Single style, no parallelism, no quality gates, no auto-correct.

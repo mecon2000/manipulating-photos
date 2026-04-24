@@ -16,17 +16,17 @@ graph TD
 
     %% FOUNDATION
     MASK["🔧 masking<br/>BiRefNet + MediaPipe<br/>✅ shared by all tools"]:::foundation
-    SEGMENT["🔧 body-segment<br/>6-category segmentation<br/>✅"]:::done
-    NOTIFY["🔧 notify.py<br/>Pushbullet push<br/>✅"]:::done
-    PHOTODB["🗃️ photo catalog DB<br/>SQLite metadata<br/>✅"]:::done
-    CAND["📋 find-candidates<br/>DB picker<br/>✅"]:::done
+    SEGMENT["🔧 body-segment<br/>6-category segmentation<br/>✅"]:::foundation
+    NOTIFY["🔧 notify.py<br/>Pushbullet push<br/>✅"]:::foundation
+    PHOTODB["🗃️ photo catalog DB<br/>SQLite metadata<br/>✅"]:::foundation
+    CAND["📋 find-candidates<br/>DB picker<br/>✅"]:::foundation
     BATCHRUN["🎛️ batch-runner<br/>Autonomous review UI<br/>⚡ $2/hr cap<br/>schnell default + BG cache<br/>+ weights reweighted toward free"]:::happy
 
     %% COMPOSITING
     STYLIZE["🎨 stylizing-bg-model-separately<br/>Tensor Art BG+model parallel<br/>✅ mature"]:::done
     BAROQUE["🎨 baroque-surround v2<br/>Laplacian + LAB, Flux Schnell<br/>13 presets + 14 artifacts<br/>⭐ 20+ favs — top tool"]:::happy
     BGCACHE["💾 cache-baroque-bgs<br/>Pre-gen BG pool for reuse<br/>✅ (run at user discretion)"]:::done
-    CROP["✂️ smart-crop<br/>12 crop types, dual panel, outpaint<br/>⚡ outpaint still weak"]:::wip
+    CROP["✂️ smart-crop<br/>12 crop types, dual panel, outpaint<br/>⚡ outpaint still weak"]:::foundation
     COLORBATH["🎨 color-bath<br/>LAB whole-scene color wash<br/>10 presets — red-film, ochre, teal…<br/>🆕 2026-04-17, pure local"]:::happy
 
     %% LIGHTING
@@ -65,12 +65,9 @@ graph TD
     NSFW_INPAINT["💭 NSFW-safe inpainting<br/>SDXL uncensored or ComfyUI"]:::idea
     REFARTIST["💭 reference artist style<br/>Forms engulf subject<br/>The original goal — 80% there"]:::idea
 
-    %% EDGES
-    MASK --> STYLIZE & BAROQUE & RELIGHT & MATSWAP & CROP & SILH
-    SEGMENT --> MASK & TIMECORR & NOIR & INKDISS & COLORBATH
-    PHOTODB --> CAND
-    CAND --> BATCHRUN
-    NOTIFY --> BATCHRUN
+    %% EDGES  (foundation nodes — MASK/SEGMENT/NOTIFY/PHOTODB/CAND/CROP —
+    %%  are intentionally isolated: they connect to everything, so drawing
+    %%  edges clutters the tree without adding insight.)
 
     BATCHRUN --> BAROQUE
     BATCHRUN --> RELIGHT
@@ -83,7 +80,6 @@ graph TD
     BGCACHE --> BAROQUE
 
     STYLIZE -->|"evolved into"| BAROQUE
-    BAROQUE --> CROP
     MATSWAP -->|"ink body → ink BG"| BAROQUE
 
     COLORBATH -.->|"chain on top of"| BAROQUE
@@ -94,9 +90,8 @@ graph TD
 
     BAROQUE --> REFARTIST
     BAROQUE --> HARMONIZE --> DIFFDIFF --> COMFYUI --> NSFW_INPAINT
-    PHOTODB --> SCOREBOARD
     SCENEMATCH --> BAROQUE
-    MATSWAP & BAROQUE & CROP & RELIGHT --> CHAINPIPE
+    MATSWAP & BAROQUE & RELIGHT --> CHAINPIPE
     COLORBATH --> SFUMATO
     BAROQUE --> PAINTER
     INKDISS --> MONOSTREET

@@ -26,7 +26,7 @@ from PIL import Image
 from scipy.ndimage import convolve, gaussian_filter
 from masking import build_mask
 
-FINALS = os.path.expanduser("~/.openclaw/workspace/shared/finals")
+FINALS = os.path.expanduser("~/.openclaw/workspace/shared/motion-streak-finals")
 OUT_DIR = os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates")
 
 
@@ -170,21 +170,22 @@ def limb_mask_and_gradient(img_size, pts, radius_px):
 
 
 def limb_streak_effect(bw_arr, limb_mask, limb_strength, tangent_deg, length_px,
-                        ghosts, bright_threshold=170):
+                        ghosts, bright_threshold=110, gain=1.6):
     """Smear the limb's brightest pixels in a straight line across the image.
 
     Isolates highlights inside the limb (pixels >= bright_threshold), then
-    projects them along tangent direction with decaying alpha. Shifted copies
-    are NOT re-gated by the limb mask, so streaks extend beyond the limb
-    silhouette — mimicking long-exposure motion trails on highlights.
+    projects them along tangent direction with slow alpha decay. Shifted
+    copies are NOT re-gated by the limb mask, so streaks extend beyond the
+    limb silhouette — mimicking long-exposure motion trails on highlights.
     """
     h, w, _ = bw_arr.shape
     rad = np.deg2rad(tangent_deg)
     dx, dy = np.cos(rad), -np.sin(rad)
     lum = bw_arr.mean(axis=2)
-    soft = np.clip((lum - bright_threshold) / (255.0 - bright_threshold), 0, 1)
+    # saturate quickly above threshold (80-unit window), so mid-grays streak too
+    soft = np.clip((lum - bright_threshold) / 80.0, 0, 1)
     source_alpha = (soft * limb_strength).astype(np.float32)
-    source_rgb = bw_arr * source_alpha[..., None]
+    source_rgb = np.clip(bw_arr * gain, 0, 255) * source_alpha[..., None]
     accum = bw_arr.copy()
     for i in range(1, ghosts + 1):
         frac = (i / ghosts) ** 0.85
@@ -195,7 +196,7 @@ def limb_streak_effect(bw_arr, limb_mask, limb_strength, tangent_deg, length_px,
         elif tx < 0: shifted[:, tx:] = 0
         if ty > 0: shifted[:ty, :] = 0
         elif ty < 0: shifted[ty:, :] = 0
-        fade = (1.0 - i / (ghosts + 1)) ** 1.2
+        fade = (1.0 - i / (ghosts + 1)) ** 0.55   # slower falloff = longer visible tail
         ghost = shifted * fade
         accum = 255.0 - (255.0 - accum) * (1.0 - ghost / 255.0)
     return accum

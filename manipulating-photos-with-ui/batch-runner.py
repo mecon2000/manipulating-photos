@@ -695,9 +695,11 @@ def tree_page():
 
 @app.route("/api/tree")
 def api_tree():
-    tree_path = SCRIPT_DIR.parent / "tools_tree.md"
+    view = request.args.get("view", "graph")
+    fname = "tools_tree_mindmap.md" if view == "mindmap" else "tools_tree.md"
+    tree_path = SCRIPT_DIR.parent / fname
     if not tree_path.is_file():
-        return jsonify({"mermaid": "", "updated": None, "error": "tools_tree.md not found"})
+        return jsonify({"mermaid": "", "updated": None, "error": f"{fname} not found"})
     text = tree_path.read_text()
     import re as _re
     m = _re.search(r"```mermaid\n(.*?)\n```", text, _re.DOTALL)

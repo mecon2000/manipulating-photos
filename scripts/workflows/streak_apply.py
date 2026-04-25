@@ -90,11 +90,15 @@ def main():
                    help="flip trail direction 180°")
     p.add_argument("--angle", type=float, default=None,
                    help="override detected tangent — 0=right, 90=up, 180=left, 270=down")
+    p.add_argument("--black-marks", type=int, default=0,
+                   help="add N small black bars perpendicular to the limb before blurring")
+    p.add_argument("--mark-width-pct", type=float, default=1.5,
+                   help="black mark length (perpendicular to arm), %% of short edge")
     p.add_argument("--suffix", default=None)
     args = p.parse_args()
 
     img = Image.open(args.source).convert("RGB")
-    arr = np.asarray(img)
+    arr = np.array(img)   # writable copy
     h, w = arr.shape[:2]
     short = min(w, h)
     length_px = short * args.length_pct / 100.0
@@ -107,6 +111,28 @@ def main():
     if args.angle is not None: tangent = args.angle
     if args.flip: tangent += 180
     print(f"limb={args.limb} tangent={tangent:.0f}° L={length_px:.0f}px decay={args.decay} gain={args.gain}")
+
+    # Optional black marks across the arm (perpendicular bars), drawn before blur
+    if args.black_marks > 0:
+        rng = np.random.default_rng(42)
+        root, mid, tip = [np.array(p, dtype=np.float32) for p in pts]
+        # sample N points along the root→mid→tip polyline
+        ts = rng.uniform(0.1, 0.95, args.black_marks)
+        bar_len = int(short * args.mark_width_pct / 100.0)
+        bar_thick = max(2, int(short * 0.003))
+        for t in ts:
+            if t < 0.5:
+                p = root + (mid - root) * (t / 0.5)
+            else:
+                p = mid + (tip - mid) * ((t - 0.5) / 0.5)
+            # perpendicular to arm direction
+            seg = (mid - root) if t < 0.5 else (tip - mid)
+            n = np.array([-seg[1], seg[0]])
+            n = n / (np.linalg.norm(n) or 1)
+            a = (int(p[0] - n[0]*bar_len/2), int(p[1] - n[1]*bar_len/2))
+            b = (int(p[0] + n[0]*bar_len/2), int(p[1] + n[1]*bar_len/2))
+            cv2.line(arr, a, b, (0, 0, 0), bar_thick)
+        print(f"  drew {args.black_marks} black bars (len={bar_len}px, thick={bar_thick}px)")
 
     out = streak(arr, strength, tangent, length_px, decay=args.decay, gain=args.gain)
     os.makedirs(OUT, exist_ok=True)

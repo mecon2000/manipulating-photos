@@ -113,10 +113,14 @@ def main():
                    help="how strongly the inverted dark streaks darken the result (0-1.5)")
     p.add_argument("--dot-radius-px", type=int, default=3,
                    help="radius (px) of each anti-aliased ball planted in the cluster")
+    p.add_argument("--grayscale", action="store_true",
+                   help="force grayscale on input (kills color casts from relighting)")
     p.add_argument("--suffix", default=None)
     args = p.parse_args()
 
     img = Image.open(args.source).convert("RGB")
+    if args.grayscale:
+        img = img.convert("L").convert("RGB")
     arr = np.array(img)   # writable copy
     h, w = arr.shape[:2]
     short = min(w, h)

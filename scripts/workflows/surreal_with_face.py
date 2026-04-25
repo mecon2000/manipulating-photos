@@ -167,12 +167,24 @@ def face_ellipse_mask(img_size, source_arr, inner_mult=1.0, outer_mult=4.0,
     return mask.astype(np.float32)
 
 
-def upscale_replicate(in_path, scale=4, max_retries=8):
-    """Real-ESRGAN 2x or 4x upscale via Replicate. Returns bytes."""
+def upscale_replicate(in_path, scale=4, max_retries=8, max_input_pixels=2_000_000):
+    """Real-ESRGAN 2x or 4x upscale via Replicate. Auto-downsamples input that
+    exceeds Real-ESRGAN's GPU memory limit (~2.1M pixels). Returns bytes."""
     import replicate
+    src = Image.open(in_path)
+    pixels = src.size[0] * src.size[1]
+    actual_path = in_path
+    if pixels > max_input_pixels:
+        ratio = (max_input_pixels / pixels) ** 0.5
+        new_w, new_h = int(src.size[0] * ratio), int(src.size[1] * ratio)
+        small = src.resize((new_w, new_h), Image.LANCZOS)
+        small_path = Path(in_path).with_name(Path(in_path).stem + "__pre_upscale_resized.jpg")
+        small.save(small_path, quality=95)
+        actual_path = str(small_path)
+        print(f"  resize for upscale: {src.size}→{(new_w,new_h)} ({pixels//1000}K→{(new_w*new_h)//1000}K px)")
     for attempt in range(max_retries):
         try:
-            with open(in_path, "rb") as f:
+            with open(actual_path, "rb") as f:
                 out = replicate.run(UPSCALE_MODEL, input={
                     "image": f, "scale": scale, "face_enhance": False})
             item = out[0] if isinstance(out, list) and out else out

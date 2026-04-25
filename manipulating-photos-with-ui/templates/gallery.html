@@ -127,11 +127,11 @@
 
 <div class="bottombar review-view" id="bottombar">
   <div class="btnrow">
-    <button class="btn btn-dislike" onclick="act('dislike')">👎 Delete</button>
-    <button class="btn btn-fav" onclick="act('like')">⭐ Fav</button>
-    <button class="btn btn-edit" onclick="act('edit')">✏️ Edit</button>
-    <button class="btn btn-edit" onclick="openCrop()" title="Get 12 crop options, pick one, then fav the cropped result">✂️ Crop</button>
-    <button class="btn btn-blacklist" onclick="act('blacklist')" title="Blacklist this session — never show again">🚫 Session</button>
+    <button class="btn btn-dislike" onclick="act('dislike')" title="Delete this output  (b or d)">👎 Delete</button>
+    <button class="btn btn-fav"     onclick="act('like')"    title="Save to favorites with reconstruction command  (f or g)">⭐ Fav</button>
+    <button class="btn btn-edit"    onclick="act('edit')"    title="Move to edit-later folder for AI discussion  (e)">✏️ Edit</button>
+    <button class="btn btn-edit"    onclick="openCrop()"     title="Get 12 crop options, pick one, then fav the cropped result  (c)">✂️ Crop</button>
+    <button class="btn btn-blacklist" onclick="act('blacklist')" title="Blacklist this session — never show again  (s)">🚫 Session</button>
   </div>
   <div class="second-row">
     <button class="navbtn" onclick="nav(-1)">←</button>
@@ -301,9 +301,11 @@ document.addEventListener('keydown', (e) => {
   if (currentView !== 'review') return;
   if (e.key === 'ArrowLeft')  nav(-1);
   else if (e.key === 'ArrowRight') nav(1);
-  else if (e.key === 'f') act('like');
-  else if (e.key === 'd') act('dislike');
+  else if (e.key === 'f' || e.key === 'g') act('like');
+  else if (e.key === 'd' || e.key === 'b') act('dislike');
   else if (e.key === 'e') act('edit');
+  else if (e.key === 'c') openCrop();
+  else if (e.key === 's') act('blacklist');
   else if (e.key === ' ') { e.preventDefault(); togglePause(); }
   else if (e.key === 'm') toggleMore();
   else if (e.key === '1') more('same-style');

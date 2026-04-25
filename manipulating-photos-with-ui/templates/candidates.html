@@ -62,19 +62,19 @@
   </div>
   <div class="btnrow">
     <button class="btn" style="background:#333; max-width:60px;" onclick="nav(-1)"
-            title="Previous candidate (doesn't change saved/rejected state)">←</button>
+            title="Previous (←)">←</button>
     <button class="btn btn-bad" onclick="act('bad')"
-            title="Reject this photo — added to motion-streak rejects, won't be shown again">👎 Bad</button>
+            title="Reject — added to motion-streak rejects, won't be shown again  (b)">👎 Bad</button>
     <button class="btn btn-good" onclick="act('good')"
-            title="Save this photo as a good source for motion-streak generation">✅ Good</button>
+            title="Save this photo as a good source for motion-streak generation  (g)">✅ Good</button>
     <button class="btn btn-session" onclick="act('bad-session')"
-            title="Blacklist the entire session — no photos from this shoot will appear again">🚫 Session</button>
+            title="Blacklist the entire session — no photos from this shoot will appear again  (s)">🚫 Session</button>
     <button class="btn" style="background:#333; max-width:60px;" onclick="nav(1)"
-            title="Next candidate (doesn't change saved/rejected state)">→</button>
+            title="Next (→)">→</button>
   </div>
   <div class="btnrow" style="margin-top:6px;">
     <button class="btn" style="background:#c49a1a;" onclick="act('fav-as-is')"
-            title="Favorite this B&W preview as-is (saves to favorites with reconstruction command)">⭐ Fav as-is</button>
+            title="Favorite this B&W preview as-is — saves to favorites with reconstruction command  (f)">⭐ Fav as-is</button>
     <button class="btn" style="background:#2b5a8f;" onclick="openCrop()"
             title="Get 12 crop options, pick one or more, then fav the cropped result">✂️ Crop</button>
     <button class="btn" style="background:#1e5a7a;" onclick="act('similar')"
@@ -148,8 +148,13 @@ function nav(delta) {
 }
 
 document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === 'ArrowLeft') nav(-1);
   else if (e.key === 'ArrowRight') nav(1);
+  else if (e.key === 'b' || e.key === 'B') act('bad');
+  else if (e.key === 'g' || e.key === 'G') act('good');
+  else if (e.key === 'f' || e.key === 'F') act('fav-as-is');
+  else if (e.key === 's' || e.key === 'S') act('bad-session');
 });
 
 async function act(kind) {

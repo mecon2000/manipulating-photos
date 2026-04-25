@@ -71,11 +71,11 @@
 
 <div class="bottombar" id="bottombar">
   <div class="btnrow">
-    <button class="btn" style="background:#333; max-width:60px;" onclick="nav(-1)" title="Previous">←</button>
-    <button class="btn btn-bad" onclick="act('bad')" title="Reject (moves file to style-transfer-bad/)">👎 Bad</button>
-    <button class="btn btn-good" onclick="act('good')" title="Mark as good (vote counts toward style score)">✅ Good</button>
-    <button class="btn btn-fav" onclick="act('fav')" title="Save to favorites with reproduction metadata">⭐ Fav</button>
-    <button class="btn" style="background:#333; max-width:60px;" onclick="nav(1)" title="Next">→</button>
+    <button class="btn" style="background:#333; max-width:60px;" onclick="nav(-1)" title="Previous (←)">←</button>
+    <button class="btn btn-bad"  onclick="act('bad')"  title="Reject — moves file to style-transfer-bad/  (b)">👎 Bad</button>
+    <button class="btn btn-good" onclick="act('good')" title="Mark as good — counts toward style score  (g)">✅ Good</button>
+    <button class="btn btn-fav"  onclick="act('fav')"  title="Save to favorites with reproduction metadata  (f)">⭐ Fav</button>
+    <button class="btn" style="background:#333; max-width:60px;" onclick="nav(1)" title="Next (→)">→</button>
   </div>
 </div>
 
@@ -90,7 +90,9 @@ function showToast(m){ const t=document.getElementById('toast'); t.textContent=m
 
 async function refresh() {
   const d = await fetch('/api/style-transfer/list').then(r=>r.json());
-  items = d.items || [];
+  // hide everything already voted on (good / fav / bad) — bad files moved away,
+  // good/fav stay on disk but the user has decided about them.
+  items = (d.items || []).filter(it => !it.vote);
   document.getElementById('total').textContent = items.length;
   if (cursor >= items.length) cursor = Math.max(0, items.length - 1);
   render();
@@ -137,16 +139,11 @@ async function act(kind) {
     else if (kind==='fav') showToast('⭐ Faved: '+d.fav);
   } catch (e) { showToast('Error'); console.error(e); }
   acting = false;
-  if (kind==='bad') {
-    items.splice(cursor, 1);
-    if (cursor >= items.length) cursor = Math.max(0, items.length-1);
-    document.getElementById('total').textContent = items.length;
-    render();
-  } else {
-    items[cursor].vote = kind;
-    render();
-    setTimeout(()=>nav(1), 250);
-  }
+  // remove the just-voted item — user has decided, don't show again
+  items.splice(cursor, 1);
+  if (cursor >= items.length) cursor = Math.max(0, items.length - 1);
+  document.getElementById('total').textContent = items.length;
+  render();
 }
 
 async function toggleScoreboard() {

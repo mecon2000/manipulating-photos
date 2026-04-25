@@ -16,6 +16,7 @@ Auth:
   Reads REPLICATE_API_TOKEN from env or ~/sol/.env
 """
 import argparse, os, sys, time, json, urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 OUT_DIR = Path("~/.openclaw/workspace/shared/style-transfer-finals").expanduser()
@@ -85,6 +86,8 @@ def main():
                    help="how strongly the source structure (depth) constrains the output")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--out-dir", default=str(OUT_DIR))
+    p.add_argument("--workers", type=int, default=8,
+                   help="parallel workers for batch mode (paid account: 8 fine)")
     args = p.parse_args()
 
     token = load_token()
@@ -103,7 +106,8 @@ def main():
         sources = [p for p in sorted(sd.iterdir())
                    if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
         styles = [p for p in sorted(std.iterdir())
-                  if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
+                  if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+                  and not p.name.startswith("_")]
         if not sources or not styles:
             print(f"need files in both {sd} and {std}", file=sys.stderr)
             sys.exit(2)
@@ -118,21 +122,19 @@ def main():
             sys.exit(2)
         pairs.append((Path(args.source), Path(args.style)))
 
-    for src, style in pairs:
+    def process(pair):
+        src, style = pair
         tag = f"{short(src)}__style_{short(style)}"
         out_path = out_dir / f"{tag}.jpg"
         if out_path.exists():
-            print(f"skip exists: {out_path.name}")
-            continue
+            return ("skip", tag, 0.0)
         t0 = time.time()
         try:
             blob = run_one(str(src), str(style), args.prompt,
                            args.denoising_strength, args.depth_strength, args.seed)
         except Exception as e:
-            print(f"FAIL {tag}: {e}")
-            continue
+            return ("fail", tag, str(e)[:120])
         out_path.write_bytes(blob)
-        # sidecar metadata
         meta = {
             "source": str(src), "style": str(style), "prompt": args.prompt,
             "denoising_strength": args.denoising_strength,
@@ -141,7 +143,17 @@ def main():
             "elapsed_s": round(time.time() - t0, 1),
         }
         out_path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
-        print(f"  ✔ {out_path.name}  ({meta['elapsed_s']}s)")
+        return ("ok", tag, round(time.time() - t0, 1))
+
+    workers = max(1, args.workers if len(pairs) > 1 else 1)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for status, tag, info in pool.map(process, pairs):
+            if status == "ok":
+                print(f"  ✔ {tag}  ({info}s)")
+            elif status == "skip":
+                print(f"skip exists: {tag}")
+            else:
+                print(f"FAIL {tag}: {info}")
 
 
 if __name__ == "__main__":

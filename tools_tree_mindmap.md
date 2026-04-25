@@ -51,7 +51,9 @@ graph TD
     EFFECTS --> TIMECORR["⏳ time-corruption<br/>ghost / melt / trails / glitch<br/>⭐ ghost-dissolve + shibari"]:::happy
     EFFECTS --> INKDISS["🖋️ ink-dissolution<br/>Frequency-band dissolution<br/>⭐ 11 favs — ink-wash"]:::happy
     EFFECTS --> MATSWAP["🪨 material-swap<br/>glass / marble / metal<br/>chains with baroque"]:::done
-    EFFECTS --> MOTIONSTREAK["🌀 motion-streak<br/>0010x0010 B&W aesthetic<br/>streak / slitscan / limb-streak modes<br/>⚡ WIP — intensity tuning"]:::wip
+    EFFECTS --> MOTIONSTREAK["🌀 motion-streak<br/>0010x0010 B&W aesthetic<br/>streak / slitscan / limb-streak<br/>😴 paused — pivoted to Replicate"]:::tired
+    EFFECTS --> STYLEXFER["🎭 style-transfer-replicate<br/>fofr/style-transfer<br/>IPAdapter + DreamShaperXL<br/>⚡ trying 0010x0010 via reference"]:::wip
+    FOUNDATION --> IGCLEAN["🧹 clean-ig-screenshots<br/>Cross-stack variance + cv2.inpaint<br/>strip IG chrome from style refs"]:::foundation
     MATSWAP --> I_CHAIN["💭 tool chaining<br/>matswap→baroque→crop one cmd"]:::idea
     INKDISS --> I_MONO["🔮 mono+accent<br/>B&W + single rose / lily<br/>Like refs #8, #16"]:::idea
 

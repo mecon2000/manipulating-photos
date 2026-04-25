@@ -313,6 +313,29 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 ### `scripts/workflows/styles.json`
 111 art styles with names and prompt additions. Loaded automatically by the stylization script. Use `--list-styles` to see all available styles.
 
+### `scripts/workflows/clean_ig_screenshots.py`
+**Remove persistent overlays from a stack of Instagram screenshots.** Useful when you have several IG-post screenshots with the same UI chrome (status bar, username text, like/comment bar) and want clean photos for use as style references. Works by computing pixel-wise std across the stack — pixels identical across all images = overlay → mask + cv2.inpaint per image.
+
+**Usage:**
+```bash
+./scripts/workflows/clean_ig_screenshots.py [--in DIR] [--out DIR]
+./scripts/workflows/clean_ig_screenshots.py --threshold 8 --dilate 5 --save-mask
+./scripts/workflows/clean_ig_screenshots.py --rect "0,80%,25%,20%"  # extra rect for things that move slightly (e.g. floating bubbles)
+```
+
+**Flags:** `--in`, `--out`, `--threshold` (std cutoff, default 5), `--dilate` (iterations, default 3), `--save-mask` (debug), `--rect "x,y,w,h"` (px or %; pass multiple for multiple rects). Default in=`shared/0010x0010/`, out=`shared/0010x0010/cleaned/`.
+
+### `scripts/workflows/style_transfer_replicate.py`
+**Replicate `fofr/style-transfer` wrapper.** IPAdapter Plus + DreamShaperXL Lightning + depth ControlNet on Replicate (NSFW-friendly community SDXL, no Flux filter). ~$0.0063/run, ~7s. Single or batch.
+
+**Usage:**
+```bash
+./scripts/workflows/style_transfer_replicate.py --source PHOTO --style STYLE_REF
+./scripts/workflows/style_transfer_replicate.py --batch  # every source × every style
+```
+
+**Flags:** `--source`, `--style`, `--batch`, `--source-dir`, `--style-dir`, `--prompt`, `--denoising-strength` (0-1, default 0.65), `--depth-strength` (0-1, default 1.0), `--seed`, `--out-dir`. Reads `REPLICATE_API_TOKEN` from env or `~/sol/.env`. Outputs to `shared/style-transfer-finals/` with sidecar JSON per file.
+
 ## Lessons Learned (from testing, April 2026)
 
 ### What works well — do more of this

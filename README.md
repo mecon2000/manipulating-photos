@@ -20,3 +20,6 @@ These scripts depend on environment variables for authentication:
 *   `FAL_API_KEY`
 *   `GOOGLE_API_KEY`
 *   `GITHUB_API_KEY`
+*   `REPLICATE_API_TOKEN` (for `style_transfer_replicate.py`)
+*   `ANTHROPIC_API_KEY`
+*   `PUSHBULLET_TOKEN`

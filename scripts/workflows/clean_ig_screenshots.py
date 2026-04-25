@@ -30,6 +30,9 @@ def main():
                    help="dilation iterations (catches anti-aliased text edges)")
     p.add_argument("--save-mask", action="store_true",
                    help="also save the detected overlay mask for inspection")
+    p.add_argument("--rect", action="append", default=[],
+                   help='extra rect to add to mask: "x,y,w,h" in pixels (or use pct: "5%%,80%%,20%%,15%%"); '
+                        'pass multiple times for multiple rects')
     args = p.parse_args()
 
     files = [f for f in sorted(os.listdir(args.in_dir))
@@ -59,6 +62,19 @@ def main():
     if args.dilate > 0:
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.dilate(mask, kernel, iterations=args.dilate)
+
+    def parse_dim(s, total):
+        s = s.strip()
+        return int(round(float(s.rstrip("%")) * total / 100)) if s.endswith("%") else int(s)
+    for r in args.rect:
+        try:
+            xs, ys, ws, hs = [t.strip() for t in r.split(",")]
+            x = parse_dim(xs, W); y = parse_dim(ys, H)
+            ww = parse_dim(ws, W); hh = parse_dim(hs, H)
+            mask[y:y+hh, x:x+ww] = 255
+            print(f"  +rect ({x},{y},{ww},{hh})")
+        except Exception as e:
+            print(f"bad --rect '{r}': {e}", file=sys.stderr)
 
     pct = 100.0 * mask_bool.mean()
     print(f"overlay mask: {pct:.1f}% of pixels (std<{args.threshold})")

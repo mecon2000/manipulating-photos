@@ -20,6 +20,7 @@ graph TD
     NOTIFY["🔧 notify.py<br/>Pushbullet push<br/>✅"]:::foundation
     PHOTODB["🗃️ photo catalog DB<br/>SQLite metadata<br/>✅"]:::foundation
     CAND["📋 find-candidates<br/>DB picker<br/>✅"]:::foundation
+    IGCLEAN["🧹 clean-ig-screenshots<br/>Strip IG chrome via cross-stack variance<br/>✅"]:::foundation
     BATCHRUN["🎛️ batch-runner<br/>Autonomous review UI<br/>⚡ $2/hr cap<br/>schnell default + BG cache<br/>+ weights reweighted toward free"]:::happy
 
     %% COMPOSITING
@@ -37,7 +38,8 @@ graph TD
     TIMECORR["⏳ time-corruption<br/>ghost / melt / trails / glitch<br/>⭐ ghost-dissolve + shibari"]:::happy
     INKDISS["🖋️ ink-dissolution<br/>Frequency-band dissolution<br/>⭐ 11 favs — ink-wash"]:::happy
     MATSWAP["🪨 material-swap<br/>glass / marble / metal<br/>✅ chains with baroque"]:::done
-    MOTIONSTREAK["🌀 motion-streak<br/>0010x0010 B&W aesthetic<br/>modes: streak / slitscan / limb-streak<br/>⚡ WIP — streak intensity tuning"]:::wip
+    MOTIONSTREAK["🌀 motion-streak<br/>0010x0010 B&W aesthetic<br/>modes: streak / slitscan / limb-streak<br/>😴 paused — pivoted to Replicate"]:::tired
+    STYLEXFER["🎭 style-transfer-replicate<br/>fofr/style-transfer (IPAdapter+SDXL)<br/>$0.006/run, NSFW-friendly<br/>⚡ trying for 0010x0010 aesthetic"]:::wip
 
     %% FRAMING
     FGFRAME["🖼️ foreground-framing<br/>Shoot-through depth<br/>😴 SDXL ignores prompts"]:::tired

@@ -137,21 +137,28 @@ def main():
     if pts is None:
         print("[err] pose not detected"); sys.exit(2)
     mask, strength, tangent, param = limb_mask_and_tangent((w, h), pts, radius_px)
-    # Optional: restrict smear to N segments along the limb covering total %%
+    # Optional: restrict smear to N evenly-spaced segments covering total %% of the limb.
+    # smear_centers ends up shared with dot-clusters so black balls land inside trails.
+    smear_centers = []
+    seg_w = 0.0
     if args.smear_clusters > 0:
         rng_s = np.random.default_rng(args.smear_cluster_seed)
         seg_w = (args.smear_coverage_pct / 100.0) / args.smear_clusters
-        # spaced centers within [seg_w/2, 1-seg_w/2]
-        centers = sorted(rng_s.uniform(seg_w/2 + 0.05, 1 - seg_w/2 - 0.05, args.smear_clusters))
+        # evenly spaced centers across [0.1, 0.9] with small jitter
+        base = np.linspace(0.15, 0.85, args.smear_clusters)
+        jitter_amp = max(0.0, (0.7 / max(1, args.smear_clusters - 1) - seg_w) / 2)
+        smear_centers = sorted(np.clip(
+            base + rng_s.uniform(-jitter_amp, jitter_amp, args.smear_clusters),
+            seg_w/2 + 0.05, 1 - seg_w/2 - 0.05))
         seg_mask = np.zeros_like(param)
-        for c in centers:
+        for c in smear_centers:
             lo, hi = c - seg_w/2, c + seg_w/2
-            inside = ((param >= lo) & (param <= hi)).astype(np.float32)
-            seg_mask = np.maximum(seg_mask, inside)
-        # soften the param-axis edges for smoother trail starts
+            seg_mask = np.maximum(seg_mask,
+                ((param >= lo) & (param <= hi)).astype(np.float32))
         seg_mask = cv2.GaussianBlur(seg_mask, (0, 0), sigmaX=2, sigmaY=2)
         strength = strength * seg_mask
-        print(f"  smear-clusters={args.smear_clusters} centers={[f'{c:.2f}' for c in centers]} seg-w={seg_w*100:.0f}%")
+        print(f"  smear-clusters={args.smear_clusters} "
+              f"centers={[f'{c:.2f}' for c in smear_centers]} seg-w={seg_w*100:.0f}%")
     if args.angle is not None: tangent = args.angle
     if args.flip: tangent += 180
     print(f"limb={args.limb} tangent={tangent:.0f}° L={length_px:.0f}px decay={args.decay} gain={args.gain}")
@@ -190,7 +197,14 @@ def main():
     if args.dot_clusters > 0:
         rng3 = np.random.default_rng(43)
         root, mid, tip = [np.array(p, dtype=np.float32) for p in pts]
-        ts = rng3.uniform(0.1, 0.95, args.dot_clusters)
+        # if smear-clusters is active, sample dots inside the smear segments
+        if smear_centers:
+            ts = []
+            for _ in range(args.dot_clusters):
+                c = smear_centers[int(rng3.integers(0, len(smear_centers)))]
+                ts.append(float(np.clip(c + rng3.uniform(-seg_w/2, seg_w/2), 0.05, 0.95)))
+        else:
+            ts = rng3.uniform(0.1, 0.95, args.dot_clusters)
         cluster_r = max(2, int(short * args.dot_cluster_radius_pct / 100.0))
         dots = np.zeros_like(arr)
         for t in ts:

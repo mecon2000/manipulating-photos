@@ -378,56 +378,155 @@ document.addEventListener('click', (e) => {
 refresh();
 setInterval(refresh, 3000);
 </script>
-<div id="cropModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92);
-     z-index:50; flex-direction:column; align-items:center; padding:10px; gap:10px;">
-  <div style="color:#e7e7ea; font-size:13px;">Pick a crop 1–12 (or Cancel)</div>
-  <img id="cropImg" style="max-width:100%; max-height:60vh; object-fit:contain;" />
-  <div style="display:grid; grid-template-columns:repeat(6,1fr); gap:6px; width:100%; max-width:420px;">
-    <button onclick="pickCrop(1)">1</button><button onclick="pickCrop(2)">2</button>
-    <button onclick="pickCrop(3)">3</button><button onclick="pickCrop(4)">4</button>
-    <button onclick="pickCrop(5)">5</button><button onclick="pickCrop(6)">6</button>
-    <button onclick="pickCrop(7)">7</button><button onclick="pickCrop(8)">8</button>
-    <button onclick="pickCrop(9)">9</button><button onclick="pickCrop(10)">10</button>
-    <button onclick="pickCrop(11)">11</button><button onclick="pickCrop(12)">12</button>
+<div id="cropPanel" style="display:none; position:fixed; left:0; right:0;
+     bottom:calc(180px + env(safe-area-inset-bottom)); z-index:30;
+     background:rgba(15,15,18,0.96); border-top:1px solid #333; padding:10px 12px;">
+  <div id="cropStatus" style="color:#bbb; font-size:12px; margin-bottom:6px;">Pick crops</div>
+  <div id="cropChecks" style="display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin-bottom:8px;"></div>
+  <div id="cropVariantStrip" style="display:none; gap:6px; overflow-x:auto; padding-bottom:6px; margin-bottom:8px;"></div>
+  <div style="display:flex; gap:6px;">
+    <button class="btn btn-ghost" onclick="cancelCrop()" style="flex:1;">Cancel</button>
+    <button class="btn btn-fav" id="cropApplyBtn" onclick="applyCrops()" style="flex:2;">Apply selection</button>
   </div>
-  <button onclick="closeCrop()" style="padding:10px 20px;">Cancel</button>
-  <div id="cropStatus" style="color:#8a8a90; font-size:12px;"></div>
 </div>
 <script>
 let cropItemId = null;
+let cropOriginalSrc = null;
+let cropSelected = new Set();
+let cropVariants = []; // [{n, path}]
+let cropVariantIdx = 0;
+let cropMode = 'idle'; // idle | options | variants
+
 async function openCrop() {
-  if (!current) return;
-  cropItemId = current.id;
-  document.getElementById('cropModal').style.display = 'flex';
+  if (!items.length) return;
+  const it = items[idx];
+  cropItemId = it.id;
+  cropOriginalSrc = it.output;
+  cropSelected.clear();
+  cropVariants = [];
+  cropVariantIdx = 0;
+  cropMode = 'options';
+
+  // Render checkbox grid 1..12
+  const cc = document.getElementById('cropChecks');
+  cc.innerHTML = '';
+  for (let i = 1; i <= 12; i++) {
+    const lbl = document.createElement('label');
+    lbl.style.cssText = 'display:flex; align-items:center; justify-content:center; gap:4px; padding:8px; border:1px solid #444; border-radius:6px; font-size:14px; cursor:pointer; background:#1a1a1f;';
+    lbl.innerHTML = `<input type="checkbox" value="${i}" onchange="onCropToggle(this)" style="margin:0;"> ${i}`;
+    cc.appendChild(lbl);
+  }
+  document.getElementById('cropVariantStrip').style.display = 'none';
+  document.getElementById('cropApplyBtn').textContent = 'Apply selection';
+  document.getElementById('cropApplyBtn').disabled = true;
+  document.getElementById('cropApplyBtn').style.opacity = '0.5';
+  document.getElementById('cropPanel').style.display = 'block';
   document.getElementById('cropStatus').textContent = 'Generating crop options…';
-  document.getElementById('cropImg').style.display = 'none';
+
   try {
     const r = await fetch(`/api/queue/${cropItemId}/crop-options`, {method:'POST'});
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'failed');
-    document.getElementById('cropImg').src = '/api/image?path=' + encodeURIComponent(d.options_path) + '&_=' + Date.now();
-    document.getElementById('cropImg').style.display = 'block';
-    document.getElementById('cropStatus').textContent = 'Tap a number to apply that crop.';
+    document.getElementById('photo').src = '/api/image?path=' + encodeURIComponent(d.options_path) + '&_=' + Date.now();
+    document.getElementById('cropStatus').textContent = 'Pick one or more crops, then Apply.';
   } catch (e) {
     document.getElementById('cropStatus').textContent = 'Error: ' + e.message;
   }
 }
-async function pickCrop(n) {
-  if (!cropItemId) return;
-  document.getElementById('cropStatus').textContent = `Applying crop ${n}…`;
+
+function onCropToggle(cb) {
+  const n = parseInt(cb.value, 10);
+  if (cb.checked) cropSelected.add(n); else cropSelected.delete(n);
+  const btn = document.getElementById('cropApplyBtn');
+  btn.disabled = cropSelected.size === 0;
+  btn.style.opacity = cropSelected.size === 0 ? '0.5' : '1';
+}
+
+async function applyCrops() {
+  if (!cropItemId || cropSelected.size === 0) return;
+  const crops = [...cropSelected].sort((a,b)=>a-b);
+  document.getElementById('cropStatus').textContent = `Applying ${crops.length} crop(s)…`;
+  document.getElementById('cropApplyBtn').disabled = true;
   try {
-    const r = await fetch(`/api/queue/${cropItemId}/crop/${n}`, {method:'POST'});
+    const r = await fetch(`/api/queue/${cropItemId}/crop-batch`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({crops})
+    });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'failed');
-    closeCrop();
-    await refresh();
+    cropVariants = d.outputs;
+    cropVariantIdx = 0;
+    cropMode = 'variants';
+    showCropVariant();
+    renderCropStrip();
+    document.getElementById('cropChecks').style.display = 'none';
+    document.getElementById('cropVariantStrip').style.display = 'flex';
+    const btn = document.getElementById('cropApplyBtn');
+    btn.textContent = '⭐ Fav this crop';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.onclick = favCurrentCrop;
+    document.getElementById('cropStatus').textContent = `${cropVariants.length} crop(s) ready. Tap thumbs to switch, then Fav.`;
   } catch (e) {
     document.getElementById('cropStatus').textContent = 'Error: ' + e.message;
+    document.getElementById('cropApplyBtn').disabled = false;
   }
 }
-function closeCrop() {
-  document.getElementById('cropModal').style.display = 'none';
+
+function renderCropStrip() {
+  const strip = document.getElementById('cropVariantStrip');
+  strip.innerHTML = '';
+  cropVariants.forEach((v, i) => {
+    const t = document.createElement('img');
+    t.src = '/api/image?path=' + encodeURIComponent(v.path);
+    t.style.cssText = `height:64px; width:auto; border-radius:4px; border:2px solid ${i===cropVariantIdx?'#ffb347':'#333'}; cursor:pointer; flex:0 0 auto;`;
+    t.onclick = () => { cropVariantIdx = i; showCropVariant(); renderCropStrip(); };
+    strip.appendChild(t);
+  });
+}
+
+function showCropVariant() {
+  const v = cropVariants[cropVariantIdx];
+  if (!v) return;
+  document.getElementById('photo').src = '/api/image?path=' + encodeURIComponent(v.path) + '&_=' + Date.now();
+}
+
+async function favCurrentCrop() {
+  const v = cropVariants[cropVariantIdx];
+  if (!v || !cropItemId) return;
+  try {
+    // Mutate item's output to chosen crop, then call standard like endpoint.
+    await fetch(`/api/queue/${cropItemId}/set-output`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({path: v.path, suffix: `--crop ${v.n}`})
+    });
+    const r = await fetch(`/api/queue/${cropItemId}/like`, {method:'POST'});
+    if (r.ok) toast('Faved cropped!', 'ok');
+    closeCropPanel();
+    items.splice(idx, 1);
+    if (idx >= items.length) idx = Math.max(0, items.length - 1);
+    render();
+    refresh();
+  } catch (e) { toast('Error', 'err'); }
+}
+
+function cancelCrop() {
+  // Restore original photo
+  if (cropOriginalSrc) {
+    document.getElementById('photo').src = '/api/image?path=' + encodeURIComponent(cropOriginalSrc) + '&t=' + Date.now();
+  }
+  closeCropPanel();
+}
+
+function closeCropPanel() {
+  document.getElementById('cropPanel').style.display = 'none';
+  document.getElementById('cropChecks').style.display = 'grid';
+  document.getElementById('cropApplyBtn').onclick = applyCrops;
   cropItemId = null;
+  cropOriginalSrc = null;
+  cropSelected.clear();
+  cropVariants = [];
+  cropMode = 'idle';
 }
 </script>
 </body>

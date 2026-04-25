@@ -964,6 +964,102 @@ def api_crop_apply(item_id, n):
         GALLERY_STATE.save()
     return jsonify({"ok": True, "output": new_out})
 
+def _run_crop_options(src):
+    cmd = [PYTHON, str(WORKFLOWS_DIR / "smart-crop.py"),
+           "--source", src, "--show-options"]
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if res.returncode != 0:
+        return None, (res.stderr or "")[-400:]
+    m = re.search(r"Options overlay saved:\s*(\S.+)", res.stdout)
+    if not m:
+        return None, "could not parse output path"
+    return m.group(1).strip(), None
+
+def _run_crop_apply(src, n):
+    cmd = [PYTHON, str(WORKFLOWS_DIR / "smart-crop.py"),
+           "--source", src, "--crop", str(n)]
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if res.returncode != 0:
+        return None, (res.stderr or "")[-400:]
+    m = re.search(r"→\s*(\S.+)", res.stdout)
+    if not m:
+        return None, "could not parse output path"
+    return m.group(1).strip(), None
+
+@app.route("/api/queue/<item_id>/crop-batch", methods=["POST"])
+def api_crop_batch(item_id):
+    it = GALLERY_STATE.find(item_id)
+    if not it:
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    crops = body.get("crops") or []
+    src = it["output"]
+    outputs = []
+    for n in crops:
+        out, err = _run_crop_apply(src, int(n))
+        if err:
+            return jsonify({"ok": False, "error": err, "outputs": outputs}), 500
+        outputs.append({"n": int(n), "path": out})
+    return jsonify({"ok": True, "outputs": outputs})
+
+@app.route("/api/queue/<item_id>/set-output", methods=["POST"])
+def api_set_output(item_id):
+    """Replace it['output'] with a chosen variant path (e.g. a cropped file)."""
+    it = GALLERY_STATE.find(item_id)
+    if not it:
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    new_out = body.get("path")
+    suffix = body.get("suffix") or "crop"
+    if not new_out:
+        abort(400)
+    with GALLERY_STATE.lock:
+        it["output"] = new_out
+        it["command"] = (it.get("command", "") + f" && smart-crop {suffix}").strip()
+        GALLERY_STATE.save()
+    return jsonify({"ok": True, "output": new_out})
+
+@app.route("/api/candidates/<item_id>/crop-options", methods=["POST"])
+def api_cand_crop_options(item_id):
+    it = CANDIDATES_STATE.find(item_id)
+    if not it:
+        abort(404)
+    out, err = _run_crop_options(it["output"])
+    if err:
+        return jsonify({"ok": False, "error": err}), 500
+    return jsonify({"ok": True, "options_path": out})
+
+@app.route("/api/candidates/<item_id>/crop-batch", methods=["POST"])
+def api_cand_crop_batch(item_id):
+    it = CANDIDATES_STATE.find(item_id)
+    if not it:
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    crops = body.get("crops") or []
+    src = it["output"]
+    outputs = []
+    for n in crops:
+        out, err = _run_crop_apply(src, int(n))
+        if err:
+            return jsonify({"ok": False, "error": err, "outputs": outputs}), 500
+        outputs.append({"n": int(n), "path": out})
+    return jsonify({"ok": True, "outputs": outputs})
+
+@app.route("/api/candidates/<item_id>/set-output", methods=["POST"])
+def api_cand_set_output(item_id):
+    it = CANDIDATES_STATE.find(item_id)
+    if not it:
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    new_out = body.get("path")
+    if not new_out:
+        abort(400)
+    with CANDIDATES_STATE.lock:
+        it["output"] = new_out
+        it["command"] = (it.get("command", "") + " && smart-crop").strip()
+        CANDIDATES_STATE.save()
+    return jsonify({"ok": True, "output": new_out})
+
 @app.route("/api/queue/<item_id>/dislike", methods=["POST"])
 def api_dislike(item_id):
     it = GALLERY_STATE.remove(item_id)

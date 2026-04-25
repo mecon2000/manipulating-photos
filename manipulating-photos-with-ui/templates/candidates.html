@@ -94,6 +94,8 @@ document.addEventListener('click', () => {
   <div class="btnrow" style="margin-top:6px;">
     <button class="btn" style="background:#c49a1a;" onclick="act('fav-as-is')"
             title="Favorite this B&W preview as-is (saves to favorites with reconstruction command)">⭐ Fav as-is</button>
+    <button class="btn" style="background:#2b5a8f;" onclick="openCrop()"
+            title="Get 12 crop options, pick one or more, then fav the cropped result">✂️ Crop</button>
     <button class="btn" style="background:#1e5a7a;" onclick="act('similar')"
             title="Queue 4 adjacent photos from the same session for motion-streak preview">🔁 Similar photos</button>
   </div>
@@ -200,6 +202,151 @@ async function togglePause() {
 
 refresh();
 setInterval(refresh, 2000);
+</script>
+
+<div id="cropPanel" style="display:none; position:fixed; left:0; right:0;
+     bottom:calc(220px + env(safe-area-inset-bottom)); z-index:30;
+     background:rgba(15,15,18,0.96); border-top:1px solid #333; padding:10px 12px;">
+  <div id="cropStatus" style="color:#bbb; font-size:12px; margin-bottom:6px;">Pick crops</div>
+  <div id="cropChecks" style="display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin-bottom:8px;"></div>
+  <div id="cropVariantStrip" style="display:none; gap:6px; overflow-x:auto; padding-bottom:6px; margin-bottom:8px;"></div>
+  <div style="display:flex; gap:6px;">
+    <button class="btn" style="background:#2a2a2e; flex:1;" onclick="cancelCrop()">Cancel</button>
+    <button class="btn" id="cropApplyBtn" style="background:#b8851a; flex:2;" onclick="applyCrops()">Apply selection</button>
+  </div>
+</div>
+
+<script>
+let cropItemId = null;
+let cropOriginalSrc = null;
+let cropSelected = new Set();
+let cropVariants = [];
+let cropVariantIdx = 0;
+
+async function openCrop() {
+  if (!current) return;
+  cropItemId = current.id;
+  cropOriginalSrc = current.output;
+  cropSelected.clear();
+  cropVariants = [];
+  cropVariantIdx = 0;
+
+  const cc = document.getElementById('cropChecks');
+  cc.innerHTML = '';
+  for (let i = 1; i <= 12; i++) {
+    const lbl = document.createElement('label');
+    lbl.style.cssText = 'display:flex; align-items:center; justify-content:center; gap:4px; padding:8px; border:1px solid #444; border-radius:6px; font-size:14px; cursor:pointer; background:#1a1a1f; color:#e7e7ea;';
+    lbl.innerHTML = `<input type="checkbox" value="${i}" onchange="onCropToggle(this)" style="margin:0;"> ${i}`;
+    cc.appendChild(lbl);
+  }
+  document.getElementById('cropChecks').style.display = 'grid';
+  document.getElementById('cropVariantStrip').style.display = 'none';
+  const btn = document.getElementById('cropApplyBtn');
+  btn.textContent = 'Apply selection';
+  btn.onclick = applyCrops;
+  btn.disabled = true;
+  btn.style.opacity = '0.5';
+  document.getElementById('cropPanel').style.display = 'block';
+  document.getElementById('cropStatus').textContent = 'Generating crop options…';
+
+  try {
+    const r = await fetch(`/api/candidates/${cropItemId}/crop-options`, {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'failed');
+    document.getElementById('photo').src = '/api/image?path=' + encodeURIComponent(d.options_path) + '&_=' + Date.now();
+    document.getElementById('cropStatus').textContent = 'Pick one or more crops, then Apply.';
+  } catch (e) {
+    document.getElementById('cropStatus').textContent = 'Error: ' + e.message;
+  }
+}
+
+function onCropToggle(cb) {
+  const n = parseInt(cb.value, 10);
+  if (cb.checked) cropSelected.add(n); else cropSelected.delete(n);
+  const btn = document.getElementById('cropApplyBtn');
+  btn.disabled = cropSelected.size === 0;
+  btn.style.opacity = cropSelected.size === 0 ? '0.5' : '1';
+}
+
+async function applyCrops() {
+  if (!cropItemId || cropSelected.size === 0) return;
+  const crops = [...cropSelected].sort((a,b)=>a-b);
+  document.getElementById('cropStatus').textContent = `Applying ${crops.length} crop(s)…`;
+  document.getElementById('cropApplyBtn').disabled = true;
+  try {
+    const r = await fetch(`/api/candidates/${cropItemId}/crop-batch`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({crops})
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'failed');
+    cropVariants = d.outputs;
+    cropVariantIdx = 0;
+    showCropVariant();
+    renderCropStrip();
+    document.getElementById('cropChecks').style.display = 'none';
+    document.getElementById('cropVariantStrip').style.display = 'flex';
+    const btn = document.getElementById('cropApplyBtn');
+    btn.textContent = '⭐ Fav this crop';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.onclick = favCurrentCrop;
+    document.getElementById('cropStatus').textContent = `${cropVariants.length} crop(s) ready. Tap thumbs to switch, then Fav.`;
+  } catch (e) {
+    document.getElementById('cropStatus').textContent = 'Error: ' + e.message;
+    document.getElementById('cropApplyBtn').disabled = false;
+  }
+}
+
+function renderCropStrip() {
+  const strip = document.getElementById('cropVariantStrip');
+  strip.innerHTML = '';
+  cropVariants.forEach((v, i) => {
+    const t = document.createElement('img');
+    t.src = '/api/image?path=' + encodeURIComponent(v.path);
+    t.style.cssText = `height:64px; width:auto; border-radius:4px; border:2px solid ${i===cropVariantIdx?'#ffb347':'#333'}; cursor:pointer; flex:0 0 auto;`;
+    t.onclick = () => { cropVariantIdx = i; showCropVariant(); renderCropStrip(); };
+    strip.appendChild(t);
+  });
+}
+
+function showCropVariant() {
+  const v = cropVariants[cropVariantIdx];
+  if (!v) return;
+  document.getElementById('photo').src = '/api/image?path=' + encodeURIComponent(v.path) + '&_=' + Date.now();
+}
+
+async function favCurrentCrop() {
+  const v = cropVariants[cropVariantIdx];
+  if (!v || !cropItemId) return;
+  try {
+    await fetch(`/api/candidates/${cropItemId}/set-output`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({path: v.path})
+    });
+    const r = await fetch(`/api/candidates/${cropItemId}/fav-as-is`, {method:'POST'});
+    if (r.ok) showToast('Faved cropped!');
+    closeCropPanel();
+    refresh();
+  } catch (e) { showToast('Error'); }
+}
+
+function cancelCrop() {
+  if (cropOriginalSrc) {
+    document.getElementById('photo').src = '/api/image?path=' + encodeURIComponent(cropOriginalSrc) + '&_=' + Date.now();
+  }
+  closeCropPanel();
+}
+
+function closeCropPanel() {
+  document.getElementById('cropPanel').style.display = 'none';
+  document.getElementById('cropChecks').style.display = 'grid';
+  document.getElementById('cropApplyBtn').onclick = applyCrops;
+  cropItemId = null;
+  cropOriginalSrc = null;
+  cropSelected.clear();
+  cropVariants = [];
+}
 </script>
 
 </body>

@@ -170,14 +170,32 @@ def limb_mask_and_gradient(img_size, pts, radius_px):
 
 
 def limb_streak_effect(bw_arr, limb_mask, limb_strength, tangent_deg, length_px,
-                        ghosts, bright_threshold=80, gain=2.5):
-    """Smear the limb's brightest pixels in a straight line across the image.
+                        ghosts, bright_threshold=80, gain=2.5, decay=4.0):
+    """Smear the limb region in a straight directional motion-blur trail.
 
-    Isolates highlights inside the limb (pixels >= bright_threshold), then
-    projects them along tangent direction with slow alpha decay. Shifted
-    copies are NOT re-gated by the limb mask, so streaks extend beyond the
-    limb silhouette — mimicking long-exposure motion trails on highlights.
+    Uses cv2.filter2D with a 1D one-sided exponential-decay kernel — the same
+    technique pyblur/Wand wrap, but anchored at one end of the kernel so the
+    trail extends only in the tangent direction (long-exposure trail look).
     """
+    import cv2
+    h, w, _ = bw_arr.shape
+    L = max(3, int(length_px))
+    K = L * 2 + 1
+    kernel = np.zeros((K, K), dtype=np.float32)
+    cx = cy = K // 2
+    # cv2.filter2D is correlation; flip 180° so tangent_deg == output trail direction
+    rad = np.deg2rad(tangent_deg + 180)
+    for t in range(L):
+        x = int(round(cx + np.cos(rad) * t))
+        y = int(round(cy - np.sin(rad) * t))
+        if 0 <= x < K and 0 <= y < K:
+            kernel[y, x] = np.exp(-decay * t / L)
+    # Source = bw_arr, gated by limb_strength (so only limb pixels feed the trail)
+    source = (bw_arr * gain) * limb_strength[..., None]
+    blurred = cv2.filter2D(source.astype(np.float32), -1, kernel,
+                           borderType=cv2.BORDER_CONSTANT)
+    # Composite: max-blend the trail onto the original bw_arr
+    return np.maximum(bw_arr.astype(np.float32), blurred)
     h, w, _ = bw_arr.shape
     rad = np.deg2rad(tangent_deg)
     dx, dy = np.cos(rad), -np.sin(rad)
@@ -333,8 +351,9 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
             # intersect with subject mask to not streak outside body
             lstrength = lstrength * subj_arr
             lmask = lmask * subj_arr
-            stacked = limb_streak_effect(bw_arr, lmask, lstrength, tangent,
-                                         length_px * 10.0, max(ghosts, 20))
+            stacked = limb_streak_effect(bw_arr, lmask, lstrength,
+                                         tangent + 180,   # flip side
+                                         length_px * 4.0, max(ghosts, 20))
             print(f"  step5 limb-streak: limb={limb} tangent={tangent:.0f}° radius={radius_px:.0f}px")
     else:
         stacked = long_exposure_stack(body_layer, body_alpha, angle,

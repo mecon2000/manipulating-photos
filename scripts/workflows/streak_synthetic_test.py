@@ -35,10 +35,12 @@ def streak_cv2(img_arr, length_px, angle_deg, decay=2.0):
     """
     import cv2
     L = max(3, int(length_px))
-    K = L * 2 + 1   # odd, big enough so center can fit a half-line
+    K = L * 2 + 1
     kernel = np.zeros((K, K), dtype=np.float32)
     cx = cy = K // 2
-    rad = np.deg2rad(angle_deg)
+    # cv2.filter2D is correlation, which flips kernel direction vs trail.
+    # Param `angle_deg` = direction trail extends in OUTPUT image (math: 0=right, 90=up).
+    rad = np.deg2rad(angle_deg + 180)
     # tail extends *toward* angle_deg from center
     for t in range(L):
         x = int(round(cx + np.cos(rad) * t))

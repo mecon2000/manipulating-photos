@@ -71,8 +71,8 @@ def streak(img_arr, strength, tangent_deg, length_px, decay=4.0, gain=2.5,
     """
     L = max(3, int(length_px))
     h, w = img_arr.shape[:2]
-    rad = np.deg2rad(tangent_deg + 180)   # cv2 warp direction matches output trail
-    cos_r, sin_r = np.cos(rad), -np.sin(rad)
+    rad = np.deg2rad(tangent_deg)         # warpAffine = direct translation, no flip
+    cos_r, sin_r = np.cos(rad), -np.sin(rad)   # image y is down → flip sin
     source = (img_arr.astype(np.float32) * gain) * strength[..., None]
     out = np.maximum(img_arr.astype(np.float32), source)
     for i in range(1, n_steps + 1):
@@ -119,6 +119,8 @@ def main():
     p.add_argument("--smear-coverage-pct", type=float, default=50.0,
                    help="total %% of limb length the smear clusters cover")
     p.add_argument("--smear-cluster-seed", type=int, default=42)
+    p.add_argument("--debug", action="store_true",
+                   help="save intermediate masks/source/smear/dots for verification")
     p.add_argument("--suffix", default=None)
     args = p.parse_args()
 
@@ -184,7 +186,9 @@ def main():
             cv2.line(arr, a, b, (0, 0, 0), bar_thick)
         print(f"  drew {args.black_marks} black bars (len={bar_len}px, thick={bar_thick}px)")
 
-    out = streak(arr, strength, tangent, length_px, decay=args.decay, gain=args.gain)
+    smear_only = streak(arr, strength, tangent, length_px,
+                        decay=args.decay, gain=args.gain)
+    out = smear_only.copy()
 
     # Re-draw the bars on top of the streaked result so they show unblurred
     for a, b in bar_endpoints:
@@ -230,6 +234,21 @@ def main():
     out_path = os.path.join(OUT, f"{name}_{suf}.jpg")
     Image.fromarray(out).save(out_path, quality=92)
     print(f"→ {out_path}")
+
+    if args.debug:
+        dbg_dir = os.path.join(OUT, f"{name}_{suf}__debug")
+        os.makedirs(dbg_dir, exist_ok=True)
+        Image.fromarray((strength * 255).astype(np.uint8)).save(
+            os.path.join(dbg_dir, "1_strength.png"))
+        Image.fromarray((mask * 255).astype(np.uint8)).save(
+            os.path.join(dbg_dir, "2_full_limb_mask.png"))
+        src_viz = (arr.astype(np.float32) * args.gain * strength[..., None]).clip(0, 255).astype(np.uint8)
+        Image.fromarray(src_viz).save(os.path.join(dbg_dir, "3_source_into_kernel.jpg"))
+        Image.fromarray(smear_only).save(os.path.join(dbg_dir, "4_smear_only.jpg"))
+        if args.dot_clusters > 0:
+            Image.fromarray(dots).save(os.path.join(dbg_dir, "5_dots_input.png"))
+            Image.fromarray(dot_blurred).save(os.path.join(dbg_dir, "6_dots_blurred.jpg"))
+        print(f"[debug] → {dbg_dir}")
 
 
 if __name__ == "__main__":

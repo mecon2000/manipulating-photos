@@ -30,6 +30,8 @@ def main():
                    help="dilation iterations (catches anti-aliased text edges)")
     p.add_argument("--save-mask", action="store_true",
                    help="also save the detected overlay mask for inspection")
+    p.add_argument("--crop-row-threshold", type=float, default=0.5,
+                   help="rows where >X fraction is mask get cropped from top/bottom (default 0.5)")
     p.add_argument("--rect", action="append", default=[],
                    help='extra rect to add to mask: "x,y,w,h" in pixels (or use pct: "5%%,80%%,20%%,15%%"); '
                         'pass multiple times for multiple rects')
@@ -76,16 +78,32 @@ def main():
         except Exception as e:
             print(f"bad --rect '{r}': {e}", file=sys.stderr)
 
+    # Crop off contiguous chrome bands at top/bottom (rows that are mostly mask).
+    # Those bands have no useful photo content, so cropping is cleaner than inpaint.
+    row_mask_pct = mask.mean(axis=1) / 255.0
+    crop_row_threshold = args.crop_row_threshold
+    top = 0
+    while top < H and row_mask_pct[top] > crop_row_threshold:
+        top += 1
+    bottom = H
+    while bottom > top + 10 and row_mask_pct[bottom - 1] > crop_row_threshold:
+        bottom -= 1
+    print(f"crop top→{top}, bottom→{bottom} (rows >{crop_row_threshold*100:.0f}% mask)")
+
     pct = 100.0 * mask_bool.mean()
     print(f"overlay mask: {pct:.1f}% of pixels (std<{args.threshold})")
 
     os.makedirs(args.out, exist_ok=True)
+    mask_cropped = mask[top:bottom]
     if args.save_mask:
-        Image.fromarray(mask).save(os.path.join(args.out, "_overlay_mask.png"))
+        Image.fromarray(mask_cropped).save(os.path.join(args.out, "_overlay_mask.png"))
 
     for f, img in zip(files, pil_imgs):
-        bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        inpainted = cv2.inpaint(bgr, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+        # Crop chrome bands first, inpaint only the in-photo overlays remaining
+        cropped = img.crop((0, top, W, bottom))
+        bgr = cv2.cvtColor(np.array(cropped), cv2.COLOR_RGB2BGR)
+        inpainted = cv2.inpaint(bgr, mask_cropped, inpaintRadius=5,
+                                flags=cv2.INPAINT_TELEA)
         out = cv2.cvtColor(inpainted, cv2.COLOR_BGR2RGB)
         Image.fromarray(out).save(os.path.join(args.out, f), quality=95)
         print(f"  ✔ {f}")

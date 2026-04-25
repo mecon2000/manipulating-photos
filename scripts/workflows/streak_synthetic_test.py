@@ -45,15 +45,10 @@ def streak_cv2(img_arr, length_px, angle_deg, decay=2.0):
         y = int(round(cy - np.sin(rad) * t))   # screen y down
         if 0 <= x < K and 0 <= y < K:
             kernel[y, x] = np.exp(-decay * t / L)
-    s = kernel.sum()
-    if s > 0:
-        kernel /= s
+    # NOT normalized — raw exp() weights so a white source pixel produces
+    # a (near-)white trail pixel one step along, fading to dim at tail.
     out = cv2.filter2D(img_arr.astype(np.float32), -1, kernel,
                        borderType=cv2.BORDER_CONSTANT)
-    # rescale: convolution averaged the trail's energy across L pixels;
-    # multiply by L * head_weight so the head reads as the original brightness
-    head_weight = float(np.exp(0))  # exp(-decay*0/L) = 1, before normalize
-    out *= L * head_weight / max(1.0, kernel.sum() * L)
     return np.clip(out, 0, 255).astype(np.uint8)
 
 

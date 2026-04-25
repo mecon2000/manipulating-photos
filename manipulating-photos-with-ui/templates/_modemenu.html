@@ -1,0 +1,42 @@
+{# Shared 3-dot navigation menu. Pass `current` (one of:
+    'gallery','candidates','style-transfer','tree') to highlight the active page.
+   Pages can prepend page-specific items by setting `extra_top` (raw HTML)
+   and `extra_bottom` likewise. #}
+<div style="position:relative;">
+  <button onclick="toggleModeMenu(event)"
+          style="background:transparent; color:#e7e7ea; border:1px solid #333;
+                 padding:4px 10px; border-radius:6px; font-size:18px;">⋮</button>
+  <div id="modemenu"
+       style="display:none; position:absolute; top:110%; right:0;
+              background:#1a1a1f; border:1px solid #333; border-radius:8px;
+              min-width:240px; z-index:20;">
+    {% if extra_top %}{{ extra_top|safe }}{% endif %}
+    <a href="/gallery"
+       style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;
+              {% if current == 'gallery' %}background:#2d4a6d;{% endif %}">🖼  Choose from all tools</a>
+    <a href="/candidates"
+       style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;
+              border-top:1px solid #2a2a30;
+              {% if current == 'candidates' %}background:#2d4a6d;{% endif %}">📋 Choose motion-streak candidates</a>
+    <a href="/style-transfer"
+       style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;
+              border-top:1px solid #2a2a30;
+              {% if current == 'style-transfer' %}background:#2d4a6d;{% endif %}">🎭 Choose good 0010x0010 imitations</a>
+    <a href="/tree"
+       style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;
+              border-top:1px solid #2a2a30;
+              {% if current == 'tree' %}background:#2d4a6d;{% endif %}">🌳 Tools tree</a>
+    {% if extra_bottom %}{{ extra_bottom|safe }}{% endif %}
+  </div>
+</div>
+<script>
+function toggleModeMenu(e) {
+  e.stopPropagation();
+  const m = document.getElementById('modemenu');
+  m.style.display = (m.style.display === 'block') ? 'none' : 'block';
+}
+document.addEventListener('click', () => {
+  const m = document.getElementById('modemenu');
+  if (m) m.style.display = 'none';
+});
+</script>

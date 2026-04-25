@@ -107,31 +107,12 @@
     <div class="count" id="count">0 / 0</div>
     <div class="cost" id="cost">$0.00</div>
   </div>
-  <div style="position:relative; margin-left:6px;">
-    <button class="navbtn" onclick="toggleModeMenu(event)" style="font-size:18px;">⋮</button>
-    <div id="modemenu" style="display:none; position:absolute; top:110%; right:0;
-         background:#1a1a1f; border:1px solid #333; border-radius:8px; min-width:180px; z-index:20;">
-      <a href="#" onclick="switchView('review'); document.getElementById('modemenu').style.display='none'; return false;"
-         style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; background:#2d4a6d;">🖼  Gallery (review)</a>
-      <a href="#" onclick="switchView('gallery'); document.getElementById('modemenu').style.display='none'; return false;"
-         style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">⭐ Favs</a>
-      <a href="/candidates" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">📋 Candidates for motion streaks</a>
-      <a href="/style-transfer" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">🎭 Style-transfer voting</a>
-      <a href="/tree" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">🌳 Tools tree</a>
-    </div>
-  </div>
+  {% set extra_top %}
+    <a href="#" onclick="switchView('gallery'); document.getElementById('modemenu').style.display='none'; return false;"
+       style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-bottom:1px solid #2a2a30;">⭐ Favs</a>
+  {% endset %}
+  {% with current="gallery", extra_top=extra_top %}{% include "_modemenu.html" %}{% endwith %}
 </div>
-<script>
-function toggleModeMenu(e) {
-  e.stopPropagation();
-  const m = document.getElementById('modemenu');
-  m.style.display = (m.style.display === 'block') ? 'none' : 'block';
-}
-document.addEventListener('click', () => {
-  const m = document.getElementById('modemenu');
-  if (m) m.style.display = 'none';
-});
-</script>
 
 <div class="review-view" id="reviewView" style="flex:1; display:flex; flex-direction:column;">
   <div class="photo-wrap" id="photoWrap">

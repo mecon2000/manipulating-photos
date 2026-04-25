@@ -48,15 +48,7 @@
           style="background:transparent; color:#e7e7ea; border:1px solid #333; padding:6px 10px; border-radius:6px; cursor:pointer; font-size:12px;">
     View: graph
   </button>
-  <div class="modes">
-    <button onclick="toggleModes()">⋮</button>
-    <div class="modemenu" id="modemenu">
-      <a href="/gallery">🖼  Gallery</a>
-      <a href="/candidates">📋 Candidates for motion streaks</a>
-      <a href="/style-transfer">🎭 Style-transfer voting</a>
-      <a href="/tree" class="active">🌳 Tools tree</a>
-    </div>
-  </div>
+  {% with current="tree" %}{% include "_modemenu.html" %}{% endwith %}
 </div>
 <div class="legend">
   <span class="chip" style="background:#1a6b1a; border-color:#4f4; color:#fff;"><span class="sw" style="background:#4f4;"></span>happy — loved, heavy use</span>
@@ -74,13 +66,6 @@
   <div class="mermaid" id="mm">Loading…</div>
 </div>
 <script>
-function toggleModes() {
-  document.getElementById('modemenu').classList.toggle('open');
-}
-document.addEventListener('click', (e) => {
-  const m = document.getElementById('modemenu');
-  if (!e.target.closest('.modes')) m.classList.remove('open');
-});
 mermaid.initialize({ startOnLoad: false, theme: 'dark',
                      securityLevel: 'loose', maxTextSize: 500000 });
 let currentView = 'graph';

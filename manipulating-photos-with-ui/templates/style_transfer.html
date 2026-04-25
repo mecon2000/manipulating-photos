@@ -51,24 +51,12 @@
     <span class="sub" id="sub">—</span>
   </div>
   <div class="count"><span id="idx">0</span>/<span id="total">0</span></div>
-  <div style="position:relative;">
-    <button onclick="toggleModeMenu(event)" style="background:transparent; color:#e7e7ea; border:1px solid #333; padding:4px 10px; border-radius:6px; font-size:18px;">⋮</button>
-    <div id="modemenu" style="display:none; position:absolute; top:110%; right:0;
-         background:#1a1a1f; border:1px solid #333; border-radius:8px; min-width:200px; z-index:20;">
-      <a href="/gallery" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;">🖼  Gallery</a>
-      <a href="/candidates" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">📋 Motion-streak candidates</a>
-      <a href="/style-transfer" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30; background:#2d4a6d;">🎭 Style-transfer voting</a>
-      <a href="#" onclick="toggleScoreboard(); return false;" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">📊 Scoreboard</a>
-      <a href="/tree" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">🌳 Tools tree</a>
-    </div>
-  </div>
+  {% set extra_bottom %}
+    <a href="#" onclick="toggleScoreboard(); return false;"
+       style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">📊 Scoreboard</a>
+  {% endset %}
+  {% with current="style-transfer", extra_bottom=extra_bottom %}{% include "_modemenu.html" %}{% endwith %}
 </div>
-<script>
-function toggleModeMenu(e) { e.stopPropagation();
-  const m=document.getElementById('modemenu');
-  m.style.display = (m.style.display==='block')?'none':'block'; }
-document.addEventListener('click',()=>{const m=document.getElementById('modemenu'); if (m) m.style.display='none';});
-</script>
 
 <div class="photo-wrap" id="photoWrap">
   <img id="photo" alt="" />

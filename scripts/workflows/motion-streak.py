@@ -19,7 +19,7 @@ Usage:
   motion-streak.py --source photo.jpg --up-to-step 4        # stop after smear
   motion-streak.py --source photo.jpg --angle 15 --length-pct 12 --ghosts 10
 """
-import argparse, os, sys, time
+import argparse, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 from PIL import Image
@@ -249,6 +249,18 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
     out_dir = os.path.join(OUT_DIR, f"{name}_{tag}")
     os.makedirs(out_dir, exist_ok=True)
     print(f"[{name}] out={out_dir}  up_to={up_to_step}")
+    meta = {
+        "source": os.path.abspath(source),
+        "mode": mode, "angle": angle, "length_pct": length_pct,
+        "ghosts": ghosts, "up_to_step": up_to_step, "seed": seed,
+        "suffix": out_suffix,
+        "slitscan_slices": slitscan_slices if mode == "slitscan" else None,
+        "slitscan_jitter": slitscan_jitter if mode == "slitscan" else None,
+        "limb": limb if mode == "limb-streak" else None,
+        "limb_radius_pct": limb_radius_pct if mode == "limb-streak" else None,
+        "command": " ".join(sys.argv),
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
     img = Image.open(source).convert("RGB")
     w, h = img.size
@@ -259,7 +271,7 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
     bw_arr = np.asarray(bw, dtype=np.float32)
     print(f"  step1 bw done")
     if up_to_step == 1:
-        return _finalize(out_dir, name, tag, np.asarray(bw))
+        return _finalize(out_dir, name, tag, np.asarray(bw), meta=meta)
 
     # Step 2: subject mask
     subj_mask, _ = build_mask(bw, affect="subject", output_dir=out_dir, feather=1.0)
@@ -267,7 +279,7 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
     print(f"  step2 subject mask (coverage={subj_arr.mean()*100:.1f}%)")
     if up_to_step == 2:
         vis = (bw_arr * subj_arr[..., None]).astype(np.uint8)
-        return _finalize(out_dir, name, tag, vis)
+        return _finalize(out_dir, name, tag, vis, meta=meta)
 
     # Step 3: face falloff
     try:
@@ -282,7 +294,7 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
         # show falloff as cyan tint on bw
         vis = bw_arr.copy()
         vis[..., 2] = np.clip(vis[..., 2] + fall * 60, 0, 255)
-        return _finalize(out_dir, name, tag, vis.astype(np.uint8))
+        return _finalize(out_dir, name, tag, vis.astype(np.uint8), meta=meta)
 
     # Step 4: directional smear
     length_px = int(min(w, h) * length_pct / 100.0)
@@ -296,7 +308,7 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
                    + bw_arr * face_w * subj_arr[..., None]
                    + smeared * body_w)
     if up_to_step == 4:
-        return _finalize(out_dir, name, tag, np.clip(composite_4, 0, 255).astype(np.uint8))
+        return _finalize(out_dir, name, tag, np.clip(composite_4, 0, 255).astype(np.uint8), meta=meta)
 
     # Step 5: long-exposure stacking (or slitscan if mode=slitscan)
     body_layer = bw_arr * subj_arr[..., None]  # body luminance on black
@@ -340,27 +352,34 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
                        + bw_arr * face_w * subj_arr[..., None]) # face on top (additive-ish)
     composite_5 = np.clip(composite_5, 0, 255)
     if up_to_step == 5:
-        return _finalize(out_dir, name, tag, composite_5.astype(np.uint8))
+        return _finalize(out_dir, name, tag, composite_5.astype(np.uint8), meta=meta)
 
     # Step 6: face punch-back (already partially applied; strengthen)
     sharp_face_zone = (fall > 0.5)[..., None].astype(np.float32)
     composite_6 = composite_5 * (1 - sharp_face_zone) + bw_arr * sharp_face_zone
     print(f"  step6 face punch-back")
     if up_to_step == 6:
-        return _finalize(out_dir, name, tag, composite_6.astype(np.uint8))
+        return _finalize(out_dir, name, tag, composite_6.astype(np.uint8), meta=meta)
 
     # Step 7: grain
     final = add_grain(composite_6.astype(np.uint8), strength=0.025, seed=seed)
     print(f"  step7 grain  ({time.time()-t0:.1f}s total)")
-    return _finalize(out_dir, name, tag, final)
+    return _finalize(out_dir, name, tag, final, meta=meta)
 
 
-def _finalize(out_dir, name, tag, arr):
+def _finalize(out_dir, name, tag, arr, meta=None):
     step_path = os.path.join(out_dir, f"final_{tag}.jpg")
     Image.fromarray(arr).save(step_path, quality=92)
     os.makedirs(FINALS, exist_ok=True)
     final_path = os.path.join(FINALS, f"{name}_{tag}.jpg")
     Image.fromarray(arr).save(final_path, quality=92)
+    if meta is not None:
+        meta = {**meta, "output": final_path, "tag": tag, "name": name}
+        sidecar = os.path.join(FINALS, f"{name}_{tag}.json")
+        with open(sidecar, "w") as f:
+            json.dump(meta, f, indent=2)
+        with open(os.path.join(out_dir, "meta.json"), "w") as f:
+            json.dump(meta, f, indent=2)
     print(f"  → {final_path}")
     # push to phone (best-effort)
     try:

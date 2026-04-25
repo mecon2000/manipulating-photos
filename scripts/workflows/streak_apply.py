@@ -104,6 +104,13 @@ def main():
                    help="add N small black bars perpendicular to the limb before blurring")
     p.add_argument("--mark-width-pct", type=float, default=1.5,
                    help="black mark length (perpendicular to arm), %% of short edge")
+    p.add_argument("--dot-clusters", type=int, default=0,
+                   help="N clusters of 4-5 white pixels along arm; blurred (same params),"
+                        " inverted, and subtracted → dark streaks alongside the bright ones")
+    p.add_argument("--dot-cluster-radius-pct", type=float, default=0.5,
+                   help="radius (%% of short edge) within which the cluster pixels scatter")
+    p.add_argument("--dot-strength", type=float, default=1.0,
+                   help="how strongly the inverted dark streaks darken the result (0-1.5)")
     p.add_argument("--suffix", default=None)
     args = p.parse_args()
 
@@ -150,6 +157,34 @@ def main():
     # Re-draw the bars on top of the streaked result so they show unblurred
     for a, b in bar_endpoints:
         cv2.line(out, a, b, (0, 0, 0), bar_thick)
+
+    # Dual-blur dark streaks: scatter white pixels along the arm on a black
+    # canvas, blur them with the same kernel, invert → dark trails, subtract.
+    if args.dot_clusters > 0:
+        rng3 = np.random.default_rng(43)
+        root, mid, tip = [np.array(p, dtype=np.float32) for p in pts]
+        ts = rng3.uniform(0.1, 0.95, args.dot_clusters)
+        cluster_r = max(2, int(short * args.dot_cluster_radius_pct / 100.0))
+        dots = np.zeros_like(arr)
+        for t in ts:
+            if t < 0.5:
+                p = root + (mid - root) * (t / 0.5)
+            else:
+                p = mid + (tip - mid) * ((t - 0.5) / 0.5)
+            for _ in range(rng3.integers(4, 6)):
+                ox = int(rng3.integers(-cluster_r, cluster_r + 1))
+                oy = int(rng3.integers(-cluster_r, cluster_r + 1))
+                px, py = int(p[0]) + ox, int(p[1]) + oy
+                if 0 <= px < w and 0 <= py < h:
+                    dots[py, px] = (255, 255, 255)
+        # blur the dots with same kernel, gain=1.0 (already white)
+        dot_blurred = streak(dots, strength, tangent, length_px,
+                             decay=args.decay, gain=1.0)
+        # invert white-on-black → bright trails treated as darken-amount
+        out = np.clip(out.astype(np.float32) -
+                      dot_blurred.astype(np.float32) * args.dot_strength,
+                      0, 255).astype(np.uint8)
+        print(f"  added {args.dot_clusters} dot clusters (radius={cluster_r}px)")
     os.makedirs(OUT, exist_ok=True)
     name = os.path.splitext(os.path.basename(args.source))[0]
     suf = args.suffix or f"apply_{args.limb}_L{int(args.length_pct)}_d{args.decay:.0f}_g{args.gain:.1f}{'_flip' if args.flip else ''}"

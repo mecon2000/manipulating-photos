@@ -60,30 +60,28 @@ def limb_mask_and_tangent(img_size, pts, radius_px):
     return mask, strength, tangent, param.astype(np.float32)
 
 
-def streak(img_arr, strength, tangent_deg, length_px, decay=4.0, gain=2.5):
+def streak(img_arr, strength, tangent_deg, length_px, decay=4.0, gain=2.5,
+           n_steps=80):
+    """Long-exposure trail via iterative MAX-blend at sub-pixel offsets.
+
+    Each output pixel = max (not sum) over kernel offsets of source × decay.
+    This guarantees trail brightness ≤ source brightness — true long-exposure
+    look where bright skin pixel produces a trail starting at exactly that
+    pixel's brightness, fading to dim along the trail.
+    """
     L = max(3, int(length_px))
-    K = L*2 + 1
-    kernel = np.zeros((K, K), dtype=np.float32)
-    cx = cy = K // 2
-    rad = np.deg2rad(tangent_deg + 180)   # cv2 correlation flip
-    # Anti-aliased kernel: bilinear-splat each weight to 4 surrounding pixels.
-    # Off-axis angles (e.g. 190°) used to stair-step and lose energy; this
-    # gives sub-pixel coverage so every angle has the same total weight.
-    for t in range(L):
-        fx = cx + np.cos(rad) * t
-        fy = cy - np.sin(rad) * t
-        if not (0 <= fx < K - 1 and 0 <= fy < K - 1):
-            continue
-        x0, y0 = int(fx), int(fy)
-        dx, dy = fx - x0, fy - y0
-        w = np.exp(-decay * t / L)
-        kernel[y0,     x0    ] += w * (1 - dx) * (1 - dy)
-        kernel[y0,     x0 + 1] += w * dx       * (1 - dy)
-        kernel[y0 + 1, x0    ] += w * (1 - dx) * dy
-        kernel[y0 + 1, x0 + 1] += w * dx       * dy
+    h, w = img_arr.shape[:2]
+    rad = np.deg2rad(tangent_deg + 180)   # cv2 warp direction matches output trail
+    cos_r, sin_r = np.cos(rad), -np.sin(rad)
     source = (img_arr.astype(np.float32) * gain) * strength[..., None]
-    blurred = cv2.filter2D(source, -1, kernel, borderType=cv2.BORDER_CONSTANT)
-    out = np.maximum(img_arr.astype(np.float32), blurred)
+    out = np.maximum(img_arr.astype(np.float32), source)
+    for i in range(1, n_steps + 1):
+        t = i * L / n_steps
+        M = np.float32([[1, 0, cos_r * t], [0, 1, sin_r * t]])
+        shifted = cv2.warpAffine(source, M, (w, h),
+                                 borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        weight = np.exp(-decay * i / n_steps)
+        out = np.maximum(out, shifted * weight)
     return np.clip(out, 0, 255).astype(np.uint8)
 
 

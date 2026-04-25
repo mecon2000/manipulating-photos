@@ -723,12 +723,24 @@ def api_ms_good(item_id):
         abort(404)
     source = it["source"]
     model = it.get("model") or ""
+    # Copy source photo to a flat candidates folder, prefixed by model name
+    cand_dir = SHARED_DIR / "candidates-for-motion-streak"
+    cand_dir.mkdir(parents=True, exist_ok=True)
+    safe_model = re.sub(r"[^\w]+", "_", model).strip("_") or "Unknown"
+    copied_name = f"{safe_model}__{Path(source).name}"
+    copied_path = cand_dir / copied_name
+    if not copied_path.exists():
+        try:
+            shutil.copyfile(source, copied_path)
+        except OSError:
+            pass
     entries = load_ms_candidates()
     if not any(e.get("source") == source for e in entries):
         entries.append({
             "source": source,
             "filename": Path(source).name,
             "model": model,
+            "copied_to": str(copied_path),
             "marked_at": now_str(),
         })
         save_ms_candidates(entries)

@@ -111,6 +111,8 @@ def main():
                    help="radius (%% of short edge) within which the cluster pixels scatter")
     p.add_argument("--dot-strength", type=float, default=1.0,
                    help="how strongly the inverted dark streaks darken the result (0-1.5)")
+    p.add_argument("--dot-radius-px", type=int, default=3,
+                   help="radius (px) of each anti-aliased ball planted in the cluster")
     p.add_argument("--suffix", default=None)
     args = p.parse_args()
 
@@ -171,12 +173,12 @@ def main():
                 p = root + (mid - root) * (t / 0.5)
             else:
                 p = mid + (tip - mid) * ((t - 0.5) / 0.5)
-            for _ in range(rng3.integers(4, 6)):
+            for _ in range(int(rng3.integers(4, 6))):
                 ox = int(rng3.integers(-cluster_r, cluster_r + 1))
                 oy = int(rng3.integers(-cluster_r, cluster_r + 1))
                 px, py = int(p[0]) + ox, int(p[1]) + oy
-                if 0 <= px < w and 0 <= py < h:
-                    dots[py, px] = (255, 255, 255)
+                cv2.circle(dots, (px, py), args.dot_radius_px,
+                           (255, 255, 255), -1, cv2.LINE_AA)
         # blur the dots with same kernel, gain=1.0 (already white)
         dot_blurred = streak(dots, strength, tangent, length_px,
                              decay=args.decay, gain=1.0)

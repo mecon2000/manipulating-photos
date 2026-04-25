@@ -57,7 +57,7 @@ def limb_mask_and_tangent(img_size, pts, radius_px):
     mask = np.clip(1.0 - d / radius_px, 0, 1).astype(np.float32)
     strength = (mask * param).astype(np.float32)
     tangent = float(np.degrees(np.arctan2(-(root[1]-tip[1]), root[0]-tip[0])))
-    return mask, strength, tangent
+    return mask, strength, tangent, param.astype(np.float32)
 
 
 def streak(img_arr, strength, tangent_deg, length_px, decay=4.0, gain=2.5):
@@ -115,6 +115,12 @@ def main():
                    help="radius (px) of each anti-aliased ball planted in the cluster")
     p.add_argument("--grayscale", action="store_true",
                    help="force grayscale on input (kills color casts from relighting)")
+    p.add_argument("--smear-clusters", type=int, default=0,
+                   help="N segments along the limb to actually smear (0 = whole limb). "
+                        "Recommended 2-3 to avoid kernel pile-up brightness.")
+    p.add_argument("--smear-coverage-pct", type=float, default=50.0,
+                   help="total %% of limb length the smear clusters cover")
+    p.add_argument("--smear-cluster-seed", type=int, default=42)
     p.add_argument("--suffix", default=None)
     args = p.parse_args()
 
@@ -130,7 +136,22 @@ def main():
     pts = detect_limb_points(arr, args.limb)
     if pts is None:
         print("[err] pose not detected"); sys.exit(2)
-    mask, strength, tangent = limb_mask_and_tangent((w, h), pts, radius_px)
+    mask, strength, tangent, param = limb_mask_and_tangent((w, h), pts, radius_px)
+    # Optional: restrict smear to N segments along the limb covering total %%
+    if args.smear_clusters > 0:
+        rng_s = np.random.default_rng(args.smear_cluster_seed)
+        seg_w = (args.smear_coverage_pct / 100.0) / args.smear_clusters
+        # spaced centers within [seg_w/2, 1-seg_w/2]
+        centers = sorted(rng_s.uniform(seg_w/2 + 0.05, 1 - seg_w/2 - 0.05, args.smear_clusters))
+        seg_mask = np.zeros_like(param)
+        for c in centers:
+            lo, hi = c - seg_w/2, c + seg_w/2
+            inside = ((param >= lo) & (param <= hi)).astype(np.float32)
+            seg_mask = np.maximum(seg_mask, inside)
+        # soften the param-axis edges for smoother trail starts
+        seg_mask = cv2.GaussianBlur(seg_mask, (0, 0), sigmaX=2, sigmaY=2)
+        strength = strength * seg_mask
+        print(f"  smear-clusters={args.smear_clusters} centers={[f'{c:.2f}' for c in centers]} seg-w={seg_w*100:.0f}%")
     if args.angle is not None: tangent = args.angle
     if args.flip: tangent += 180
     print(f"limb={args.limb} tangent={tangent:.0f}° L={length_px:.0f}px decay={args.decay} gain={args.gain}")

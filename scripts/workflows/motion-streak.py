@@ -309,10 +309,8 @@ def run(source, angle, length_pct, ghosts, up_to_step, seed, out_suffix, mode="s
     Image.fromarray((fall * 255).astype(np.uint8)).save(os.path.join(out_dir, "3_face_falloff.png"))
     print(f"  step3 face falloff done")
     if up_to_step == 3:
-        # show falloff as cyan tint on bw
-        vis = bw_arr.copy()
-        vis[..., 2] = np.clip(vis[..., 2] + fall * 60, 0, 255)
-        return _finalize(out_dir, name, tag, vis.astype(np.uint8), meta=meta)
+        # clean grayscale output — falloff is saved separately as 3_face_falloff.png
+        return _finalize(out_dir, name, tag, bw_arr.astype(np.uint8), meta=meta)
 
     # Step 4: directional smear
     length_px = int(min(w, h) * length_pct / 100.0)

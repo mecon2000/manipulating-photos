@@ -34,8 +34,27 @@ def load_token():
     return None
 
 
-def run_one(source, style, prompt, denoising_strength, depth_strength, seed=None):
+def run_one(source, style, prompt, denoising_strength, depth_strength, seed=None,
+            max_retries=8):
     import replicate
+    for attempt in range(max_retries):
+        try:
+            return _run_once(replicate, source, style, prompt,
+                             denoising_strength, depth_strength, seed)
+        except Exception as e:
+            msg = str(e)
+            if "429" in msg or "throttled" in msg.lower() or "rate limit" in msg.lower():
+                # parse "resets in ~Ns" if present, else exponential backoff
+                import re as _re
+                m = _re.search(r"resets in ~(\d+)s", msg)
+                wait = int(m.group(1)) + 1 if m else min(60, 2 ** attempt + 5)
+                time.sleep(wait)
+                continue
+            raise
+    raise RuntimeError(f"max retries exceeded for {source} × {style}")
+
+
+def _run_once(replicate, source, style, prompt, denoising_strength, depth_strength, seed):
     with open(source, "rb") as fs, open(style, "rb") as fst:
         out = replicate.run(
             "fofr/style-transfer:f1023890703bc0a5a3a2c21b5e498833be5f6ef6e70e9daf6b9b3a4fd8309cf0",

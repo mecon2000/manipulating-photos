@@ -88,6 +88,8 @@ def main():
     p.add_argument("--limb-radius-pct", type=float, default=10.0)
     p.add_argument("--flip", action="store_true",
                    help="flip trail direction 180°")
+    p.add_argument("--angle", type=float, default=None,
+                   help="override detected tangent — 0=right, 90=up, 180=left, 270=down")
     p.add_argument("--suffix", default=None)
     args = p.parse_args()
 
@@ -102,6 +104,7 @@ def main():
     if pts is None:
         print("[err] pose not detected"); sys.exit(2)
     mask, strength, tangent = limb_mask_and_tangent((w, h), pts, radius_px)
+    if args.angle is not None: tangent = args.angle
     if args.flip: tangent += 180
     print(f"limb={args.limb} tangent={tangent:.0f}° L={length_px:.0f}px decay={args.decay} gain={args.gain}")
 

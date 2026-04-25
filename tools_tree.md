@@ -39,7 +39,11 @@ graph TD
     INKDISS["🖋️ ink-dissolution<br/>Frequency-band dissolution<br/>⭐ 11 favs — ink-wash"]:::happy
     MATSWAP["🪨 material-swap<br/>glass / marble / metal<br/>✅ chains with baroque"]:::done
     MOTIONSTREAK["🌀 motion-streak<br/>0010x0010 B&W aesthetic<br/>modes: streak / slitscan / limb-streak<br/>😴 paused — pivoted to Replicate"]:::tired
-    STYLEXFER["🎭 style-transfer-replicate<br/>fofr/style-transfer (IPAdapter+SDXL)<br/>$0.006/run, NSFW-friendly<br/>⚡ trying for 0010x0010 aesthetic"]:::wip
+    STYLEXFER["🎭 style-transfer-replicate<br/>fofr/style-transfer (IPAdapter+SDXL)<br/>$0.006/run, NSFW-friendly<br/>😴 superseded by become-image"]:::tired
+    BECOMEIMG["🎭 become-image-replicate<br/>fofr/become-image (InstantID+IPAdapter)<br/>face+style→identity-preserving<br/>$0.01/run"]:::done
+    SURREALFACE["🎨 surreal-with-face<br/>relight→bw→become→ellipse-mask→hist-match<br/>→4× Real-ESRGAN<br/>⭐ identity-preserving 0010 imitation"]:::happy
+    UPSCALE["⬆️ upscale-replicate<br/>Real-ESRGAN 2x/4x<br/>$0.005/run"]:::foundation
+    WMCHK["🛂 watermark-check<br/>Gemini Vision pre-flight<br/>flag UNPROCESSED watermarks"]:::foundation
 
     %% FRAMING
     FGFRAME["🖼️ foreground-framing<br/>Shoot-through depth<br/>😴 SDXL ignores prompts"]:::tired

@@ -310,6 +310,49 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 
 Output goes to `shared/candidates/` with a `candidates.json` manifest.
 
+### `scripts/workflows/become_image_replicate.py`
+**Identity-preserving stylization via Replicate `fofr/become-image`.** Two image inputs (`image` = face/source, `image_to_become` = style ref). Combines InstantID + IPAdapter + depth ControlNet + DreamShaperXL Lightning. Single API call, no separate face-swap. ~$0.01/run, ~30-60s. NSFW-friendly via `disable_safety_checker=true` *for most images* — extreme NSFW still trips the underlying SDXL filter (returns NoneType). Single + batch modes; data-URI inputs (model rejects file handles by extension check).
+
+**Usage:**
+```bash
+./scripts/workflows/become_image_replicate.py --source PHOTO --style STYLE_REF
+./scripts/workflows/become_image_replicate.py --batch --source-dir SRC --style-dir STYLES
+```
+
+### `scripts/workflows/surreal_with_face.py`
+**Identity-preserving 0010x0010-inspired pipeline.** Combines: relighting → B&W curve → become-image surreal → face/shoulders ellipse mask (oriented to face axis) → histogram-match → composite → optional Real-ESRGAN 4× upscale. Forces identity by overlaying the actual relit B&W face onto the surreal output, with histogram matching so the seam is invisible.
+
+**Usage:**
+```bash
+./scripts/workflows/surreal_with_face.py --relit RELIT.jpg --style STYLE_REF.jpg
+./scripts/workflows/surreal_with_face.py --relit ... --no-face-overlay  # for face-less photos
+./scripts/workflows/surreal_with_face.py --relit ... --upscale 0        # disable upscale
+```
+
+**Mask knobs:** `--mask-inner-mult` (default 0.7, sharp face region), `--mask-outer-mult` (default 3.0, falloff edge), `--mask-falloff-power` (default 1.0 linear). Outputs `{tag}__final.jpg` + `{tag}__final_4x.jpg` to `shared/surreal-with-face/`. Total ~4min, ~$0.07 per image (most of it relight).
+
+### `scripts/workflows/upscale_replicate.py`
+**Standalone Real-ESRGAN upscale** via Replicate `nightmareai/real-esrgan`. 2× or 4× scale, ~$0.005, ~3s. Single-file or batch. Used internally by `surreal_with_face.py` step 5.
+
+```bash
+./scripts/workflows/upscale_replicate.py --source FILE.jpg --scale 4
+./scripts/workflows/upscale_replicate.py --batch --in-dir DIR
+```
+
+### `scripts/workflows/style_transfer_replicate.py`
+**Replicate `fofr/style-transfer` wrapper.** IPAdapter Plus + DreamShaperXL Lightning + depth ControlNet. ~$0.0063/run, ~7s. Less identity-preserving than `become-image`, but works on a wider range of inputs. Mostly superseded by `surreal_with_face.py` for portrait work.
+
+### `scripts/workflows/watermark_check.py`
+**Detect "UNPROCESSED"/"DO NOT PUBLISH"-type watermarks via Gemini Vision.** Pre-flight check before running a batch — flags photos that have burned-in watermarks (corner signature, half-transparent text, etc.) so you can re-export from LR before they leak into outputs. Filename heuristics are unreliable; this uses Gemini 2.5 Flash for visual detection (essentially free). Warn-only — does not attempt to clean.
+
+```bash
+./scripts/workflows/watermark_check.py [DIR ...]   # default: candidates folder
+./scripts/workflows/watermark_check.py --suspect-only DIR | xargs ...
+```
+
+### `scripts/workflows/clean_ig_screenshots.py`
+**Remove persistent overlays from IG screenshots.** See earlier section.
+
 ### `scripts/workflows/styles.json`
 111 art styles with names and prompt additions. Loaded automatically by the stylization script. Use `--list-styles` to see all available styles.
 

@@ -52,8 +52,12 @@ graph TD
     EFFECTS --> INKDISS["🖋️ ink-dissolution<br/>Frequency-band dissolution<br/>⭐ 11 favs — ink-wash"]:::happy
     EFFECTS --> MATSWAP["🪨 material-swap<br/>glass / marble / metal<br/>chains with baroque"]:::done
     EFFECTS --> MOTIONSTREAK["🌀 motion-streak<br/>0010x0010 B&W aesthetic<br/>streak / slitscan / limb-streak<br/>😴 paused — pivoted to Replicate"]:::tired
-    EFFECTS --> STYLEXFER["🎭 style-transfer-replicate<br/>fofr/style-transfer<br/>IPAdapter + DreamShaperXL<br/>⚡ trying 0010x0010 via reference"]:::wip
+    EFFECTS --> STYLEXFER["🎭 style-transfer-replicate<br/>fofr/style-transfer<br/>😴 superseded by become-image"]:::tired
+    EFFECTS --> BECOMEIMG["🎭 become-image-replicate<br/>fofr/become-image<br/>InstantID + IPAdapter, face+style"]:::done
+    EFFECTS --> SURREALFACE["🎨 surreal-with-face<br/>relight→bw→become→mask→hist-match→4×<br/>⭐ identity-preserving 0010 imitation"]:::happy
     FOUNDATION --> IGCLEAN["🧹 clean-ig-screenshots<br/>Cross-stack variance + cv2.inpaint<br/>strip IG chrome from style refs"]:::foundation
+    FOUNDATION --> UPSCALE["⬆️ upscale-replicate<br/>Real-ESRGAN 2x/4x"]:::foundation
+    FOUNDATION --> WMCHK["🛂 watermark-check<br/>Gemini Vision pre-flight"]:::foundation
     MATSWAP --> I_CHAIN["💭 tool chaining<br/>matswap→baroque→crop one cmd"]:::idea
     INKDISS --> I_MONO["🔮 mono+accent<br/>B&W + single rose / lily<br/>Like refs #8, #16"]:::idea
 

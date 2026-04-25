@@ -695,6 +695,157 @@ def gallery_page():
 def tree_page():
     return render_template("tree.html")
 
+# --- Style-transfer voting page -------------------------------------------
+
+ST_DIR = SHARED_DIR / "style-transfer-finals"
+ST_BAD_DIR = SHARED_DIR / "style-transfer-bad"
+ST_VOTES_PATH = SHARED_DIR / "style_transfer_votes.json"
+
+
+def _st_load_votes():
+    if not ST_VOTES_PATH.is_file():
+        return {}
+    try:
+        return json.loads(ST_VOTES_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _st_save_votes(d):
+    SHARED_DIR.mkdir(parents=True, exist_ok=True)
+    ST_VOTES_PATH.write_text(json.dumps(d, indent=2))
+
+
+@app.route("/style-transfer")
+def style_transfer_page():
+    return render_template("style_transfer.html")
+
+
+@app.route("/api/style-transfer/list")
+def api_st_list():
+    items = []
+    if ST_DIR.is_dir():
+        votes = _st_load_votes()
+        for f in sorted(ST_DIR.iterdir()):
+            if f.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+                continue
+            stem = f.stem
+            # filename pattern: <source>__style_<style>.jpg
+            parts = stem.split("__style_")
+            source = parts[0] if len(parts) == 2 else stem
+            style = parts[1] if len(parts) == 2 else ""
+            items.append({
+                "file": f.name, "path": str(f),
+                "source": source, "style": style,
+                "vote": votes.get(f.name, None),
+            })
+    return jsonify({"items": items})
+
+
+@app.route("/api/style-transfer/<filename>/good", methods=["POST"])
+def api_st_good(filename):
+    src = ST_DIR / filename
+    if not src.is_file():
+        abort(404)
+    votes = _st_load_votes()
+    votes[filename] = "good"
+    _st_save_votes(votes)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/style-transfer/<filename>/bad", methods=["POST"])
+def api_st_bad(filename):
+    src = ST_DIR / filename
+    if not src.is_file():
+        abort(404)
+    ST_BAD_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(src), str(ST_BAD_DIR / filename))
+    except OSError:
+        pass
+    json_sidecar = src.with_suffix(".json")
+    if json_sidecar.is_file():
+        try:
+            shutil.move(str(json_sidecar), str(ST_BAD_DIR / json_sidecar.name))
+        except OSError:
+            pass
+    votes = _st_load_votes()
+    votes[filename] = "bad"
+    _st_save_votes(votes)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/style-transfer/<filename>/fav", methods=["POST"])
+def api_st_fav(filename):
+    src = ST_DIR / filename
+    if not src.is_file():
+        abort(404)
+    FAVORITES_DIR.mkdir(parents=True, exist_ok=True)
+    fav_name = f"style-transfer__{filename}"
+    fav_path = FAVORITES_DIR / fav_name
+    try:
+        shutil.copyfile(src, fav_path)
+    except OSError:
+        from PIL import Image
+        Image.open(src).save(fav_path, quality=95)
+    # sidecar metadata for reproducibility
+    sidecar = src.with_suffix(".json")
+    meta_extra = {}
+    if sidecar.is_file():
+        try:
+            meta_extra = json.loads(sidecar.read_text())
+        except Exception:
+            pass
+    try:
+        git_hash = subprocess.check_output(
+            ["git", "-C", str(WORKFLOWS_DIR), "rev-parse", "--short", "HEAD"],
+            text=True, timeout=5).strip()
+    except Exception:
+        git_hash = None
+    entry = {
+        "file": fav_name, "tool": "fofr/style-transfer",
+        "style": meta_extra.get("style"), "source": meta_extra.get("source"),
+        "git_commit": git_hash, "favorited_at": now_str(),
+        "command": meta_extra.get("prompt"),
+    }
+    data = {"favorites": []}
+    if FAVORITES_JSON.is_file():
+        try:
+            data = json.loads(FAVORITES_JSON.read_text())
+        except Exception:
+            pass
+    data.setdefault("favorites", []).append(entry)
+    FAVORITES_JSON.write_text(json.dumps(data, indent=2))
+    votes = _st_load_votes()
+    votes[filename] = "fav"
+    _st_save_votes(votes)
+    return jsonify({"ok": True, "fav": fav_name})
+
+
+@app.route("/api/style-transfer/scoreboard")
+def api_st_scoreboard():
+    """Aggregate votes by style ID — which styles win most."""
+    votes = _st_load_votes()
+    by_style = {}
+    if ST_DIR.is_dir():
+        for f in ST_DIR.iterdir():
+            stem = f.stem
+            parts = stem.split("__style_")
+            if len(parts) != 2:
+                continue
+            style = parts[1]
+            v = votes.get(f.name)
+            d = by_style.setdefault(style, {"total": 0, "good": 0, "bad": 0, "fav": 0})
+            d["total"] += 1
+            if v in d:
+                d[v] += 1
+    # rank
+    ranked = sorted(
+        ({"style": s, **v, "score": v["fav"] * 2 + v["good"] - v["bad"]}
+         for s, v in by_style.items()),
+        key=lambda x: -x["score"])
+    return jsonify({"styles": ranked})
+
 @app.route("/api/tree")
 def api_tree():
     view = request.args.get("view", "graph")

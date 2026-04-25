@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Style transfer voting</title>
+<style>
+  :root { --bg:#0b0b0c; --fg:#e9e9ea; --dim:#9a9a9e; --panel:rgba(0,0,0,0.55); }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--fg);
+    font:14px/1.4 -apple-system,system-ui,sans-serif;
+    user-select:none; -webkit-tap-highlight-color:transparent; }
+  body { display:flex; flex-direction:column; height:100vh; }
+  .topbar,.bottombar { position:fixed; left:0; right:0; z-index:10;
+    background:var(--panel); backdrop-filter:blur(8px); padding:10px 14px; }
+  .topbar { top:0; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .bottombar { bottom:0; padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
+  .meta { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .meta .title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .meta .sub { color:var(--dim); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .count { font-variant-numeric:tabular-nums; color:var(--dim); white-space:nowrap; }
+  .photo-wrap { flex:1; display:flex; align-items:center; justify-content:center;
+    width:100%; height:100vh; position:relative; overflow:hidden; }
+  .photo-wrap img { max-width:100%; max-height:100%; object-fit:contain; display:block; }
+  .empty { color:var(--dim); text-align:center; padding:40px; }
+  .btnrow { display:flex; gap:6px; justify-content:space-between; }
+  .btn { flex:1 1 auto; min-width:90px; padding:14px 10px; border-radius:8px;
+    border:none; font-size:15px; font-weight:600; color:#fff; cursor:pointer; }
+  .btn:active { transform:scale(0.97); }
+  .btn-good { background:#2f7a3f; }
+  .btn-bad  { background:#7a2929; }
+  .btn-fav  { background:#c49a1a; }
+  .toast { position:fixed; top:60px; left:50%; transform:translateX(-50%);
+    background:var(--panel); color:var(--fg); padding:8px 16px; border-radius:20px;
+    z-index:20; font-size:13px; opacity:0; transition:opacity 0.2s; }
+  .toast.show { opacity:1; }
+  .scoreboard { padding:60px 16px 100px; max-height:100vh; overflow:auto; display:none; }
+  .scoreboard.active { display:block; }
+  .scoreboard table { width:100%; border-collapse:collapse; margin-top:10px; }
+  .scoreboard td,.scoreboard th { padding:6px 8px; border-bottom:1px solid #2a2a2e; text-align:left; }
+  .vote-tag { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; }
+  .vote-tag.good { background:#1e4a26; }
+  .vote-tag.fav  { background:#7a5e10; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="meta">
+    <span class="title" id="title">Loading…</span>
+    <span class="sub" id="sub">—</span>
+  </div>
+  <div class="count"><span id="idx">0</span>/<span id="total">0</span></div>
+  <div style="position:relative;">
+    <button onclick="toggleModeMenu(event)" style="background:transparent; color:#e7e7ea; border:1px solid #333; padding:4px 10px; border-radius:6px; font-size:18px;">⋮</button>
+    <div id="modemenu" style="display:none; position:absolute; top:110%; right:0;
+         background:#1a1a1f; border:1px solid #333; border-radius:8px; min-width:200px; z-index:20;">
+      <a href="/gallery" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;">🖼  Gallery</a>
+      <a href="/candidates" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">📋 Motion-streak candidates</a>
+      <a href="/style-transfer" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30; background:#2d4a6d;">🎭 Style-transfer voting</a>
+      <a href="#" onclick="toggleScoreboard(); return false;" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">📊 Scoreboard</a>
+      <a href="/tree" style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none; border-top:1px solid #2a2a30;">🌳 Tools tree</a>
+    </div>
+  </div>
+</div>
+<script>
+function toggleModeMenu(e) { e.stopPropagation();
+  const m=document.getElementById('modemenu');
+  m.style.display = (m.style.display==='block')?'none':'block'; }
+document.addEventListener('click',()=>{const m=document.getElementById('modemenu'); if (m) m.style.display='none';});
+</script>
+
+<div class="photo-wrap" id="photoWrap">
+  <img id="photo" alt="" />
+  <div class="empty" id="empty" style="display:none;">No items.</div>
+</div>
+
+<div class="scoreboard" id="scoreboard">
+  <h2 style="margin:0">Scoreboard — top styles by votes</h2>
+  <p style="color:var(--dim); font-size:12px; margin:4px 0 0;">score = fav×2 + good − bad</p>
+  <table id="sbTable"><thead><tr><th>#</th><th>Style</th><th>Score</th><th>Fav</th><th>Good</th><th>Bad</th><th>Total</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="bottombar" id="bottombar">
+  <div class="btnrow">
+    <button class="btn" style="background:#333; max-width:60px;" onclick="nav(-1)" title="Previous">←</button>
+    <button class="btn btn-bad" onclick="act('bad')" title="Reject (moves file to style-transfer-bad/)">👎 Bad</button>
+    <button class="btn btn-good" onclick="act('good')" title="Mark as good (vote counts toward style score)">✅ Good</button>
+    <button class="btn btn-fav" onclick="act('fav')" title="Save to favorites with reproduction metadata">⭐ Fav</button>
+    <button class="btn" style="background:#333; max-width:60px;" onclick="nav(1)" title="Next">→</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let items = [];
+let cursor = 0;
+let acting = false;
+
+function showToast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1200); }
+
+async function refresh() {
+  const d = await fetch('/api/style-transfer/list').then(r=>r.json());
+  items = d.items || [];
+  document.getElementById('total').textContent = items.length;
+  if (cursor >= items.length) cursor = Math.max(0, items.length - 1);
+  render();
+}
+
+function render() {
+  const img = document.getElementById('photo');
+  const empty = document.getElementById('empty');
+  if (!items.length) {
+    img.style.display='none'; empty.style.display='block';
+    document.getElementById('title').textContent='No items'; document.getElementById('sub').textContent='—';
+    document.getElementById('idx').textContent='0';
+    return;
+  }
+  const it = items[cursor];
+  img.src = '/api/image?path='+encodeURIComponent(it.path)+'&_='+it.file;
+  img.style.display='block'; empty.style.display='none';
+  let voteTag = '';
+  if (it.vote) voteTag = ` <span class="vote-tag ${it.vote}">${it.vote}</span>`;
+  document.getElementById('title').innerHTML = it.source + voteTag;
+  document.getElementById('sub').textContent = 'style: ' + it.style;
+  document.getElementById('idx').textContent = (cursor + 1);
+}
+
+function nav(d) { if (!items.length) return; cursor = (cursor + d + items.length) % items.length; render(); }
+
+document.addEventListener('keydown', e=>{
+  if (e.key==='ArrowLeft') nav(-1);
+  else if (e.key==='ArrowRight') nav(1);
+  else if (e.key==='g'||e.key==='G') act('good');
+  else if (e.key==='b'||e.key==='B') act('bad');
+  else if (e.key==='f'||e.key==='F') act('fav');
+});
+
+async function act(kind) {
+  if (!items.length || acting) return;
+  acting = true;
+  const it = items[cursor];
+  try {
+    const r = await fetch(`/api/style-transfer/${encodeURIComponent(it.file)}/${kind}`, {method:'POST'});
+    const d = await r.json();
+    if (kind==='good') showToast('✅ Good');
+    else if (kind==='bad') { showToast('👎 Removed'); }
+    else if (kind==='fav') showToast('⭐ Faved: '+d.fav);
+  } catch (e) { showToast('Error'); console.error(e); }
+  acting = false;
+  if (kind==='bad') {
+    items.splice(cursor, 1);
+    if (cursor >= items.length) cursor = Math.max(0, items.length-1);
+    document.getElementById('total').textContent = items.length;
+    render();
+  } else {
+    items[cursor].vote = kind;
+    render();
+    setTimeout(()=>nav(1), 250);
+  }
+}
+
+async function toggleScoreboard() {
+  const sb = document.getElementById('scoreboard');
+  const open = sb.classList.toggle('active');
+  document.getElementById('photoWrap').style.display = open ? 'none' : 'flex';
+  document.getElementById('bottombar').style.display = open ? 'none' : 'block';
+  if (open) {
+    const d = await fetch('/api/style-transfer/scoreboard').then(r=>r.json());
+    const tb = document.querySelector('#sbTable tbody');
+    tb.innerHTML = '';
+    (d.styles||[]).forEach((s,i)=>{
+      tb.insertAdjacentHTML('beforeend',
+        `<tr><td>${i+1}</td><td>${s.style}</td><td>${s.score}</td><td>${s.fav}</td><td>${s.good}</td><td>${s.bad}</td><td>${s.total}</td></tr>`);
+    });
+  }
+  document.getElementById('modemenu').style.display='none';
+}
+
+refresh();
+</script>
+
+</body>
+</html>

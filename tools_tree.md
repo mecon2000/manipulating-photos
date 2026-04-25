@@ -67,6 +67,7 @@ graph TD
     SCOREBOARD["💭 style scoreboard<br/>Analyze 80 favs for patterns"]:::idea
     NSFW_INPAINT["💭 NSFW-safe inpainting<br/>SDXL uncensored or ComfyUI"]:::idea
     REFARTIST["💭 reference artist style<br/>Forms engulf subject<br/>The original goal — 80% there"]:::idea
+    BGONLYSTYLE["💭 BG-only style transfer<br/>Apply IPAdapter only to BG via mask<br/>Composite original subject back<br/>Avoids clothing/skin contamination"]:::idea
 
     %% EDGES  (foundation nodes — MASK/SEGMENT/NOTIFY/PHOTODB/CAND/CROP —
     %%  are intentionally isolated: they connect to everything, so drawing

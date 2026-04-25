@@ -66,11 +66,21 @@ def streak(img_arr, strength, tangent_deg, length_px, decay=4.0, gain=2.5):
     kernel = np.zeros((K, K), dtype=np.float32)
     cx = cy = K // 2
     rad = np.deg2rad(tangent_deg + 180)   # cv2 correlation flip
+    # Anti-aliased kernel: bilinear-splat each weight to 4 surrounding pixels.
+    # Off-axis angles (e.g. 190°) used to stair-step and lose energy; this
+    # gives sub-pixel coverage so every angle has the same total weight.
     for t in range(L):
-        x = int(round(cx + np.cos(rad)*t))
-        y = int(round(cy - np.sin(rad)*t))
-        if 0 <= x < K and 0 <= y < K:
-            kernel[y, x] = np.exp(-decay * t / L)
+        fx = cx + np.cos(rad) * t
+        fy = cy - np.sin(rad) * t
+        if not (0 <= fx < K - 1 and 0 <= fy < K - 1):
+            continue
+        x0, y0 = int(fx), int(fy)
+        dx, dy = fx - x0, fy - y0
+        w = np.exp(-decay * t / L)
+        kernel[y0,     x0    ] += w * (1 - dx) * (1 - dy)
+        kernel[y0,     x0 + 1] += w * dx       * (1 - dy)
+        kernel[y0 + 1, x0    ] += w * (1 - dx) * dy
+        kernel[y0 + 1, x0 + 1] += w * dx       * dy
     source = (img_arr.astype(np.float32) * gain) * strength[..., None]
     blurred = cv2.filter2D(source, -1, kernel, borderType=cv2.BORDER_CONSTANT)
     out = np.maximum(img_arr.astype(np.float32), blurred)
@@ -112,11 +122,12 @@ def main():
     if args.flip: tangent += 180
     print(f"limb={args.limb} tangent={tangent:.0f}° L={length_px:.0f}px decay={args.decay} gain={args.gain}")
 
-    # Optional black marks across the arm (perpendicular bars), drawn before blur
+    # Optional black marks across the arm (perpendicular bars)
+    bar_endpoints = []
+    bar_thick = 0
     if args.black_marks > 0:
         rng = np.random.default_rng(42)
         root, mid, tip = [np.array(p, dtype=np.float32) for p in pts]
-        # sample N points along the root→mid→tip polyline
         ts = rng.uniform(0.1, 0.95, args.black_marks)
         bar_len = int(short * args.mark_width_pct / 100.0)
         bar_thick = max(2, int(short * 0.003))
@@ -125,16 +136,20 @@ def main():
                 p = root + (mid - root) * (t / 0.5)
             else:
                 p = mid + (tip - mid) * ((t - 0.5) / 0.5)
-            # perpendicular to arm direction
             seg = (mid - root) if t < 0.5 else (tip - mid)
             n = np.array([-seg[1], seg[0]])
             n = n / (np.linalg.norm(n) or 1)
             a = (int(p[0] - n[0]*bar_len/2), int(p[1] - n[1]*bar_len/2))
             b = (int(p[0] + n[0]*bar_len/2), int(p[1] + n[1]*bar_len/2))
+            bar_endpoints.append((a, b))
             cv2.line(arr, a, b, (0, 0, 0), bar_thick)
         print(f"  drew {args.black_marks} black bars (len={bar_len}px, thick={bar_thick}px)")
 
     out = streak(arr, strength, tangent, length_px, decay=args.decay, gain=args.gain)
+
+    # Re-draw the bars on top of the streaked result so they show unblurred
+    for a, b in bar_endpoints:
+        cv2.line(out, a, b, (0, 0, 0), bar_thick)
     os.makedirs(OUT, exist_ok=True)
     name = os.path.splitext(os.path.basename(args.source))[0]
     suf = args.suffix or f"apply_{args.limb}_L{int(args.length_pct)}_d{args.decay:.0f}_g{args.gain:.1f}{'_flip' if args.flip else ''}"

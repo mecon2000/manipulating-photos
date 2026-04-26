@@ -311,7 +311,7 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 Output goes to `shared/candidates/` with a `candidates.json` manifest.
 
 ### `scripts/workflows/become_image_replicate.py`
-**Identity-preserving stylization via Replicate `fofr/become-image`.** Two image inputs (`image` = face/source, `image_to_become` = style ref). Combines InstantID + IPAdapter + depth ControlNet + DreamShaperXL Lightning. Single API call, no separate face-swap. ~$0.01/run, ~30-60s. NSFW-friendly via `disable_safety_checker=true` *for most images* — extreme NSFW still trips the underlying SDXL filter (returns NoneType). Single + batch modes; data-URI inputs (model rejects file handles by extension check).
+**Identity-preserving stylization via Replicate `fofr/become-image`.** Two image inputs (`image` = face/source, `image_to_become` = style ref). Combines InstantID + IPAdapter + depth ControlNet + DreamShaperXL Lightning. Single API call, no separate face-swap. ~$0.01/run, ~30-60s.
 
 **Usage:**
 ```bash
@@ -319,57 +319,103 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 ./scripts/workflows/become_image_replicate.py --batch --source-dir SRC --style-dir STYLES
 ```
 
+**Important caveat:** model rejects raw file handles with "Unsupported file type" (extension-based check) — script always passes data URIs. SDXL safety filter still blocks ~5-15% of NSFW inputs (output is `NoneType`); `disable_safety_checker=true` only disables the wrapper, not the underlying SDXL filter.
+
+### `scripts/workflows/build_quote_db.py`
+**One-time builder for the literary quote DB used by `text_overlay.py --text auto`.** Pulls public-domain poems from PoetryDB, extracts gem-quality single lines (length / punctuation / word-quality heuristics), and embeds them locally with `sentence-transformers/all-MiniLM-L6-v2`. Outputs `literary_quotes.json` (lines + provenance), `literary_quotes.npy` (embeddings), and `literary_quotes.meta.json` next to the script. Free, ~2 min. The `.npy` is gitignored — regenerate locally; pushing the 15MB blob hits TLS hiccups.
+
+**Usage:**
+```bash
+./scripts/workflows/build_quote_db.py            # default authors + sizes
+./scripts/workflows/build_quote_db.py --max-per-author 80
+```
+
+**Note for any future agent:** PoetryDB's API requires a browser `User-Agent` header — Python's default UA returns 403. The script sets one already; don't strip it.
+
+### `scripts/workflows/clean_ig_screenshots.py`
+**Remove persistent UI overlays from a stack of Instagram screenshots.** Useful when several IG-post screenshots share the same chrome (status bar, username text, like/comment bar) and you want clean photos for use as style references. Computes pixel-wise std across the stack — pixels identical across all images = overlay → mask + `cv2.inpaint` per image. Used to clean 0010x0010 reference screenshots before feeding into IPAdapter.
+
+**Usage:**
+```bash
+./scripts/workflows/clean_ig_screenshots.py [--in DIR] [--out DIR]
+./scripts/workflows/clean_ig_screenshots.py --threshold 8 --dilate 5 --save-mask
+./scripts/workflows/clean_ig_screenshots.py --rect "0,80%,25%,20%"  # extra rect for things that move slightly
+```
+
+**All flags:** `--in`, `--out`, `--threshold` (std cutoff, default 5), `--dilate` (iterations, default 3), `--save-mask` (debug), `--rect "x,y,w,h"` (px or %; pass multiple for multiple rects). Default in=`shared/0010x0010/`, out=`shared/0010x0010/cleaned/`.
+
+### `scripts/workflows/color_grade.py`
+**LAB color grading.** Three modes for unifying tone across an output. Pure local except the BiRefNet call in warm-cool mode (~$0.001).
+
+**Modes:**
+- `warm-cool` — radial warm subject + cold-blue surround. Subject-mask gated via BiRefNet so the BG isn't washed twice. Ellipse biased vertically downward so warmth covers face+upper-torso, not the top of the head.
+- `split` — luminance split-tone teal-shadow / orange-highlight, no mask, no API.
+- `wash:<color>` — single global LAB tint. Reuses the 10-color palette: `red`, `ochre`, `teal`, `amber`, `blue-hour`, `rose`, `sepia`, `emerald`, `magenta`, `cyan`.
+
+**Usage:**
+```bash
+./scripts/workflows/color_grade.py --source photo.jpg --mode warm-cool --strength 0.6
+./scripts/workflows/color_grade.py --source photo.jpg --mode split
+./scripts/workflows/color_grade.py --source photo.jpg --mode wash:teal
+```
+
+**All flags:** `--source`, `--mode` (warm-cool/split/wash:<color>), `--strength` (0-1, default 0.6), `--mask-inner` (warm-cool, fraction of short edge), `--mask-outer` (warm-cool, fraction of short edge), `--warm-vertical-bias` (warm-cool, fraction of height to shift ellipse down, default ~0.1), `--out`.
+
 ### `scripts/workflows/surreal_with_face.py`
-**Identity-preserving 0010x0010-inspired pipeline.** Combines: relighting → B&W curve → become-image surreal → face/shoulders ellipse mask (oriented to face axis) → histogram-match → composite → optional Real-ESRGAN 4× upscale. Forces identity by overlaying the actual relit B&W face onto the surreal output, with histogram matching so the seam is invisible.
+**Flagship identity-preserving 0010x0010 pipeline.** Forces identity by overlaying the actual relit B&W face onto a become-image surreal output, with histogram matching so the seam is invisible. Optional text overlay and color grade are integrated as in-pipeline steps so the final composite is graded as one image.
+
+**Pipeline:**
+1. Relight (IC-Light, fal.ai) — gives the face a clean directional light it can dominate the surreal BG with
+2. `bw_with_curve` — desaturate + S-curve for punchy mid-tones
+3. become-image (Replicate `fofr/become-image`) — InstantID + IPAdapter + depth ControlNet + DreamShaperXL Lightning, identity-preserving stylization driven by `--style` reference
+4. MediaPipe face-axis ellipse mask — oriented to actual face tilt, falloff into shoulders
+4.5. (optional) Text overlay via `text_overlay.py` — literary quote, edge-flush, color sampled from photo highlights
+4.7. (optional) Color grade via `color_grade.py` — applied to the composite (subject + surreal + text together)
+5. Histogram match → composite face onto surreal → optional Real-ESRGAN 4× upscale (`upscale_replicate.py`)
 
 **Usage:**
 ```bash
 ./scripts/workflows/surreal_with_face.py --relit RELIT.jpg --style STYLE_REF.jpg
-./scripts/workflows/surreal_with_face.py --relit ... --no-face-overlay  # for face-less photos
-./scripts/workflows/surreal_with_face.py --relit ... --upscale 0        # disable upscale
+./scripts/workflows/surreal_with_face.py --relit ... --text auto --grade warm-cool
+./scripts/workflows/surreal_with_face.py --relit ... --no-face-overlay --upscale 0
 ```
 
-**Mask knobs:** `--mask-inner-mult` (default 0.7, sharp face region), `--mask-outer-mult` (default 3.0, falloff edge), `--mask-falloff-power` (default 1.0 linear). Outputs `{tag}__final.jpg` + `{tag}__final_4x.jpg` to `shared/surreal-with-face/`. Total ~4min, ~$0.07 per image (most of it relight).
+**All flags:** `--relit`, `--style`, `--no-face-overlay` (for face-less photos), `--upscale` (0/2/4, default 4), `--text` (string or `auto`), `--text-style` (font preset), `--text-orientation` (horizontal/vertical/auto, default horizontal), `--text-angle` (degrees override), `--text-size-pct` (% of short edge), `--grade` (mode for `color_grade.py`: warm-cool/split/wash:<color>), `--grade-strength` (0-1), `--mask-inner-mult` (default 0.7, sharp face region), `--mask-outer-mult` (default 3.0, falloff edge), `--mask-falloff-power` (default 1.0 linear). Outputs `{tag}__final.jpg` (+ `_4x.jpg` if upscaled) to `shared/surreal-with-face/`. Total ~4min, **~$0.07/image** (mostly relight at $0.06; become-image $0.01; upscale $0.005).
+
+### `scripts/workflows/text_overlay.py`
+**Literary text overlay.** Renders a quote onto a photo, edge-flush, with color sampled from the photo's own highlights. Standalone or imported by `surreal_with_face.py` as step 4.5. Free local + one small Gemini Flash call when picking a mood phrase.
+
+**Modes:**
+- `--text "string"` — literal
+- `--text auto` — semantic nearest-neighbor over the local literary DB built by `build_quote_db.py`. Gemini Flash produces a one-line mood phrase from the photo, which is embedded and matched against the quote vectors.
+
+**Layout:**
+- Always-horizontal default (`--orientation horizontal`); wraps to 1-3 lines.
+- Edge-flush alignment: left-aligned if the subject's bbox center is in the right half of the frame, right-aligned otherwise.
+- Color sampled from the photo's top-15% luminance pixels for guaranteed contrast against the local region under the text.
+- Minimum 40px margin from any edge.
+- Light Gaussian blur on the rendered text layer (default `--blur-match-factor 0.5`) to nearly match the photo's local Laplacian-variance blur — text stays slightly sharper than the BG so it reads as overlay, not bake-in.
+
+**Usage:**
+```bash
+./scripts/workflows/text_overlay.py --source photo.jpg --text "the silence after"
+./scripts/workflows/text_overlay.py --source photo.jpg --text auto
+./scripts/workflows/text_overlay.py --source photo.jpg --text auto --size-pct 5.5 --blur-match-factor 0.4
+```
+
+**All flags:** `--source`, `--text` (string or `auto`), `--orientation` (horizontal/vertical/auto), `--angle` (degrees override), `--size-pct` (% of short edge), `--align` (left/right/auto), `--font` (preset), `--blur-match-factor` (0-1, default 0.5), `--out`.
 
 ### `scripts/workflows/upscale_replicate.py`
-**Standalone Real-ESRGAN upscale** via Replicate `nightmareai/real-esrgan`. 2× or 4× scale, ~$0.005, ~3s. Single-file or batch. Used internally by `surreal_with_face.py` step 5.
+**Standalone Real-ESRGAN upscale** via Replicate `nightmareai/real-esrgan`. 2× or 4× scale. **~$0.005/image**, ~3s. Single-file or batch. Used internally by `surreal_with_face.py` step 5. Auto-downsamples the input if it exceeds the model's 2.1M-pixel limit before requesting upscale (otherwise the API errors out).
 
+**Usage:**
 ```bash
 ./scripts/workflows/upscale_replicate.py --source FILE.jpg --scale 4
 ./scripts/workflows/upscale_replicate.py --batch --in-dir DIR
 ```
 
 ### `scripts/workflows/style_transfer_replicate.py`
-**Replicate `fofr/style-transfer` wrapper.** IPAdapter Plus + DreamShaperXL Lightning + depth ControlNet. ~$0.0063/run, ~7s. Less identity-preserving than `become-image`, but works on a wider range of inputs. Mostly superseded by `surreal_with_face.py` for portrait work.
-
-### `scripts/workflows/watermark_check.py`
-**Detect "UNPROCESSED"/"DO NOT PUBLISH"-type watermarks via Gemini Vision.** Pre-flight check before running a batch — flags photos that have burned-in watermarks (corner signature, half-transparent text, etc.) so you can re-export from LR before they leak into outputs. Filename heuristics are unreliable; this uses Gemini 2.5 Flash for visual detection (essentially free). Warn-only — does not attempt to clean.
-
-```bash
-./scripts/workflows/watermark_check.py [DIR ...]   # default: candidates folder
-./scripts/workflows/watermark_check.py --suspect-only DIR | xargs ...
-```
-
-### `scripts/workflows/clean_ig_screenshots.py`
-**Remove persistent overlays from IG screenshots.** See earlier section.
-
-### `scripts/workflows/styles.json`
-111 art styles with names and prompt additions. Loaded automatically by the stylization script. Use `--list-styles` to see all available styles.
-
-### `scripts/workflows/clean_ig_screenshots.py`
-**Remove persistent overlays from a stack of Instagram screenshots.** Useful when you have several IG-post screenshots with the same UI chrome (status bar, username text, like/comment bar) and want clean photos for use as style references. Works by computing pixel-wise std across the stack — pixels identical across all images = overlay → mask + cv2.inpaint per image.
-
-**Usage:**
-```bash
-./scripts/workflows/clean_ig_screenshots.py [--in DIR] [--out DIR]
-./scripts/workflows/clean_ig_screenshots.py --threshold 8 --dilate 5 --save-mask
-./scripts/workflows/clean_ig_screenshots.py --rect "0,80%,25%,20%"  # extra rect for things that move slightly (e.g. floating bubbles)
-```
-
-**Flags:** `--in`, `--out`, `--threshold` (std cutoff, default 5), `--dilate` (iterations, default 3), `--save-mask` (debug), `--rect "x,y,w,h"` (px or %; pass multiple for multiple rects). Default in=`shared/0010x0010/`, out=`shared/0010x0010/cleaned/`.
-
-### `scripts/workflows/style_transfer_replicate.py`
-**Replicate `fofr/style-transfer` wrapper.** IPAdapter Plus + DreamShaperXL Lightning + depth ControlNet on Replicate (NSFW-friendly community SDXL, no Flux filter). ~$0.0063/run, ~7s. Single or batch.
+**Replicate `fofr/style-transfer` wrapper.** IPAdapter Plus + DreamShaperXL Lightning + depth ControlNet on Replicate (NSFW-friendly community SDXL, no Flux filter). ~$0.0063/run, ~7s. Single or batch. Less identity-preserving than `become-image`; mostly superseded by `surreal_with_face.py` for portrait work.
 
 **Usage:**
 ```bash
@@ -378,6 +424,18 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 ```
 
 **Flags:** `--source`, `--style`, `--batch`, `--source-dir`, `--style-dir`, `--prompt`, `--denoising-strength` (0-1, default 0.65), `--depth-strength` (0-1, default 1.0), `--seed`, `--out-dir`. Reads `REPLICATE_API_TOKEN` from env or `~/sol/.env`. Outputs to `shared/style-transfer-finals/` with sidecar JSON per file.
+
+### `scripts/workflows/watermark_check.py`
+**Detect "UNPROCESSED"/"DO NOT PUBLISH"-type watermarks via Gemini Vision.** Pre-flight check before running a batch — flags photos with burned-in watermarks (corner signature, half-transparent text, etc.) so Ronnie can re-export clean from Lightroom before they leak into outputs. Filename heuristics are unreliable; uses Gemini 2.5 Flash for visual detection (essentially free). Warn-only — no inpaint attempt.
+
+**Usage:**
+```bash
+./scripts/workflows/watermark_check.py [DIR ...]   # default: candidates folder
+./scripts/workflows/watermark_check.py --suspect-only DIR | xargs ...
+```
+
+### `scripts/workflows/styles.json`
+111 art styles with names and prompt additions. Loaded automatically by the stylization script. Use `--list-styles` to see all available styles.
 
 ## Lessons Learned (from testing, April 2026)
 

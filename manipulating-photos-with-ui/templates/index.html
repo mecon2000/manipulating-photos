@@ -174,6 +174,73 @@
     display: none;
   }
   .toast.show { display: block; }
+
+  /* Run tab */
+  .run-wrap { display: flex; flex-direction: column; gap: 16px; }
+  @media (min-width: 700px) {
+    .run-wrap { flex-direction: row; align-items: flex-start; }
+    .run-left { flex: 0 0 44%; position: sticky; top: 64px; }
+    .run-right { flex: 1; }
+  }
+  .run-section-title { font-size: 14px; color: var(--dim); margin: 6px 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .selected-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .selected-chip {
+    background: rgba(255,179,71,0.15); border: 1px solid var(--accent);
+    color: var(--accent); border-radius: 999px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .selected-chip:hover { background: rgba(239,91,91,0.2); border-color: var(--danger); color: var(--danger); }
+  .selected-chip .x { font-size: 14px; opacity: 0.7; }
+  .selected-empty { color: var(--dim); font-size: 13px; font-style: italic; }
+
+  .style-grid {
+    display: grid; gap: 8px;
+    grid-template-columns: repeat(3, 1fr);
+    margin-bottom: 14px;
+  }
+  .style-card {
+    position: relative; aspect-ratio: 1 / 1;
+    background: #000; border: 2px solid var(--border);
+    border-radius: 8px; overflow: hidden; cursor: pointer;
+  }
+  .style-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .style-card.active { border-color: #4aa3ff; box-shadow: 0 0 0 2px rgba(74,163,255,0.35); }
+  .style-card .style-name {
+    position: absolute; left: 4px; bottom: 4px;
+    background: rgba(0,0,0,0.7); border-radius: 4px;
+    padding: 2px 6px; font-size: 10px; color: var(--fg);
+  }
+
+  .run-helper { color: var(--dim); font-size: 12px; margin-top: 8px; }
+  .run-button {
+    width: 100%; padding: 12px;
+    background: var(--accent); color: #000; border: none;
+    border-radius: 8px; font-size: 15px; font-weight: 600;
+    cursor: pointer; margin-top: 12px;
+  }
+  .run-button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .jobs-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .jobs-board { display: flex; flex-direction: column; gap: 10px; }
+  .job-card {
+    display: flex; gap: 10px; padding: 10px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .job-thumb { width: 96px; height: 96px; flex-shrink: 0;
+    background: #000; border-radius: 6px; overflow: hidden; }
+  .job-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .job-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .job-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .job-status { font-size: 12px; color: var(--dim); }
+  .job-status.running { color: #4aa3ff; }
+  .job-status.done { color: var(--ok); }
+  .job-status.fail { color: var(--danger); }
+  .job-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .job-actions .btn { flex: 0 0 auto; padding: 6px 10px; font-size: 12px; }
+  .job-actions .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+  .job-empty { color: var(--dim); font-size: 13px; font-style: italic; padding: 20px; text-align: center; }
 </style>
 </head>
 <body>
@@ -225,7 +292,27 @@
     <div id="toast" class="toast"></div>
     <section id="tab-run" role="tabpanel">
       <h2>🎬 Run</h2>
-      <p class="placeholder">Run tab — content lands in phase 3.</p>
+      <div class="run-wrap">
+        <div class="run-left">
+          <div class="run-section-title">Selected: <span id="run-cand-count">0</span> candidates · click below to pick styles</div>
+          <div class="selected-chips" id="run-cand-chips"></div>
+
+          <div class="run-section-title">Style refs</div>
+          <div class="style-grid" id="run-style-grid"></div>
+
+          <button class="run-button" id="run-go-btn" disabled>Run pipeline</button>
+          <div class="run-helper" id="run-helper">Select candidates and styles</div>
+        </div>
+        <div class="run-right">
+          <div class="jobs-toolbar">
+            <div class="run-section-title" style="margin:0;">Jobs board</div>
+            <button class="btn" id="jobs-clear-btn" style="flex:0; padding:6px 12px;">Clear done</button>
+          </div>
+          <div class="jobs-board" id="jobs-board">
+            <div class="job-empty">No jobs yet — kick one off from the left.</div>
+          </div>
+        </div>
+      </div>
     </section>
     <section id="tab-vote" role="tabpanel">
       <h2>🗳 Vote</h2>
@@ -561,6 +648,260 @@
   }
   window.addEventListener("hashchange", maybeLoadCandidates);
   maybeLoadCandidates();
+
+  // ---- Run tab ----
+  const RUN_DEFAULT_STYLE_IDX = [0, 5, 6, 7]; // 1, 6, 7, 8
+  let runStyles = [];               // [{name, filename, path}]
+  let runSelectedStyles = new Set(); // filenames
+  let runStylesLoaded = false;
+  let jobsPollTimer = null;
+
+  function renderRunCandChips() {
+    const wrap = document.getElementById("run-cand-chips");
+    const countEl = document.getElementById("run-cand-count");
+    const arr = Array.from(selected);
+    countEl.textContent = arr.length;
+    wrap.innerHTML = "";
+    if (!arr.length) {
+      wrap.innerHTML = '<span class="selected-empty">No candidates selected. Go to 📋 Candidates.</span>';
+    } else {
+      for (const fn of arr) {
+        const chip = document.createElement("span");
+        chip.className = "selected-chip";
+        chip.title = "Click to remove";
+        chip.innerHTML = `<span>${fn}</span><span class="x">✕</span>`;
+        chip.addEventListener("click", () => {
+          selected.delete(fn);
+          saveSelected(selected);
+          renderRunCandChips();
+          updateRunButton();
+          if (currentTab() === "candidates") renderCandidates();
+        });
+        wrap.appendChild(chip);
+      }
+    }
+    updateRunButton();
+  }
+
+  function renderStyleGrid() {
+    const grid = document.getElementById("run-style-grid");
+    grid.innerHTML = "";
+    runStyles.forEach((s, i) => {
+      const card = document.createElement("div");
+      card.className = "style-card" + (runSelectedStyles.has(s.filename) ? " active" : "");
+      card.innerHTML = `<img loading="lazy" src="${imgUrl(s.path)}" alt=""><div class="style-name">${i+1}. ${s.name}</div>`;
+      card.addEventListener("click", () => {
+        if (runSelectedStyles.has(s.filename)) runSelectedStyles.delete(s.filename);
+        else runSelectedStyles.add(s.filename);
+        renderStyleGrid();
+        updateRunButton();
+      });
+      grid.appendChild(card);
+    });
+  }
+
+  function updateRunButton() {
+    const btn = document.getElementById("run-go-btn");
+    const helper = document.getElementById("run-helper");
+    const C = selected.size;
+    const S = runSelectedStyles.size;
+    const total = C * S;
+    btn.disabled = total === 0;
+    if (total === 0) {
+      helper.textContent = C === 0 ? "Select at least 1 candidate" : "Pick at least 1 style";
+    } else {
+      const cost = (0.07 * total).toFixed(2);
+      const mins = Math.max(1, Math.ceil(total / 4));
+      helper.textContent = `${C} × ${S} = ${total} jobs · ~$${cost} · ~${mins} min (4 parallel)`;
+    }
+  }
+
+  async function loadRunStyles() {
+    if (runStylesLoaded) return;
+    try {
+      const r = await fetch("/api/pipeline/styles");
+      const j = await r.json();
+      runStyles = j.styles || j || [];
+      // Default-select 1, 6, 7, 8 (indices 0,5,6,7)
+      RUN_DEFAULT_STYLE_IDX.forEach(i => {
+        if (runStyles[i]) runSelectedStyles.add(runStyles[i].filename);
+      });
+      runStylesLoaded = true;
+      renderStyleGrid();
+      updateRunButton();
+    } catch (e) {
+      console.error("loadRunStyles", e);
+    }
+  }
+
+  async function runPipeline() {
+    const cands = Array.from(selected);
+    const styles = Array.from(runSelectedStyles);
+    if (!cands.length || !styles.length) return;
+    document.getElementById("run-go-btn").disabled = true;
+    showToast(`Kicking off ${cands.length * styles.length} jobs…`);
+    let ok = 0, fail = 0;
+    for (const c of cands) {
+      try {
+        const r = await fetch("/api/pipeline/run", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({candidate: c, styles: styles})
+        });
+        if (!r.ok) { fail++; continue; }
+        const j = await r.json();
+        ok += (j.job_ids || []).length;
+      } catch { fail++; }
+    }
+    showToast(`Started ${ok} jobs${fail?` (${fail} failed)`:""}`);
+    updateRunButton();
+    startJobsPolling();
+    refreshJobs();
+  }
+
+  document.getElementById("run-go-btn").addEventListener("click", runPipeline);
+  document.getElementById("jobs-clear-btn").addEventListener("click", async () => {
+    try {
+      await fetch("/api/pipeline/jobs/clear", {method: "POST"});
+      refreshJobs();
+    } catch {}
+  });
+
+  let jobsCache = [];
+  function lastDoneJob() {
+    const done = jobsCache.filter(j => j.status === "done");
+    return done.length ? done[0] : null; // jobs are sorted newest-first by server
+  }
+
+  function jobStatusChip(j) {
+    if (j.status === "queued" || j.phase === "queued") return `<span class="job-status">⏳ queued</span>`;
+    if (j.status === "running") {
+      let elapsed = "";
+      if (j.started_at) {
+        try {
+          const d = (Date.now() - new Date(j.started_at.replace(" ", "T")).getTime()) / 1000;
+          if (!isNaN(d) && d > 0) elapsed = ` (${Math.round(d)}s)`;
+        } catch {}
+      }
+      return `<span class="job-status running">🔄 ${j.phase || "running"}${elapsed}</span>`;
+    }
+    if (j.status === "done") return `<span class="job-status done">✅ done</span>`;
+    if (j.status === "fail") return `<span class="job-status fail" title="${(j.error||'').replace(/"/g,'&quot;')}">❌ failed</span>`;
+    return `<span class="job-status">${j.status||""}</span>`;
+  }
+
+  function renderJobs() {
+    const board = document.getElementById("jobs-board");
+    if (!jobsCache.length) {
+      board.innerHTML = '<div class="job-empty">No jobs yet — kick one off from the left.</div>';
+      return;
+    }
+    board.innerHTML = "";
+    for (const j of jobsCache) {
+      const card = document.createElement("div");
+      card.className = "job-card";
+      card.dataset.jobId = j.id;
+      const title = `${j.candidate} × ${j.style}`;
+      const outFn = j.output ? j.output.split("/").pop() : null;
+      const thumb = outFn
+        ? `<div class="job-thumb"><img src="${imgUrl(j.output)}" alt=""></div>`
+        : `<div class="job-thumb"></div>`;
+      const actions = (j.status === "done" && outFn) ? `
+        <div class="job-actions">
+          <button class="btn primary" data-act="decorate">✨ Decorate</button>
+          <button class="btn" data-act="bad">👎 Bad</button>
+          <a class="btn" download href="${imgUrl(j.output)}">⬇️ Download</a>
+          <button class="btn" data-act="fav">⭐ Quick-fav</button>
+        </div>` : "";
+      card.innerHTML = `
+        ${thumb}
+        <div class="job-body">
+          <div class="job-title" title="${title}">${title}</div>
+          ${jobStatusChip(j)}
+          ${actions}
+        </div>`;
+      card.addEventListener("click", (ev) => {
+        const t = ev.target.closest("[data-act]");
+        if (!t) return;
+        const act = t.dataset.act;
+        if (act === "decorate") {
+          alert("Decorate modal — coming in Phase 4");
+        } else if (act === "bad" && outFn) {
+          jobAction(outFn, "bad", card);
+        } else if (act === "fav" && outFn) {
+          jobAction(outFn, "fav", null);
+        }
+      });
+      board.appendChild(card);
+    }
+  }
+
+  async function jobAction(filename, kind, card) {
+    try {
+      const r = await fetch(`/api/pipeline/output/${encodeURIComponent(filename)}/${kind}`, {method: "POST"});
+      if (!r.ok) { showToast(kind + " failed"); return; }
+      showToast(kind === "fav" ? "Favorited ⭐" : "Marked bad");
+      if (kind === "bad" && card) card.remove();
+    } catch { showToast(kind + " failed"); }
+  }
+
+  async function refreshJobs() {
+    try {
+      const r = await fetch("/api/pipeline/jobs");
+      const j = await r.json();
+      jobsCache = j.jobs || [];
+      renderJobs();
+      const anyRunning = jobsCache.some(x => x.status === "running" || x.status === "queued");
+      if (!anyRunning) stopJobsPolling();
+    } catch (e) {}
+  }
+  function startJobsPolling() {
+    if (jobsPollTimer) return;
+    jobsPollTimer = setInterval(refreshJobs, 2000);
+  }
+  function stopJobsPolling() {
+    if (jobsPollTimer) { clearInterval(jobsPollTimer); jobsPollTimer = null; }
+  }
+
+  let runLoaded = false;
+  function maybeLoadRun() {
+    if (currentTab() !== "run") return;
+    renderRunCandChips();
+    if (!runLoaded) {
+      runLoaded = true;
+      loadRunStyles();
+      refreshJobs().then(() => {
+        if (jobsCache.some(x => x.status === "running" || x.status === "queued"))
+          startJobsPolling();
+      });
+    } else {
+      // re-render chips on tab re-entry (selection may have changed)
+      refreshJobs();
+    }
+  }
+  window.addEventListener("hashchange", maybeLoadRun);
+  maybeLoadRun();
+
+  // Run tab keyboard shortcuts
+  document.addEventListener("keydown", (e) => {
+    if (currentTab() !== "run") return;
+    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "r") {
+      const btn = document.getElementById("run-go-btn");
+      if (!btn.disabled) { e.preventDefault(); btn.click(); }
+    } else if (e.key === "f" || e.key === "b" || e.key === "d") {
+      const j = lastDoneJob();
+      if (!j || !j.output) return;
+      const fn = j.output.split("/").pop();
+      e.preventDefault();
+      if (e.key === "d") alert("Decorate modal — coming in Phase 4");
+      else if (e.key === "f") jobAction(fn, "fav", null);
+      else if (e.key === "b") {
+        const card = document.querySelector(`.job-card[data-job-id="${j.id}"]`);
+        jobAction(fn, "bad", card);
+      }
+    }
+  });
 </script>
 </body>
 </html>

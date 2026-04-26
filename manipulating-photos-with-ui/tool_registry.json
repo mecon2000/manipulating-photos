@@ -1,0 +1,184 @@
+{
+  "surreal_with_face": {
+    "label": "Surreal with face (0010x0010)",
+    "script": "scripts/workflows/surreal_with_face.py",
+    "needs_style_ref": true,
+    "style_ref_dir": "0010x0010/cleaned",
+    "presets": null,
+    "preset_flag": null,
+    "artifacts": null,
+    "artifact_flag": null,
+    "params": {
+      "instant-id-strength": {"type": "float", "min": 0.0, "max": 2.0, "default": 1.0},
+      "image-to-become-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.75},
+      "denoising-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.7},
+      "depth-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
+      "prompt-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
+      "grain": {"type": "float", "min": 0.0, "max": 0.2, "default": 0.03}
+    },
+    "flags": ["--no-face-overlay", "--save-stack", "--save-intermediates"],
+    "cost_estimate_usd": 0.07,
+    "wall_time_estimate_sec": 240
+  },
+  "baroque-surround": {
+    "label": "Baroque surround",
+    "script": "scripts/workflows/baroque-surround.py",
+    "needs_style_ref": false,
+    "presets": ["baroque", "renaissance", "dark-romantic", "ethereal", "smoke",
+                "underwater", "ink-water", "aurora", "silk", "embers",
+                "curtains", "whipped-cream", "bubbles", "velvet-fog",
+                "coral-smoke", "neon-smoke-rings", "burning-silk", "torn-cloud",
+                "spun-sugar", "powdered-pigment"],
+    "preset_flag": "--preset",
+    "artifacts": ["wings", "petals", "hands", "faces", "chains", "serpents",
+                  "butterflies", "thorns", "feathers", "flames", "flowers",
+                  "skulls", "ribbons", "eyes", "random", "none"],
+    "artifact_flag": "--artifact",
+    "params": {
+      "tile-refine": {"type": "float", "min": 0.0, "max": 0.5, "default": 0.0},
+      "grain-match": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
+      "foreground-wisp": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0},
+      "fg-holes": {"type": "int", "min": 0, "max": 12, "default": 5}
+    },
+    "flags": ["--auto-correct", "--use-cached-bg", "--save-stack"],
+    "cost_estimate_usd": 0.01,
+    "wall_time_estimate_sec": 60
+  },
+  "ink-dissolution": {
+    "label": "Ink dissolution",
+    "script": "scripts/workflows/ink-dissolution.py",
+    "needs_style_ref": false,
+    "presets": ["ink-wash", "watercolor", "canvas", "charcoal", "graphite"],
+    "preset_flag": "--medium",
+    "artifacts": null,
+    "artifact_flag": null,
+    "params": {
+      "dissolve-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85},
+      "face-preserve": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85},
+      "fade-distance": {"type": "float", "min": 1.0, "max": 10.0, "default": 3.5},
+      "levels": {"type": "int", "min": 3, "max": 8, "default": 5}
+    },
+    "flags": ["--save-stack"],
+    "cost_estimate_usd": 0.003,
+    "wall_time_estimate_sec": 30
+  },
+  "time-corruption": {
+    "label": "Time corruption",
+    "script": "scripts/workflows/time-corruption.py",
+    "needs_style_ref": false,
+    "presets": ["ghost", "melt", "trails", "glitch", "echo", "full"],
+    "preset_flag": "--effect",
+    "artifacts": null,
+    "artifact_flag": null,
+    "params": {
+      "intensity": {"type": "float", "min": 0.3, "max": 1.0, "default": 0.7},
+      "arc-angle": {"type": "float", "min": 0.0, "max": 90.0, "default": 30.0},
+      "direction": {"type": "float", "min": 0.0, "max": 360.0, "default": 0.0}
+    },
+    "flags": ["--auto-correct", "--save-stack"],
+    "cost_estimate_usd": 0.003,
+    "wall_time_estimate_sec": 25
+  },
+  "material-swap": {
+    "label": "Material swap",
+    "script": "scripts/workflows/material-swap.py",
+    "needs_style_ref": false,
+    "presets": ["wet glass", "cracked glass", "oily glass", "frosted glass",
+                "marble", "liquid metal", "porcelain", "ice", "gold", "obsidian"],
+    "preset_flag": "--material",
+    "artifacts": null,
+    "artifact_flag": null,
+    "params": {
+      "strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.4},
+      "cfg-scale": {"type": "float", "min": 1.0, "max": 15.0, "default": 7.0}
+    },
+    "flags": ["--auto-correct", "--save-stack"],
+    "cost_estimate_usd": 0.04,
+    "wall_time_estimate_sec": 60
+  },
+  "relighting": {
+    "label": "Relighting (IC-Light V2)",
+    "script": "scripts/workflows/relighting.py",
+    "needs_style_ref": false,
+    "presets": ["Dramatic Rim", "Spotlight", "Low Key", "High Key", "Neon Gels",
+                "Teal & Orange", "Red Drama", "Golden Hour", "Window Light",
+                "Overcast Soft", "Candlelight", "Butterfly", "Split Light",
+                "Beauty Dish", "Underwater Caustics", "Moonlight", "Neon Signs",
+                "Firelight", "Laser"],
+    "preset_flag": "--lighting",
+    "artifacts": null,
+    "artifact_flag": null,
+    "params": {
+      "lowres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85},
+      "highres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
+      "guidance-scale": {"type": "float", "min": 1.0, "max": 10.0, "default": 2.5},
+      "steps": {"type": "int", "min": 10, "max": 60, "default": 28},
+      "bg-blend": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0}
+    },
+    "flags": ["--auto-correct", "--no-hr", "--save-stack"],
+    "cost_estimate_usd": 0.06,
+    "wall_time_estimate_sec": 90
+  },
+  "color-bath": {
+    "label": "Color bath",
+    "script": "scripts/workflows/color-bath.py",
+    "needs_style_ref": false,
+    "presets": ["red-film", "ochre", "teal-moody", "amber", "blue-hour",
+                "rose", "sepia", "emerald", "magenta-dusk", "cyan-ice"],
+    "preset_flag": "--preset",
+    "artifacts": null,
+    "artifact_flag": null,
+    "params": {
+      "strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.75},
+      "grain": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0},
+      "face-preserve-mult": {"type": "float", "min": 0.5, "max": 5.0, "default": 2.5},
+      "scratches": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0},
+      "color-strips": {"type": "int", "min": 0, "max": 10, "default": 0},
+      "light-leak": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0}
+    },
+    "flags": ["--preserve-shadows", "--analog"],
+    "cost_estimate_usd": 0.0,
+    "wall_time_estimate_sec": 8
+  },
+  "foreground-framing": {
+    "label": "Foreground framing",
+    "script": "scripts/workflows/foreground-framing.py",
+    "needs_style_ref": false,
+    "presets": ["foliage", "warm foliage", "doorframe", "curtain", "dark curtain",
+                "flowers", "fairy lights", "metal", "smoke", "brick", "auto"],
+    "preset_flag": "--framing",
+    "artifacts": null,
+    "artifact_flag": null,
+    "params": {
+      "coverage": {"type": "float", "min": 0.1, "max": 0.4, "default": 0.20},
+      "darken": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.55},
+      "irregularity": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
+      "blur-radius": {"type": "int", "min": 0, "max": 120, "default": 0},
+      "focal-length": {"type": "int", "min": 14, "max": 200, "default": 50},
+      "aperture": {"type": "float", "min": 1.0, "max": 16.0, "default": 2.0}
+    },
+    "flags": ["--auto-correct"],
+    "cost_estimate_usd": 0.04,
+    "wall_time_estimate_sec": 60
+  },
+  "noir-paint": {
+    "label": "Noir paint",
+    "script": "scripts/workflows/noir-paint.py",
+    "needs_style_ref": false,
+    "presets": ["cool", "warm", "cold", "sepia"],
+    "preset_flag": "--tones",
+    "artifacts": null,
+    "artifact_flag": null,
+    "params": {
+      "num-tones": {"type": "int", "min": 2, "max": 4, "default": 2},
+      "light-angle": {"type": "float", "min": 0.0, "max": 360.0, "default": 90.0},
+      "highres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.45},
+      "paint-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.18},
+      "canvas-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.22},
+      "edge-roughness": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5}
+    },
+    "flags": ["--auto-correct", "--save-stack"],
+    "cost_estimate_usd": 0.10,
+    "wall_time_estimate_sec": 120
+  }
+}

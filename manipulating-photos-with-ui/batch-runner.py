@@ -2527,6 +2527,84 @@ def api_decorate_save():
     })
 
 
+# --- Tool registry (multi-tool UI, phase 1) --------------------------------
+
+REPO_ROOT = SCRIPT_DIR.parent
+TOOL_REGISTRY_PATH = SCRIPT_DIR / "tool_registry.json"
+_TOOL_REGISTRY_CACHE = {"mtime": 0.0, "data": None}
+
+
+def _validate_tool_registry(data):
+    """Validate every entry: script must exist; presets/flags should appear in --help.
+    Raises RuntimeError if any tool's script is missing. Prints warnings for missing
+    presets/flags in --help output but does not fail."""
+    if not isinstance(data, dict):
+        raise RuntimeError("tool_registry.json must be an object")
+
+    for name, entry in data.items():
+        script_rel = entry.get("script")
+        if not script_rel:
+            raise RuntimeError(f"tool '{name}' missing 'script'")
+        script_abs = (REPO_ROOT / script_rel).resolve()
+        if not script_abs.exists():
+            raise RuntimeError(f"tool '{name}': script not found at {script_abs}")
+
+        # Best-effort sniff of --help text for flag/preset validation
+        help_text = ""
+        try:
+            r = subprocess.run(
+                [PYTHON, str(script_abs), "--help"],
+                capture_output=True, text=True, timeout=15,
+            )
+            help_text = (r.stdout or "") + (r.stderr or "")
+        except Exception as e:
+            print(f"[tool_registry] WARN: couldn't run --help for '{name}': {e}")
+
+        if help_text:
+            # Validate flags
+            for fl in entry.get("flags") or []:
+                if fl not in help_text:
+                    print(f"[tool_registry] WARN: tool '{name}' flag '{fl}' not seen in --help")
+            for pf_key in ("preset_flag", "artifact_flag"):
+                pf = entry.get(pf_key)
+                if pf and pf not in help_text:
+                    print(f"[tool_registry] WARN: tool '{name}' {pf_key}='{pf}' not seen in --help")
+            for pname in entry.get("params") or {}:
+                if f"--{pname}" not in help_text:
+                    print(f"[tool_registry] WARN: tool '{name}' param '--{pname}' not seen in --help")
+    return data
+
+
+def load_tool_registry():
+    """Load + cache the registry JSON. Re-reads on file mtime change."""
+    try:
+        mtime = TOOL_REGISTRY_PATH.stat().st_mtime
+    except FileNotFoundError:
+        raise RuntimeError(f"tool_registry.json missing: {TOOL_REGISTRY_PATH}")
+    if _TOOL_REGISTRY_CACHE["data"] is not None and _TOOL_REGISTRY_CACHE["mtime"] == mtime:
+        return _TOOL_REGISTRY_CACHE["data"]
+    with open(TOOL_REGISTRY_PATH) as f:
+        data = json.load(f)
+    _validate_tool_registry(data)
+    _TOOL_REGISTRY_CACHE["mtime"] = mtime
+    _TOOL_REGISTRY_CACHE["data"] = data
+    return data
+
+
+@app.route("/api/run/tools")
+def api_run_tools():
+    try:
+        return jsonify(load_tool_registry())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/run/tool/<name>/run", methods=["POST"])
+def api_run_tool_run(name):
+    # Stub — implemented in Phase 2 of plans/multi_tool_ui.md
+    return jsonify({"error": "not implemented", "tool": name}), 501
+
+
 # --- Cloudflared tunnel ----------------------------------------------------
 
 def start_cloudflared(port):

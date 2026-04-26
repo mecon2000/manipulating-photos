@@ -404,14 +404,16 @@
       <h2>🎬 Run</h2>
       <div class="run-wrap">
         <div class="run-left">
-          <div class="run-section-title">Selected: <span id="run-cand-count">0</span> candidates · click below to pick styles</div>
+          <div class="run-section-title">Tool</div>
+          <select id="run-tool-select" style="width:100%; padding:8px; background:#0a0a0c; color:var(--fg); border:1px solid var(--border); border-radius:6px; font-size:14px; margin-bottom:14px;"></select>
+
+          <div class="run-section-title">Selected: <span id="run-cand-count">0</span> candidates</div>
           <div class="selected-chips" id="run-cand-chips"></div>
 
-          <div class="run-section-title">Style refs</div>
-          <div class="style-grid" id="run-style-grid"></div>
+          <div id="run-tool-form"></div>
 
           <button class="run-button" id="run-go-btn" disabled>Run pipeline</button>
-          <div class="run-helper" id="run-helper">Select candidates and styles</div>
+          <div class="run-helper" id="run-helper">Select candidates and options</div>
         </div>
         <div class="run-right">
           <div class="jobs-toolbar">
@@ -1112,6 +1114,214 @@
   let runStylesLoaded = false;
   let jobsPollTimer = null;
 
+  // Multi-tool registry & state
+  let toolRegistry = {};
+  let currentTool = localStorage.getItem("lastTool") || "surreal_with_face";
+  const runSelectedPresets = {};   // tool -> Set
+  const runSelectedArtifacts = {}; // tool -> Set
+  const runParamValues = {};       // tool -> {param: value}
+  const runFlagValues = {};        // tool -> Set of flags
+
+  function toolSel(tool) {
+    if (!runSelectedPresets[tool]) runSelectedPresets[tool] = new Set();
+    if (!runSelectedArtifacts[tool]) runSelectedArtifacts[tool] = new Set();
+    if (!runParamValues[tool]) runParamValues[tool] = {};
+    if (!runFlagValues[tool]) runFlagValues[tool] = new Set();
+    return tool;
+  }
+
+  async function loadToolRegistry() {
+    if (Object.keys(toolRegistry).length) return;
+    try {
+      const r = await fetch("/api/run/tools");
+      const j = await r.json();
+      if (j && !j.error) toolRegistry = j;
+    } catch (e) { console.error("loadToolRegistry", e); }
+  }
+
+  function populateToolDropdown() {
+    const sel = document.getElementById("run-tool-select");
+    sel.innerHTML = "";
+    const names = Object.keys(toolRegistry);
+    for (const n of names) {
+      const opt = document.createElement("option");
+      opt.value = n;
+      opt.textContent = toolRegistry[n].label || n;
+      if (n === currentTool) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    if (!toolRegistry[currentTool] && names.length) {
+      currentTool = names[0];
+      sel.value = currentTool;
+    }
+    sel.addEventListener("change", () => {
+      currentTool = sel.value;
+      localStorage.setItem("lastTool", currentTool);
+      renderToolForm();
+      updateRunButton();
+    });
+  }
+
+  function makeChipGrid(items, selectedSet, onChange, idPrefix) {
+    const grid = document.createElement("div");
+    grid.style.display = "grid";
+    grid.style.gridTemplateColumns = "repeat(auto-fill, minmax(110px, 1fr))";
+    grid.style.gap = "6px";
+    grid.style.marginBottom = "12px";
+    items.forEach((name) => {
+      const chip = document.createElement("div");
+      const active = selectedSet.has(name);
+      chip.className = "selected-chip";
+      chip.style.justifyContent = "center";
+      chip.style.cursor = "pointer";
+      chip.style.fontSize = "12px";
+      chip.style.padding = "6px 8px";
+      if (!active) {
+        chip.style.background = "#1a1a1f";
+        chip.style.borderColor = "var(--border)";
+        chip.style.color = "var(--fg)";
+      }
+      chip.textContent = name;
+      chip.addEventListener("click", () => {
+        if (selectedSet.has(name)) selectedSet.delete(name);
+        else selectedSet.add(name);
+        onChange();
+      });
+      grid.appendChild(chip);
+    });
+    return grid;
+  }
+
+  function renderToolForm() {
+    toolSel(currentTool);
+    const form = document.getElementById("run-tool-form");
+    form.innerHTML = "";
+    const entry = toolRegistry[currentTool];
+    if (!entry) return;
+
+    // Style refs (surreal_with_face only)
+    if (entry.needs_style_ref) {
+      const t = document.createElement("div");
+      t.className = "run-section-title";
+      t.textContent = "Style refs";
+      form.appendChild(t);
+      const grid = document.createElement("div");
+      grid.className = "style-grid";
+      grid.id = "run-style-grid";
+      form.appendChild(grid);
+      // Populated by loadRunStyles → renderStyleGrid
+      loadRunStyles();
+    }
+
+    // Presets
+    if (entry.presets && entry.presets.length) {
+      const t = document.createElement("div");
+      t.className = "run-section-title";
+      t.textContent = "Presets";
+      form.appendChild(t);
+      form.appendChild(makeChipGrid(
+        entry.presets, runSelectedPresets[currentTool],
+        () => { renderToolForm(); updateRunButton(); }, "preset"));
+    }
+
+    // Artifacts
+    if (entry.artifacts && entry.artifacts.length) {
+      const t = document.createElement("div");
+      t.className = "run-section-title";
+      t.textContent = "Artifacts";
+      form.appendChild(t);
+      form.appendChild(makeChipGrid(
+        entry.artifacts, runSelectedArtifacts[currentTool],
+        () => { renderToolForm(); updateRunButton(); }, "artifact"));
+    }
+
+    // Params (sliders)
+    const params = entry.params || {};
+    if (Object.keys(params).length) {
+      const t = document.createElement("div");
+      t.className = "run-section-title";
+      t.textContent = "Params";
+      form.appendChild(t);
+      const wrap = document.createElement("div");
+      wrap.style.marginBottom = "12px";
+      for (const [pname, p] of Object.entries(params)) {
+        const cur = (pname in runParamValues[currentTool])
+          ? runParamValues[currentTool][pname] : p.default;
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:12px;";
+        const isInt = p.type === "int";
+        const step = isInt ? 1 : (p.max - p.min) / 100;
+        if (p.type === "bool") {
+          row.innerHTML = `<label style="cursor:pointer;"><input type="checkbox" ${cur?"checked":""}> ${pname}</label>`;
+          row.querySelector("input").addEventListener("change", (ev) => {
+            runParamValues[currentTool][pname] = ev.target.checked;
+          });
+        } else {
+          row.innerHTML = `
+            <label style="flex:0 0 130px; color:var(--dim);">${pname}</label>
+            <input type="range" min="${p.min}" max="${p.max}" step="${step}" value="${cur}" style="flex:1;">
+            <span style="flex:0 0 50px; text-align:right; font-variant-numeric:tabular-nums;">${isInt?Math.round(cur):Number(cur).toFixed(2)}</span>`;
+          const inp = row.querySelector("input");
+          const out = row.querySelector("span");
+          inp.addEventListener("input", () => {
+            const v = isInt ? parseInt(inp.value, 10) : parseFloat(inp.value);
+            runParamValues[currentTool][pname] = v;
+            out.textContent = isInt ? v : v.toFixed(2);
+          });
+          // Initialize so the value goes out even without interaction
+          if (!(pname in runParamValues[currentTool])) {
+            runParamValues[currentTool][pname] = cur;
+          }
+        }
+        wrap.appendChild(row);
+      }
+      form.appendChild(wrap);
+    }
+
+    // Flags (checkboxes)
+    const flags = entry.flags || [];
+    if (flags.length) {
+      const t = document.createElement("div");
+      t.className = "run-section-title";
+      t.textContent = "Flags";
+      form.appendChild(t);
+      const wrap = document.createElement("div");
+      wrap.style.marginBottom = "12px";
+      for (const fl of flags) {
+        const row = document.createElement("div");
+        row.style.cssText = "margin-bottom:4px; font-size:13px;";
+        const checked = runFlagValues[currentTool].has(fl);
+        row.innerHTML = `<label style="cursor:pointer;"><input type="checkbox" ${checked?"checked":""}> ${fl}</label>`;
+        row.querySelector("input").addEventListener("change", (ev) => {
+          if (ev.target.checked) runFlagValues[currentTool].add(fl);
+          else runFlagValues[currentTool].delete(fl);
+        });
+        wrap.appendChild(row);
+      }
+      form.appendChild(wrap);
+    }
+  }
+
+  function jobsCountForCurrentTool() {
+    const entry = toolRegistry[currentTool];
+    const C = selected.size;
+    if (!entry) return {C, M: 0, total: 0};
+    if (entry.needs_style_ref) {
+      const M = runSelectedStyles.size;
+      return {C, M, total: C * M, label: "styles"};
+    }
+    const P = (runSelectedPresets[currentTool] || new Set()).size;
+    const A = (runSelectedArtifacts[currentTool] || new Set()).size;
+    if (entry.presets && entry.artifacts) {
+      const M = (P || 1) * (A || 1);
+      return {C, M, total: C * M, label: "preset×artifact"};
+    }
+    if (entry.presets) {
+      return {C, M: P, total: C * P, label: "presets"};
+    }
+    return {C, M: 1, total: C, label: "jobs"};
+  }
+
   function renderRunCandChips() {
     const wrap = document.getElementById("run-cand-chips");
     const countEl = document.getElementById("run-cand-count");
@@ -1141,6 +1351,7 @@
 
   function renderStyleGrid() {
     const grid = document.getElementById("run-style-grid");
+    if (!grid) return;
     grid.innerHTML = "";
     runStyles.forEach((s, i) => {
       const card = document.createElement("div");
@@ -1159,30 +1370,34 @@
   function updateRunButton() {
     const btn = document.getElementById("run-go-btn");
     const helper = document.getElementById("run-helper");
-    const C = selected.size;
-    const S = runSelectedStyles.size;
-    const total = C * S;
+    const entry = toolRegistry[currentTool];
+    const {C, M, total, label} = jobsCountForCurrentTool();
     btn.disabled = total === 0;
+    btn.textContent = entry ? `Run ${entry.label || currentTool}` : "Run";
+    if (!entry) { helper.textContent = "Loading tools..."; return; }
+    if (C === 0) { helper.textContent = "Select at least 1 candidate"; return; }
     if (total === 0) {
-      helper.textContent = C === 0 ? "Select at least 1 candidate" : "Pick at least 1 style";
-    } else {
-      const cost = (0.07 * total).toFixed(2);
-      const mins = Math.max(1, Math.ceil(total / 4));
-      helper.textContent = `${C} × ${S} = ${total} jobs · ~$${cost} · ~${mins} min (4 parallel)`;
+      helper.textContent = entry.needs_style_ref ? "Pick at least 1 style ref"
+                          : (entry.presets ? "Pick at least 1 preset" : "—");
+      return;
     }
+    const cost = ((entry.cost_estimate_usd || 0) * total).toFixed(2);
+    const warn = total > 20 ? " ⚠ large batch" : "";
+    helper.textContent = `${C} cand × ${M} ${label||""} = ${total} jobs · ~$${cost}${warn}`;
   }
 
   async function loadRunStyles() {
-    if (runStylesLoaded) return;
     try {
-      const r = await fetch("/api/pipeline/styles");
-      const j = await r.json();
-      runStyles = j.styles || j || [];
-      // Default-select 1, 6, 7, 8 (indices 0,5,6,7)
-      RUN_DEFAULT_STYLE_IDX.forEach(i => {
-        if (runStyles[i]) runSelectedStyles.add(runStyles[i].filename);
-      });
-      runStylesLoaded = true;
+      if (!runStylesLoaded) {
+        const r = await fetch("/api/pipeline/styles");
+        const j = await r.json();
+        runStyles = j.styles || j || [];
+        // Default-select 1, 6, 7, 8 (indices 0,5,6,7)
+        RUN_DEFAULT_STYLE_IDX.forEach(i => {
+          if (runStyles[i]) runSelectedStyles.add(runStyles[i].filename);
+        });
+        runStylesLoaded = true;
+      }
       renderStyleGrid();
       updateRunButton();
     } catch (e) {
@@ -1191,24 +1406,39 @@
   }
 
   async function runPipeline() {
+    const entry = toolRegistry[currentTool];
+    if (!entry) return;
     const cands = Array.from(selected);
-    const styles = Array.from(runSelectedStyles);
-    if (!cands.length || !styles.length) return;
+    if (!cands.length) return;
+    const presets = Array.from(runSelectedPresets[currentTool] || []);
+    const artifacts = Array.from(runSelectedArtifacts[currentTool] || []);
+    const style_refs = Array.from(runSelectedStyles);
+    const params = {...(runParamValues[currentTool] || {})};
+    const flags = Array.from(runFlagValues[currentTool] || []);
+
+    if (entry.needs_style_ref && !style_refs.length) return;
+    if (entry.presets && entry.presets.length && !entry.needs_style_ref && !presets.length) return;
+
     document.getElementById("run-go-btn").disabled = true;
-    showToast(`Kicking off ${cands.length * styles.length} jobs…`);
-    let ok = 0, fail = 0;
-    for (const c of cands) {
-      try {
-        const r = await fetch("/api/pipeline/run", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({candidate: c, styles: styles})
-        });
-        if (!r.ok) { fail++; continue; }
-        const j = await r.json();
-        ok += (j.job_ids || []).length;
-      } catch { fail++; }
-    }
-    showToast(`Started ${ok} jobs${fail?` (${fail} failed)`:""}`);
+    const {total} = jobsCountForCurrentTool();
+    showToast(`Kicking off ${total} jobs…`);
+    try {
+      const r = await fetch(`/api/run/tool/${encodeURIComponent(currentTool)}/run`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          candidates: cands,
+          presets, artifacts, style_refs,
+          params, flags,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        showToast(`Failed: ${j.error || r.status}`);
+      } else {
+        const n = (j.job_ids || []).length;
+        showToast(`Started ${n} jobs`);
+      }
+    } catch (e) { showToast("Run failed"); }
     updateRunButton();
     startJobsPolling();
     refreshJobs();
@@ -1256,7 +1486,8 @@
       const card = document.createElement("div");
       card.className = "job-card";
       card.dataset.jobId = j.id;
-      const title = `${j.candidate} × ${j.style}`;
+      const toolTag = j.tool && j.tool !== "surreal_with_face" ? `[${j.tool}] ` : "";
+      const title = `${toolTag}${j.candidate} × ${j.style}`;
       const outFn = j.output ? j.output.split("/").pop() : null;
       const thumb = outFn
         ? `<div class="job-thumb" data-act="open" style="cursor:zoom-in;"><img src="${imgUrl(j.output)}" alt=""></div>`
@@ -1359,18 +1590,22 @@
   }
 
   let runLoaded = false;
-  function maybeLoadRun() {
+  async function maybeLoadRun() {
     if (currentTab() !== "run") return;
     renderRunCandChips();
     if (!runLoaded) {
       runLoaded = true;
-      loadRunStyles();
+      await loadToolRegistry();
+      populateToolDropdown();
+      renderToolForm();
+      updateRunButton();
       refreshJobs().then(() => {
         if (jobsCache.some(x => x.status === "running" || x.status === "queued"))
           startJobsPolling();
       });
     } else {
       // re-render chips on tab re-entry (selection may have changed)
+      updateRunButton();
       refreshJobs();
     }
   }

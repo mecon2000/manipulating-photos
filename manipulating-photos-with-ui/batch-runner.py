@@ -1797,7 +1797,8 @@ def api_pipe_run():
         jid = uuid.uuid4().hex[:8]
         with PIPELINE_JOBS_LOCK:
             PIPELINE_JOBS[jid] = {
-                "id": jid, "candidate": cand, "style": style_filename,
+                "id": jid, "tool": "surreal_with_face",
+                "candidate": cand, "style": style_filename,
                 "no_face_overlay": no_face, "status": "queued",
                 "phase": "queued", "queued_at": now_str(),
             }
@@ -2599,10 +2600,172 @@ def api_run_tools():
         return jsonify({"error": str(e)}), 500
 
 
+def _resolve_candidate_path(filename):
+    """Resolve a candidate filename to an absolute path. Tries PIPELINE_CAND_DIR
+    first, then a few common candidate folders under SHARED_DIR."""
+    for d in (PIPELINE_CAND_DIR,
+              SHARED_DIR / "candidates",
+              SHARED_DIR / "candidates-for-motion-streak"):
+        p = d / filename
+        if p.is_file():
+            return p
+    # Last resort: scan known dirs recursively (one level)
+    return None
+
+
+def _run_generic_tool_job(job_id, tool_name, entry, candidate_path,
+                          preset, artifact, params, flags, cost):
+    """Generic subprocess driver for non-surreal tools. Updates PIPELINE_JOBS[job_id]."""
+    def setj(**kw):
+        with PIPELINE_JOBS_LOCK:
+            PIPELINE_JOBS[job_id].update(kw)
+
+    setj(status="running", phase=tool_name, started_at=now_str())
+    script_abs = (REPO_ROOT / entry["script"]).resolve()
+    cmd = [PYTHON, str(script_abs), "--source", str(candidate_path)]
+    if preset and entry.get("preset_flag"):
+        cmd += [entry["preset_flag"], str(preset)]
+    if artifact and entry.get("artifact_flag"):
+        cmd += [entry["artifact_flag"], str(artifact)]
+    for pname, pval in (params or {}).items():
+        cmd += [f"--{pname}", str(pval)]
+    for fl in (flags or []):
+        cmd += [fl]
+    # Force outputs to FINALS_DIR so find_output_after picks them up.
+    cmd += ["--output-to", "local",
+            "--local-output-dir", str(SHARED_DIR)]
+
+    start_ts = time.time()
+    try:
+        env = {**os.environ, "NOTIFY_DISABLE_IMAGE": "1"}
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=1800, env=env)
+    except subprocess.TimeoutExpired:
+        setj(status="fail", error=f"{tool_name} timeout", ended_at=now_str())
+        return
+    if res.returncode != 0:
+        setj(status="fail", error=(res.stderr or res.stdout or "")[-400:],
+             ended_at=now_str())
+        return
+    out_path = find_output_after(
+        start_ts, hint_source=Path(candidate_path).stem,
+        search_dirs=[FINALS_DIR])
+    if not out_path:
+        setj(status="fail", error=f"{tool_name} output not found",
+             ended_at=now_str())
+        return
+    setj(status="done", phase="done", output=str(out_path),
+         ended_at=now_str())
+    _pipeline_accrue(float(cost or 0.0))
+
+
 @app.route("/api/run/tool/<name>/run", methods=["POST"])
 def api_run_tool_run(name):
-    # Stub — implemented in Phase 2 of plans/multi_tool_ui.md
-    return jsonify({"error": "not implemented", "tool": name}), 501
+    try:
+        registry = load_tool_registry()
+    except Exception as e:
+        return jsonify({"error": f"registry load failed: {e}"}), 500
+    if name not in registry:
+        return jsonify({"error": f"unknown tool: {name}"}), 404
+    entry = registry[name]
+
+    body = request.get_json(silent=True) or {}
+    cands = body.get("candidates") or []
+    presets = body.get("presets") or []
+    artifacts = body.get("artifacts") or []
+    style_refs = body.get("style_refs") or []
+    params = body.get("params") or {}
+    flags = body.get("flags") or []
+
+    if not cands:
+        return jsonify({"error": "no candidates"}), 400
+
+    # Validate selections against registry
+    allowed_presets = entry.get("presets") or []
+    for p in presets:
+        if allowed_presets and p not in allowed_presets:
+            return jsonify({"error": f"invalid preset: {p}"}), 400
+    allowed_artifacts = entry.get("artifacts") or []
+    for a in artifacts:
+        if allowed_artifacts and a not in allowed_artifacts:
+            return jsonify({"error": f"invalid artifact: {a}"}), 400
+    allowed_flags = set(entry.get("flags") or [])
+    for fl in flags:
+        if fl not in allowed_flags:
+            return jsonify({"error": f"invalid flag: {fl}"}), 400
+    allowed_params = set((entry.get("params") or {}).keys())
+    for pname in params:
+        if pname not in allowed_params:
+            return jsonify({"error": f"invalid param: {pname}"}), 400
+
+    cost = float(entry.get("cost_estimate_usd") or 0.0)
+
+    job_ids = []
+
+    # Special-case: surreal_with_face routes through the existing _pipe_run_one
+    # (relighting + surreal_with_face orchestration is non-trivial).
+    if name == "surreal_with_face":
+        no_face = "--no-face-overlay" in flags
+        for c in cands:
+            cand_path = _resolve_candidate_path(c) or (PIPELINE_CAND_DIR / c)
+            if not cand_path.is_file():
+                continue
+            for sf in style_refs:
+                style_path = PIPELINE_STYLE_DIR / sf
+                if not style_path.is_file():
+                    continue
+                jid = uuid.uuid4().hex[:8]
+                with PIPELINE_JOBS_LOCK:
+                    PIPELINE_JOBS[jid] = {
+                        "id": jid, "tool": name,
+                        "candidate": c, "style": sf,
+                        "no_face_overlay": no_face,
+                        "status": "queued", "phase": "queued",
+                        "queued_at": now_str(),
+                    }
+                threading.Thread(
+                    target=_pipe_run_one,
+                    args=(jid, cand_path, style_path, no_face),
+                    daemon=True,
+                ).start()
+                job_ids.append(jid)
+        return jsonify({"ok": True, "job_ids": job_ids})
+
+    # Generic path: cartesian product over presets × artifacts (or single None)
+    preset_iter = presets if presets else [None]
+    artifact_iter = artifacts if artifacts else [None]
+
+    # Safety cap to avoid runaway combinations
+    total = len(cands) * len(preset_iter) * len(artifact_iter)
+    if total > 200:
+        return jsonify({"error": f"too many jobs ({total} > 200)"}), 400
+
+    for c in cands:
+        cand_path = _resolve_candidate_path(c) or (PIPELINE_CAND_DIR / c)
+        if not cand_path.is_file():
+            continue
+        for preset in preset_iter:
+            for artifact in artifact_iter:
+                jid = uuid.uuid4().hex[:8]
+                title_bits = [str(x) for x in (preset, artifact) if x]
+                with PIPELINE_JOBS_LOCK:
+                    PIPELINE_JOBS[jid] = {
+                        "id": jid, "tool": name,
+                        "candidate": c,
+                        "style": " · ".join(title_bits) or "(default)",
+                        "preset": preset, "artifact": artifact,
+                        "params": params, "flags": flags,
+                        "status": "queued", "phase": "queued",
+                        "queued_at": now_str(),
+                    }
+                threading.Thread(
+                    target=_run_generic_tool_job,
+                    args=(jid, name, entry, cand_path,
+                          preset, artifact, params, flags, cost),
+                    daemon=True,
+                ).start()
+                job_ids.append(jid)
+    return jsonify({"ok": True, "job_ids": job_ids})
 
 
 # --- Cloudflared tunnel ----------------------------------------------------

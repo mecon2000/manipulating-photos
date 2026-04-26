@@ -405,6 +405,8 @@ def main():
     parser.add_argument("--output-to", choices=["local", "gdrive", "both"], default="local")
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
     parser.add_argument("--list-presets", action="store_true", help="List all lighting presets and exit")
+    parser.add_argument("--save-stack", action="store_true",
+                        help="export pipeline stages as a multi-page TIFF (<finals>__stack.tif)")
     add_affect_args(parser)
     args = parser.parse_args()
 
@@ -621,6 +623,29 @@ def main():
             with open(finals_dest, "wb") as f_out:
                 f_out.write(f_in.read())
         log(output_dir, f"Final copied to: {finals_dest}")
+
+        # --save-stack: aggregate intermediates into a multi-page TIFF
+        if args.save_stack:
+            try:
+                from _layered_tiff import save_stack
+                stage_files = [
+                    ("00_original",         "0_original.jpg"),
+                    ("01_mask",             "1_mask.png"),
+                    ("02_subject_on_black", "1_subject_on_black.jpg"),
+                    ("03_relit_raw",        "2_relit_raw.jpg"),
+                    ("04_relit_bg_blended", "2_relit_bg_blended.jpg"),
+                ]
+                layers = []
+                for name, fname in stage_files:
+                    fp = os.path.join(output_dir, fname)
+                    if os.path.isfile(fp):
+                        layers.append((name, Image.open(fp)))
+                layers.append(("99_final", final_img))
+                stack_path = os.path.join(finals_dir, os.path.basename(output_dir) + "__stack.tif")
+                save_stack(stack_path, layers)
+                log(output_dir, f"Stack: {stack_path} ({len(layers)} layers)")
+            except Exception as e:
+                log(output_dir, f"save-stack failed: {e}", "WARN")
 
         # Push to phone
         try:

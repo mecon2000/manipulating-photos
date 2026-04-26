@@ -394,8 +394,14 @@ def generate_bg_thread(prompt, w, h, output_dir, seed, result_dict, flux_model="
 # ---------------------------------------------------------------------------
 # Steps 3-6: Composite pipeline (local, fast)
 # ---------------------------------------------------------------------------
-def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir):
-    """Laplacian pyramid blend + light wrap + LAB edge match + LAB 60% wash."""
+def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir, stages=None):
+    """Laplacian pyramid blend + light wrap + LAB edge match + LAB 60% wash.
+
+    If `stages` is a dict, it is populated with PIL.Image snapshots after each
+    sub-stage keyed by 'lap_blend', 'light_wrap', 'lab_edge_match', 'lab_full_wash'.
+    """
+    def _snap(arr):
+        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
     bg_f = np.array(bg_img).astype(np.float32)
 
     # --- Step 3: Laplacian pyramid blend ---
@@ -431,6 +437,8 @@ def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
     m_pyr = gauss_pyr(m3, levels)
     blended = [s * m + b * (1 - m) for s, b, m in zip(s_pyr, b_pyr, m_pyr)]
     result = np.clip(reconstruct(blended), 0, 255).astype(np.float32)
+    if stages is not None:
+        stages["lap_blend"] = _snap(result)
 
     # --- Step 4: Light wrap ---
     log(output_dir, "Step 4: Light wrap")
@@ -442,6 +450,8 @@ def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
     edge_band = ((dilated - mask_binary) > 0).astype(np.float32)
     edge_soft = cv2.GaussianBlur(edge_band, (0, 0), max(3, ks // 2))[:, :, np.newaxis]
     result = result * (1 - edge_soft * 0.25) + bg_blur * (edge_soft * 0.25)
+    if stages is not None:
+        stages["light_wrap"] = _snap(result)
 
     # --- Step 5: LAB edge color match ---
     log(output_dir, "Step 5: LAB edge color match")
@@ -459,6 +469,8 @@ def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
             continue
         res_lab[:, :, ch] += (bg_near.mean() - subj_edge.mean()) * 0.4 * inner_soft
     result = cv2.cvtColor(np.clip(res_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32)
+    if stages is not None:
+        stages["lab_edge_match"] = _snap(result)
 
     # --- Step 6: Full-image LAB 60% wash ---
     log(output_dir, "Step 6: LAB 60% color wash")
@@ -472,6 +484,8 @@ def composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
         new_std = c_std + (b_std - c_std) * 0.18
         comp_lab[:, :, ch] = (comp_lab[:, :, ch] - c_mean) * (new_std / c_std) + new_mean
     final = cv2.cvtColor(np.clip(comp_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+    if stages is not None:
+        stages["lab_full_wash"] = Image.fromarray(final)
 
     return Image.fromarray(final)
 
@@ -938,7 +952,8 @@ def main():
 
     # --- Steps 3-6: Composite pipeline (local, fast) ---
     t0 = time.time()
-    final_img = composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir)
+    composite_stages = {} if args.save_stack else None
+    final_img = composite_pipeline(src_f, bg_img, mask_binary, w, h, short_edge, output_dir, stages=composite_stages)
     t_composite = time.time() - t0
     log(output_dir, f"Steps 3-6 done ({t_composite:.1f}s)")
 
@@ -1016,14 +1031,31 @@ def main():
                 ("00_original",   "0_original.jpg"),
                 ("01_mask",       "1_mask.png"),
                 ("02_bg",         "2_bg.jpg"),
-                ("03_fgwisp_bg",  "4_fgwisp_bg.jpg"),
-                ("04_fgwisp_mask","4_fgwisp_mask.png"),
-                ("05_grain_layer","8_grain_layer.jpg"),
-                ("06_tile_refined","7b_tile_refined.jpg"),
-                ("07_face_swapped","7c_face_swapped.jpg"),
             ]
             layers = []
             for name, fname in stage_files:
+                fp = os.path.join(output_dir, fname)
+                if os.path.isfile(fp):
+                    layers.append((name, Image.open(fp)))
+            # In-memory composite sub-stages (03-06)
+            substage_order = [
+                ("03_lap_blend",      "lap_blend"),
+                ("04_light_wrap",     "light_wrap"),
+                ("05_lab_edge_match", "lab_edge_match"),
+                ("06_lab_full_wash",  "lab_full_wash"),
+            ]
+            if composite_stages:
+                for name, key in substage_order:
+                    if key in composite_stages:
+                        layers.append((name, composite_stages[key]))
+            post_files = [
+                ("07_fgwisp_bg",   "4_fgwisp_bg.jpg"),
+                ("08_fgwisp_mask", "4_fgwisp_mask.png"),
+                ("09_tile_refined","7b_tile_refined.jpg"),
+                ("10_face_swapped","7c_face_swapped.jpg"),
+                ("11_grain_layer", "8_grain_layer.jpg"),
+            ]
+            for name, fname in post_files:
                 fp = os.path.join(output_dir, fname)
                 if os.path.isfile(fp):
                     layers.append((name, Image.open(fp)))

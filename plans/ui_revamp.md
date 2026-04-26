@@ -98,7 +98,7 @@ Opened from a Run-tab thumbnail's ✨ Decorate button.
 - **Position thumbnails** — server runs `text_overlay.candidate_bboxes` (already implemented), renders the chosen text at each top-K bbox at ~25% size, returns 4-6 thumbnails. Cached by (filename, text-hash) so re-clicking is instant.
 - **Align** — overrides `text_overlay.overlay`'s align logic. `auto-edge` keeps existing behaviour.
 - **Color grade** — passes mode + strength to `color_grade.grade()`.
-- **Layered TIFF checkbox** — when ticked, the save also writes `<base>__stack.tif` via `_layered_tiff.save_stack` with all named intermediates (text-on, text-off, grade-on, grade-off, etc).
+- **Layered TIFF checkbox** — when ticked, the save also writes `<base>__stack.tif` via `_layered_tiff.save_stack` next to the JPG. Each tool's existing `--save-stack` semantics apply (named intermediates as TIFF pages). No auto-open / external viewer launch — file simply lands in the favorites folder for Ronnie to open later if desired.
 - **Live preview** — every knob change → debounced POST `/api/decorate/preview` → returns new image URL → swaps the preview img. Backend caches by knob-tuple to avoid re-rendering identical states.
 - **Save & Fav** — finalizes, copies to `favorites/`, writes sidecar JSON with full reconstruction params (text + position + align + grade mode + grade strength + tiff flag + source + style), removes the Decorate item from Run-tab board.
 
@@ -133,9 +133,7 @@ GET  /api/pipeline/candidate/<f>/watermark
 
 ## Backwards compatibility
 
-- Old routes (`/gallery`, `/candidates`, `/pipeline`, `/style-transfer`, `/tree`) keep working via redirects to the new tabbed page.
-- Existing API endpoints stay. New ones are additive.
-- Existing `pipeline_state.json` schema stays.
+**None.** Drop the old routes (`/gallery`, `/candidates`, `/pipeline`, `/style-transfer`) — the new tabbed `/` is the only entry point. `/tree` URL stays only because it's used as a deep-link in the modemenu partial; it can simply redirect to `/#tree`. Old API endpoints used exclusively by removed pages may be deleted; ones still used by the new UI stay. Schema files (`pipeline_state.json`, `style_transfer_votes.json`, etc) keep their format so existing data isn't lost.
 
 ## Implementation phases
 

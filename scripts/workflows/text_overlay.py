@@ -57,6 +57,12 @@ def gemini_mood_phrase(image_path, api_key):
         {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
       ]}],
       "generationConfig": {"maxOutputTokens": 60, "temperature": 0.4},
+      "safetySettings": [
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT",  "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HARASSMENT",         "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH",        "threshold": "BLOCK_NONE"},
+      ],
     }
     url = ("https://generativelanguage.googleapis.com/v1beta/models/"
            f"gemini-2.5-flash:generateContent?key={api_key}")
@@ -64,6 +70,11 @@ def gemini_mood_phrase(image_path, api_key):
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as r:
         d = json.loads(r.read())
+    if "candidates" not in d:
+        # blocked despite safety relaxation — fall back to generic
+        reason = d.get("promptFeedback", {}).get("blockReason", "unknown")
+        print(f"  [text] mood-phrase blocked ({reason}) — using generic")
+        return "intimate solitude, soft sorrow, longing"
     return d["candidates"][0]["content"]["parts"][0]["text"].strip().strip('"')
 
 

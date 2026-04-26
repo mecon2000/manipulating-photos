@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OpenClaw</title>
+<style>
+  :root {
+    --bg: #0b0b0c;
+    --fg: #e9e9ea;
+    --dim: #9a9a9e;
+    --accent: #ffb347;
+    --danger: #ef5b5b;
+    --ok: #5ecb8b;
+    --panel: rgba(0,0,0,0.55);
+    --border: #2a2a2e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; min-height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-tap-highlight-color: transparent; }
+  body { display: flex; flex-direction: column; min-height: 100vh; }
+
+  .tabbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; gap: 4px; padding: 8px;
+    background: var(--panel); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .tabbtn {
+    flex: 1 1 auto; min-width: 0;
+    padding: 10px 8px;
+    background: transparent; color: var(--fg);
+    border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-weight: 500;
+    cursor: pointer; white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .tabbtn:hover { background: rgba(255,255,255,0.04); }
+  .tabbtn.active {
+    background: rgba(255,179,71,0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .tabbtn .label { display: none; }
+
+  main { flex: 1; padding: 16px; }
+  section { display: none; }
+  section.active { display: block; }
+  section h2 { margin: 0 0 12px; font-size: 20px; font-weight: 600; }
+  section p.placeholder { color: var(--dim); font-size: 14px; }
+
+  @media (min-width: 700px) {
+    .tabbar { padding: 10px 14px; gap: 8px; }
+    .tabbtn { flex: 0 1 auto; padding: 10px 18px; font-size: 15px; }
+    .tabbtn .label { display: inline; margin-left: 6px; }
+    main { padding: 24px; max-width: 1400px; margin: 0 auto; width: 100%; }
+    section h2 { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+  <nav class="tabbar" role="tablist">
+    <button class="tabbtn" data-tab="candidates" role="tab">📋<span class="label">Candidates</span></button>
+    <button class="tabbtn" data-tab="run" role="tab">🎬<span class="label">Run</span></button>
+    <button class="tabbtn" data-tab="vote" role="tab">🗳<span class="label">Vote</span></button>
+    <button class="tabbtn" data-tab="favs" role="tab">⭐<span class="label">Favs</span></button>
+    <button class="tabbtn" data-tab="tree" role="tab">🌳<span class="label">Tree</span></button>
+  </nav>
+
+  <main>
+    <section id="tab-candidates" role="tabpanel">
+      <h2>📋 Candidates</h2>
+      <p class="placeholder">Candidates tab — content lands in phase 2.</p>
+    </section>
+    <section id="tab-run" role="tabpanel">
+      <h2>🎬 Run</h2>
+      <p class="placeholder">Run tab — content lands in phase 3.</p>
+    </section>
+    <section id="tab-vote" role="tabpanel">
+      <h2>🗳 Vote</h2>
+      <p class="placeholder">Vote tab — content lands in phase 5.</p>
+    </section>
+    <section id="tab-favs" role="tabpanel">
+      <h2>⭐ Favs</h2>
+      <p class="placeholder">Favs tab — content lands in phase 6.</p>
+    </section>
+    <section id="tab-tree" role="tabpanel">
+      <h2>🌳 Tree</h2>
+      <p class="placeholder">Tree tab — port from /tree in a later phase. (Direct link still works at <a href="/tree" style="color: var(--accent);">/tree</a>.)</p>
+    </section>
+  </main>
+
+<script>
+  const TABS = ["candidates", "run", "vote", "favs", "tree"];
+
+  function currentTab() {
+    const h = (location.hash || "").replace(/^#/, "");
+    return TABS.includes(h) ? h : "candidates";
+  }
+
+  function showTab(name) {
+    if (!TABS.includes(name)) name = "candidates";
+    for (const t of TABS) {
+      const sec = document.getElementById("tab-" + t);
+      if (sec) sec.classList.toggle("active", t === name);
+    }
+    document.querySelectorAll(".tabbtn").forEach(b => {
+      b.classList.toggle("active", b.dataset.tab === name);
+    });
+  }
+
+  function navigate(name) {
+    if (location.hash.replace(/^#/, "") === name) {
+      showTab(name);
+    } else {
+      location.hash = name;
+    }
+  }
+
+  document.querySelectorAll(".tabbtn").forEach(b => {
+    b.addEventListener("click", () => navigate(b.dataset.tab));
+  });
+
+  window.addEventListener("hashchange", () => showTab(currentTab()));
+
+  document.addEventListener("keydown", e => {
+    if (e.target && e.target.tagName === "INPUT") return;
+    if (e.target && e.target.tagName === "TEXTAREA") return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const idx = ["1","2","3","4","5"].indexOf(e.key);
+    if (idx >= 0) {
+      e.preventDefault();
+      navigate(TABS[idx]);
+    }
+  });
+
+  showTab(currentTab());
+</script>
+</body>
+</html>

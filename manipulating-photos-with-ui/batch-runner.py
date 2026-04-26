@@ -681,13 +681,15 @@ app = Flask(__name__, template_folder=str(SCRIPT_DIR / "templates"))
 
 @app.route("/")
 def index():
-    return render_template("gallery.html")
+    return render_template("index.html")
 
-@app.route("/candidates")
+# UI revamp phase 1: old page routes removed. Handler bodies kept for
+# phases 2-5 which will repurpose them as tab content / API endpoints.
+# @app.route("/candidates")
 def candidates_page():
     return render_template("candidates.html")
 
-@app.route("/gallery")
+# @app.route("/gallery")
 def gallery_page():
     return render_template("gallery.html")
 
@@ -716,7 +718,8 @@ def _st_save_votes(d):
     ST_VOTES_PATH.write_text(json.dumps(d, indent=2))
 
 
-@app.route("/style-transfer")
+# UI revamp phase 1: route disabled, handler kept for phase 5 (Vote tab).
+# @app.route("/style-transfer")
 def style_transfer_page():
     return render_template("style_transfer.html")
 
@@ -1515,7 +1518,8 @@ def _pipe_face_quality(path):
         return "none"
 
 
-@app.route("/pipeline")
+# UI revamp phase 1: route disabled, handler kept for phase 3 (Run tab).
+# @app.route("/pipeline")
 def pipeline_page():
     return render_template("pipeline.html")
 

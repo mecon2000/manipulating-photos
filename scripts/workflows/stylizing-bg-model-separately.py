@@ -1362,6 +1362,32 @@ def run_workflow(args):
                     f_out.write(f_in.read())
             log(output_dir, f"Final copied to: {finals_dest}")
 
+            # --save-stack: aggregate intermediates into a multi-page TIFF
+            if args.save_stack:
+                try:
+                    from _layered_tiff import save_stack
+                    stage_files = [
+                        ("00_original",        "0_original.jpg"),
+                        ("01_mask",            "1_mask.png"),
+                        ("02_bg_clean",        "2_bg_clean.jpg"),
+                        ("03_model_only",      "3_model_input.jpg"),
+                        ("04_bg_stylized",     "3a_bg_stylized.jpg"),
+                        ("05_model_stylized",  "3b_model_stylized.jpg"),
+                        ("06_composite",       "4_composite.jpg"),
+                        ("07_faceswapped",     "5_faceswapped.jpg"),
+                    ]
+                    layers = []
+                    for name, fname in stage_files:
+                        fp = os.path.join(output_dir, fname)
+                        if os.path.isfile(fp):
+                            layers.append((name, Image.open(fp)))
+                    layers.append(("99_final", Image.open(final_path)))
+                    stack_path = os.path.join(finals_dir, os.path.basename(output_dir) + "__stack.tif")
+                    save_stack(stack_path, layers)
+                    log(output_dir, f"Stack: {stack_path} ({len(layers)} layers)")
+                except Exception as e:
+                    log(output_dir, f"save-stack failed: {e}", "WARN")
+
             # Push to phone
             try:
                 from notify import push_image
@@ -1498,6 +1524,8 @@ def main():
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
 
     parser.add_argument("--list-styles", action="store_true", help="List all available styles and exit")
+    parser.add_argument("--save-stack", action="store_true",
+                        help="export pipeline stages as a multi-page TIFF (<finals>__stack.tif)")
 
     args = parser.parse_args()
 

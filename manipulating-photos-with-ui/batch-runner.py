@@ -1606,6 +1606,44 @@ def api_pipe_crop_apply(filename, n):
     return jsonify({"ok": True, "output": str(src)})
 
 
+@app.route("/api/pipeline/candidate/<filename>/watermark")
+def api_pipe_watermark(filename):
+    src = PIPELINE_CAND_DIR / filename
+    if not src.is_file():
+        abort(404)
+    try:
+        mt = int(src.stat().st_mtime)
+    except OSError:
+        abort(404)
+    state = _pipe_load_state()
+    cands = state.setdefault("candidates", {})
+    entry = cands.setdefault(filename, {})
+    cached = entry.get("watermark")
+    if isinstance(cached, dict) and cached.get("scanned_mtime") == mt:
+        return jsonify({"watermark": cached})
+    # Lazy-run watermark scan
+    try:
+        import watermark_check  # type: ignore
+    except Exception as e:
+        return jsonify({"error": f"import watermark_check: {e}"}), 500
+    key = watermark_check.load_key()
+    if not key:
+        return jsonify({"error": "GOOGLE_API_KEY missing"}), 500
+    res = watermark_check.scan_image(key, src)
+    if res.get("error"):
+        return jsonify({"error": res["error"]}), 500
+    wm = {
+        "has_watermark": bool(res.get("has_watermark")),
+        "text": res.get("text") or "",
+        "location": res.get("location") or "",
+        "scanned_mtime": mt,
+    }
+    entry["watermark"] = wm
+    cands[filename] = entry
+    _pipe_save_state(state)
+    return jsonify({"watermark": wm})
+
+
 @app.route("/api/pipeline/styles")
 def api_pipe_styles():
     items = []

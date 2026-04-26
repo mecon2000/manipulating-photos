@@ -2066,6 +2066,105 @@ def api_favs_list():
     return jsonify({"favorites": out})
 
 
+# --- Favs thumbnail cache --------------------------------------------------
+
+FAVS_THUMB_CACHE = SHARED_DIR / ".favs_thumb_cache"
+
+
+@app.route("/api/favs/thumbnail/<filename>")
+def api_favs_thumbnail(filename):
+    """Return a downscaled JPEG thumbnail of a favorite. Cached on disk by mtime."""
+    try:
+        size = int(request.args.get("size", "400"))
+    except ValueError:
+        size = 400
+    size = max(64, min(1024, size))
+    src = FAVORITES_DIR / filename
+    if not src.is_file():
+        abort(404)
+    try:
+        mt = int(src.stat().st_mtime)
+    except OSError:
+        abort(404)
+    FAVS_THUMB_CACHE.mkdir(parents=True, exist_ok=True)
+    cache_path = FAVS_THUMB_CACHE / f"{Path(filename).stem}__{size}__{mt}.jpg"
+    if not cache_path.is_file():
+        try:
+            from PIL import Image  # type: ignore
+            im = Image.open(src)
+            im = im.convert("RGB")
+            im.thumbnail((size, size), Image.LANCZOS)
+            im.save(cache_path, "JPEG", quality=82, optimize=True)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        # Best-effort: prune any stale thumbs for this stem (different mtimes).
+        try:
+            stem = Path(filename).stem
+            for p in FAVS_THUMB_CACHE.glob(f"{stem}__{size}__*.jpg"):
+                if p != cache_path:
+                    try: p.unlink()
+                    except OSError: pass
+        except Exception:
+            pass
+    return send_file(str(cache_path))
+
+
+# --- Pipeline: candidate remove + restore ----------------------------------
+
+# In-memory undo stack for the current session: filename -> bytes
+PIPE_REMOVED_BYTES: dict = {}
+
+
+@app.route("/api/pipeline/candidate/<filename>/remove", methods=["POST"])
+def api_pipe_candidate_remove(filename):
+    src = PIPELINE_CAND_DIR / filename
+    if not src.is_file():
+        abort(404)
+    try:
+        data = src.read_bytes()
+        PIPE_REMOVED_BYTES[filename] = data
+        # cap stack at 5
+        while len(PIPE_REMOVED_BYTES) > 5:
+            # drop oldest insertion (Python dict preserves order)
+            oldest = next(iter(PIPE_REMOVED_BYTES))
+            PIPE_REMOVED_BYTES.pop(oldest, None)
+        # add to motion-streak rejects so the auto-picker won't bring it back
+        try:
+            MS_REJECTS.add(str(src))
+            ms_save_rejects(MS_REJECTS)
+        except Exception:
+            pass
+        # delete the file
+        src.unlink()
+        # invalidate cached state
+        state = _pipe_load_state()
+        state.setdefault("candidates", {}).pop(filename, None)
+        _pipe_save_state(state)
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
+@app.route("/api/pipeline/candidate/<filename>/restore", methods=["POST"])
+def api_pipe_candidate_restore(filename):
+    data = PIPE_REMOVED_BYTES.pop(filename, None)
+    if data is None:
+        return jsonify({"ok": False, "error": "no undo data for this file"}), 404
+    dest = PIPELINE_CAND_DIR / filename
+    try:
+        PIPELINE_CAND_DIR.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        # remove from rejects
+        try:
+            MS_REJECTS.discard(str(dest))
+            ms_save_rejects(MS_REJECTS)
+        except Exception:
+            pass
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
 # --- Decorate modal endpoints ---------------------------------------------
 
 DECORATE_CACHE_DIR = SHARED_DIR / "decorate_cache"

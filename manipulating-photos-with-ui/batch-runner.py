@@ -1845,6 +1845,227 @@ def api_pipe_bad(filename):
     return jsonify({"ok": True})
 
 
+# --- Vote tab: surreal-with-face pool -------------------------------------
+
+SWF_VOTES_PATH = SHARED_DIR / "surreal_with_face_votes.json"
+
+
+def _swf_load_votes():
+    if not SWF_VOTES_PATH.is_file():
+        return {}
+    try:
+        return json.loads(SWF_VOTES_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _swf_save_votes(d):
+    SHARED_DIR.mkdir(parents=True, exist_ok=True)
+    SWF_VOTES_PATH.write_text(json.dumps(d, indent=2))
+
+
+@app.route("/api/surreal-with-face/list")
+def api_swf_list():
+    items = []
+    if PIPELINE_OUT_DIR.is_dir():
+        votes = _swf_load_votes()
+        for f in sorted(PIPELINE_OUT_DIR.iterdir()):
+            if f.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+                continue
+            # only __final.jpg, skip __final_4x.jpg and intermediates
+            stem = f.stem
+            if not stem.endswith("__final"):
+                continue
+            parts = stem.split("__style_")
+            source = parts[0] if len(parts) == 2 else stem
+            style = parts[1].replace("__final", "") if len(parts) == 2 else ""
+            items.append({
+                "file": f.name, "path": str(f),
+                "source": source, "style": style,
+                "vote": votes.get(f.name, None),
+            })
+    return jsonify({"items": items})
+
+
+@app.route("/api/surreal-with-face/<filename>/good", methods=["POST"])
+def api_swf_good(filename):
+    src = PIPELINE_OUT_DIR / filename
+    if not src.is_file():
+        abort(404)
+    votes = _swf_load_votes()
+    votes[filename] = "good"
+    _swf_save_votes(votes)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/surreal-with-face/<filename>/bad", methods=["POST"])
+def api_swf_bad(filename):
+    src = PIPELINE_OUT_DIR / filename
+    if not src.is_file():
+        abort(404)
+    PIPELINE_BAD_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(src), str(PIPELINE_BAD_DIR / filename))
+    except OSError:
+        pass
+    sidecar = src.with_suffix(".json")
+    if sidecar.is_file():
+        try:
+            shutil.move(str(sidecar), str(PIPELINE_BAD_DIR / sidecar.name))
+        except OSError:
+            pass
+    votes = _swf_load_votes()
+    votes[filename] = "bad"
+    _swf_save_votes(votes)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/surreal-with-face/<filename>/fav", methods=["POST"])
+def api_swf_fav(filename):
+    src = PIPELINE_OUT_DIR / filename
+    if not src.is_file():
+        abort(404)
+    FAVORITES_DIR.mkdir(parents=True, exist_ok=True)
+    fav_name = f"surreal-with-face__{filename}"
+    fav_path = FAVORITES_DIR / fav_name
+    try:
+        shutil.copyfile(src, fav_path)
+    except OSError:
+        from PIL import Image
+        Image.open(src).save(fav_path, quality=95)
+    sidecar = src.with_suffix(".json")
+    meta_extra = {}
+    if sidecar.is_file():
+        try:
+            meta_extra = json.loads(sidecar.read_text())
+            shutil.copyfile(sidecar, FAVORITES_DIR / f"{Path(fav_name).stem}.json")
+        except Exception:
+            pass
+    try:
+        git_hash = subprocess.check_output(
+            ["git", "-C", str(WORKFLOWS_DIR), "rev-parse", "--short", "HEAD"],
+            text=True, timeout=5).strip()
+    except Exception:
+        git_hash = None
+    entry = {
+        "file": fav_name, "tool": "surreal_with_face",
+        "style": meta_extra.get("style"), "source": meta_extra.get("source"),
+        "git_commit": git_hash, "favorited_at": now_str(),
+        "command": meta_extra.get("command") or meta_extra.get("prompt"),
+    }
+    data = {"favorites": []}
+    if FAVORITES_JSON.is_file():
+        try:
+            data = json.loads(FAVORITES_JSON.read_text())
+        except Exception:
+            pass
+    data.setdefault("favorites", []).append(entry)
+    FAVORITES_JSON.write_text(json.dumps(data, indent=2))
+    votes = _swf_load_votes()
+    votes[filename] = "fav"
+    _swf_save_votes(votes)
+    return jsonify({"ok": True, "fav": fav_name})
+
+
+# --- Vote tab: decorated pool (already-faved decorate outputs) ------------
+
+DECORATED_VOTES_PATH = SHARED_DIR / "decorated_votes.json"
+
+
+def _dec_load_votes():
+    if not DECORATED_VOTES_PATH.is_file():
+        return {}
+    try:
+        return json.loads(DECORATED_VOTES_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _dec_save_votes(d):
+    SHARED_DIR.mkdir(parents=True, exist_ok=True)
+    DECORATED_VOTES_PATH.write_text(json.dumps(d, indent=2))
+
+
+@app.route("/api/decorated/list")
+def api_decorated_list():
+    items = []
+    if FAVORITES_DIR.is_dir():
+        votes = _dec_load_votes()
+        for f in sorted(FAVORITES_DIR.iterdir()):
+            if f.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+                continue
+            if not f.stem.endswith("__decorated"):
+                continue
+            items.append({
+                "file": f.name, "path": str(f),
+                "source": f.stem.replace("__decorated", ""),
+                "style": "decorated",
+                "vote": votes.get(f.name, None),
+            })
+    return jsonify({"items": items})
+
+
+@app.route("/api/decorated/<filename>/good", methods=["POST"])
+def api_decorated_good(filename):
+    src = FAVORITES_DIR / filename
+    if not src.is_file():
+        abort(404)
+    votes = _dec_load_votes()
+    votes[filename] = "good"
+    _dec_save_votes(votes)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/decorated/<filename>/bad", methods=["POST"])
+def api_decorated_bad(filename):
+    src = FAVORITES_DIR / filename
+    if not src.is_file():
+        abort(404)
+    votes = _dec_load_votes()
+    votes[filename] = "bad"
+    _dec_save_votes(votes)
+    return jsonify({"ok": True})
+
+
+# --- Favs tab -------------------------------------------------------------
+
+@app.route("/api/favs/list")
+def api_favs_list():
+    out = []
+    data = {"favorites": []}
+    if FAVORITES_JSON.is_file():
+        try:
+            data = json.loads(FAVORITES_JSON.read_text())
+        except Exception:
+            data = {"favorites": []}
+    for entry in data.get("favorites", []):
+        fname = entry.get("file") or ""
+        path = FAVORITES_DIR / fname
+        # supplement with sidecar JSON if missing fields
+        sidecar_data = {}
+        if fname:
+            sj = FAVORITES_DIR / (Path(fname).stem + ".json")
+            if sj.is_file():
+                try:
+                    sidecar_data = json.loads(sj.read_text())
+                except Exception:
+                    pass
+        out.append({
+            "file": fname,
+            "path": str(path),
+            "exists": path.is_file(),
+            "model": entry.get("model") or sidecar_data.get("model"),
+            "tool": entry.get("tool") or sidecar_data.get("tool"),
+            "style": entry.get("style") or sidecar_data.get("style"),
+            "source": entry.get("source") or sidecar_data.get("source"),
+            "command": entry.get("command") or sidecar_data.get("command"),
+            "git_commit": entry.get("git_commit") or sidecar_data.get("git_commit"),
+            "favorited_at": entry.get("favorited_at") or sidecar_data.get("favorited_at"),
+            "raw": entry,
+        })
+    return jsonify({"favorites": out})
+
+
 # --- Decorate modal endpoints ---------------------------------------------
 
 DECORATE_CACHE_DIR = SHARED_DIR / "decorate_cache"

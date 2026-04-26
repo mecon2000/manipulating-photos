@@ -366,16 +366,71 @@
       </div>
     </section>
     <section id="tab-vote" role="tabpanel">
-      <h2>🗳 Vote</h2>
-      <p class="placeholder">Vote tab — content lands in phase 5.</p>
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+        <h2 style="margin:0;">🗳 Vote</h2>
+        <span id="vote-count" style="color:var(--dim); font-size:13px;"></span>
+      </div>
+      <div class="filter-row" id="vote-pools">
+        <button class="pill active" data-pool="motion-streak">motion-streak</button>
+        <button class="pill" data-pool="style-transfer">style-transfer</button>
+        <button class="pill" data-pool="surreal-with-face">surreal-with-face</button>
+        <button class="pill" data-pool="decorated">decorated</button>
+        <button class="pill" id="vote-scoreboard-btn" style="margin-left:auto;">📊 scoreboard</button>
+      </div>
+      <div id="vote-empty" style="display:none; color:var(--dim); padding:40px; text-align:center;">No items.</div>
+      <div id="vote-area" style="display:flex; flex-direction:column; gap:10px;">
+        <div id="vote-img-wrap" style="background:#000; border:1px solid var(--border); border-radius:8px; display:flex; align-items:center; justify-content:center; max-height:70vh; min-height:300px; overflow:hidden;">
+          <img id="vote-img" style="max-width:100%; max-height:70vh; object-fit:contain;">
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn" id="vote-prev" style="flex:0; min-width:60px;">←</button>
+          <button class="btn" id="vote-bad" style="flex:1; background:#7a2929; border-color:#7a2929; color:#fff;">👎 Bad (b)</button>
+          <button class="btn" id="vote-good" style="flex:1; background:#2f7a3f; border-color:#2f7a3f; color:#fff;">✅ Good (g)</button>
+          <button class="btn" id="vote-fav" style="flex:1; background:#c49a1a; border-color:#c49a1a; color:#000;">⭐ Fav (f)</button>
+          <button class="btn" id="vote-next" style="flex:0; min-width:60px;">→</button>
+        </div>
+        <div id="vote-meta" style="color:var(--dim); font-size:12px;"></div>
+      </div>
+      <div id="vote-scoreboard" style="display:none; margin-top:12px; padding:12px; border:1px solid var(--border); border-radius:8px;">
+        <h3 style="margin:0 0 8px;">Style scoreboard (style-transfer pool)</h3>
+        <p style="color:var(--dim); font-size:12px; margin:0 0 8px;">score = fav×2 + good − bad</p>
+        <div style="overflow-x:auto;"><table id="vote-sb-table" style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead><tr><th style="text-align:left; border-bottom:1px solid var(--border); padding:4px;">#</th><th style="text-align:left; border-bottom:1px solid var(--border); padding:4px;">Style</th><th style="border-bottom:1px solid var(--border); padding:4px;">Score</th><th style="border-bottom:1px solid var(--border); padding:4px;">Fav</th><th style="border-bottom:1px solid var(--border); padding:4px;">Good</th><th style="border-bottom:1px solid var(--border); padding:4px;">Bad</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
     </section>
     <section id="tab-favs" role="tabpanel">
-      <h2>⭐ Favs</h2>
-      <p class="placeholder">Favs tab — content lands in phase 6.</p>
+      <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+        <h2 style="margin:0;">⭐ Favs</h2>
+        <span id="favs-count" style="color:var(--dim); font-size:13px;"></span>
+      </div>
+      <div class="filter-row" id="favs-filters">
+        <button class="pill active" data-favfilter="all">all</button>
+        <button class="pill" data-favfilter="decorated">decorated</button>
+        <button class="pill" data-favfilter="surreal-with-face">surreal-with-face</button>
+        <button class="pill" data-favfilter="motion-streak">motion-streak</button>
+        <button class="pill" data-favfilter="baroque-surround">baroque</button>
+        <button class="pill" data-favfilter="others">others</button>
+      </div>
+      <div id="favs-layout" style="display:grid; grid-template-columns:1fr; gap:14px;">
+        <div id="favs-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px; align-content:start;"></div>
+        <div id="favs-detail" style="display:none; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px;">
+          <div style="display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:8px;">
+            <strong id="favs-detail-title" style="word-break:break-all;"></strong>
+            <button class="btn" id="favs-detail-close" style="padding:4px 10px;">✕</button>
+          </div>
+          <img id="favs-detail-img" style="max-width:100%; max-height:50vh; object-fit:contain; display:block; background:#000; border-radius:6px;">
+          <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn" id="favs-copy-cmd" style="flex:1; background:var(--accent); border-color:var(--accent); color:#000;">📋 Copy reproduction command</button>
+            <button class="btn" id="favs-copy-path" style="flex:1;">📂 Copy folder path</button>
+          </div>
+          <pre id="favs-detail-json" style="margin-top:8px; padding:10px; background:#0a0a0c; border:1px solid var(--border); border-radius:6px; font-size:11px; overflow:auto; max-height:40vh; white-space:pre-wrap; word-break:break-all;"></pre>
+        </div>
+      </div>
     </section>
-    <section id="tab-tree" role="tabpanel">
-      <h2>🌳 Tree</h2>
-      <p class="placeholder">Tree tab — port from /tree in a later phase. (Direct link still works at <a href="/tree" style="color: var(--accent);">/tree</a>.)</p>
+    <section id="tab-tree" role="tabpanel" style="padding:0; margin:0;">
+      <iframe id="tree-iframe" src="about:blank" style="width:100%; height:calc(100vh - 80px); border:0; display:block;"></iframe>
     </section>
   </main>
 
@@ -1276,6 +1331,253 @@
     }
     btn.disabled = false; btn.textContent = "Save & Fav";
   });
+
+  // ---- Vote tab ----
+  // Pools:
+  //   motion-streak: /api/candidates/list -> {candidates: [{id, output, source, style, ...}]}
+  //                  vote endpoints /api/candidates/<id>/{good,bad,fav-as-is}
+  //   style-transfer / surreal-with-face / decorated:
+  //                  list returns {items:[{file, path, source, style, vote}]}
+  //                  vote endpoints /api/<pool>/<filename>/{good,bad,fav}
+  const VOTE_POOLS = {
+    "motion-streak": {
+      list: "/api/candidates/list",
+      vote: (id, kind) => `/api/candidates/${encodeURIComponent(id)}/${kind === "fav" ? "fav-as-is" : kind}`,
+      hasFav: true,
+      parse: d => (d.candidates || []).map(c => ({
+        id: c.id, file: c.id,
+        path: c.output || c.source,
+        source: (c.source || "").split("/").pop() || c.source,
+        style: c.style || "",
+        vote: null,
+      })),
+    },
+    "style-transfer": {
+      list: "/api/style-transfer/list",
+      vote: (id, kind) => `/api/style-transfer/${encodeURIComponent(id)}/${kind}`,
+      hasFav: true,
+      parse: d => (d.items || []).filter(i => !i.vote),
+    },
+    "surreal-with-face": {
+      list: "/api/surreal-with-face/list",
+      vote: (id, kind) => `/api/surreal-with-face/${encodeURIComponent(id)}/${kind}`,
+      hasFav: true,
+      parse: d => (d.items || []).filter(i => !i.vote),
+    },
+    "decorated": {
+      list: "/api/decorated/list",
+      vote: (id, kind) => `/api/decorated/${encodeURIComponent(id)}/${kind}`,
+      hasFav: false,
+      parse: d => (d.items || []).filter(i => !i.vote),
+    },
+  };
+
+  let votePool = "motion-streak";
+  let voteItems = [];
+  let voteCursor = 0;
+  let voteActing = false;
+  let voteLoaded = false;
+
+  async function loadVotePool() {
+    const pool = VOTE_POOLS[votePool];
+    voteItems = [];
+    voteCursor = 0;
+    try {
+      const r = await fetch(pool.list);
+      const d = await r.json();
+      voteItems = pool.parse(d);
+    } catch (e) {
+      voteItems = [];
+    }
+    renderVote();
+  }
+
+  function renderVote() {
+    const empty = document.getElementById("vote-empty");
+    const area = document.getElementById("vote-area");
+    const cnt = document.getElementById("vote-count");
+    cnt.textContent = voteItems.length ? `${voteCursor + 1}/${voteItems.length} · ${votePool}` : `0 in ${votePool}`;
+    if (!voteItems.length) {
+      empty.style.display = "block"; area.style.display = "none"; return;
+    }
+    empty.style.display = "none"; area.style.display = "flex";
+    const it = voteItems[voteCursor];
+    const img = document.getElementById("vote-img");
+    img.src = "/api/image?path=" + encodeURIComponent(it.path) + "&_=" + encodeURIComponent(it.file || "");
+    const meta = document.getElementById("vote-meta");
+    meta.textContent = `${it.source || it.file}${it.style ? "  ·  style: " + it.style : ""}`;
+    document.getElementById("vote-fav").style.display = VOTE_POOLS[votePool].hasFav ? "" : "none";
+  }
+
+  async function voteAct(kind) {
+    if (voteActing || !voteItems.length) return;
+    if (kind === "fav" && !VOTE_POOLS[votePool].hasFav) return;
+    voteActing = true;
+    const it = voteItems[voteCursor];
+    try {
+      await fetch(VOTE_POOLS[votePool].vote(it.id || it.file, kind), {method: "POST"});
+      showToast({good:"✅",bad:"👎",fav:"⭐"}[kind] + " " + kind);
+    } catch (e) {
+      showToast("Error");
+    }
+    voteItems.splice(voteCursor, 1);
+    if (voteCursor >= voteItems.length) voteCursor = Math.max(0, voteItems.length - 1);
+    voteActing = false;
+    renderVote();
+  }
+
+  function voteNav(d) {
+    if (!voteItems.length) return;
+    voteCursor = (voteCursor + d + voteItems.length) % voteItems.length;
+    renderVote();
+  }
+
+  document.querySelectorAll('#vote-pools [data-pool]').forEach(b => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll('#vote-pools .pill').forEach(p => p.classList.remove("active"));
+      b.classList.add("active");
+      votePool = b.dataset.pool;
+      document.getElementById("vote-scoreboard").style.display = "none";
+      loadVotePool();
+    });
+  });
+  document.getElementById("vote-prev").addEventListener("click", () => voteNav(-1));
+  document.getElementById("vote-next").addEventListener("click", () => voteNav(1));
+  document.getElementById("vote-good").addEventListener("click", () => voteAct("good"));
+  document.getElementById("vote-bad").addEventListener("click", () => voteAct("bad"));
+  document.getElementById("vote-fav").addEventListener("click", () => voteAct("fav"));
+
+  document.getElementById("vote-scoreboard-btn").addEventListener("click", async () => {
+    const sb = document.getElementById("vote-scoreboard");
+    const open = sb.style.display !== "block";
+    sb.style.display = open ? "block" : "none";
+    if (open) {
+      try {
+        const d = await fetch("/api/style-transfer/scoreboard").then(r => r.json());
+        const tb = document.querySelector("#vote-sb-table tbody");
+        tb.innerHTML = "";
+        (d.styles || []).forEach((s, i) => {
+          tb.insertAdjacentHTML("beforeend",
+            `<tr><td style="padding:4px;">${i+1}</td><td style="padding:4px;">${s.style}</td><td style="text-align:center;">${s.score}</td><td style="text-align:center;">${s.fav}</td><td style="text-align:center;">${s.good}</td><td style="text-align:center;">${s.bad}</td></tr>`);
+        });
+      } catch (e) {}
+    }
+  });
+
+  document.addEventListener("keydown", e => {
+    if (currentTab() !== "vote") return;
+    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); voteNav(-1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); voteNav(1); }
+    else if (e.key === "g" || e.key === "G") { e.preventDefault(); voteAct("good"); }
+    else if (e.key === "b" || e.key === "B") { e.preventDefault(); voteAct("bad"); }
+    else if (e.key === "f" || e.key === "F") { e.preventDefault(); voteAct("fav"); }
+  });
+
+  function maybeLoadVote() {
+    if (currentTab() !== "vote") return;
+    if (!voteLoaded) { voteLoaded = true; loadVotePool(); }
+  }
+  window.addEventListener("hashchange", maybeLoadVote);
+  maybeLoadVote();
+
+  // ---- Favs tab ----
+  let favsAll = [];
+  let favsFilter = "all";
+  let favsLoaded = false;
+  let favsSelected = null;
+
+  async function loadFavs() {
+    try {
+      const d = await fetch("/api/favs/list").then(r => r.json());
+      favsAll = (d.favorites || []).filter(f => f.exists).reverse(); // newest first
+    } catch (e) { favsAll = []; }
+    renderFavs();
+  }
+
+  function favCategory(f) {
+    const tool = (f.tool || "").toLowerCase();
+    const file = (f.file || "").toLowerCase();
+    if (file.includes("__decorated") || tool === "decorate") return "decorated";
+    if (tool === "surreal_with_face" || file.startsWith("surreal-with-face__")) return "surreal-with-face";
+    if (tool === "motion-streak" || file.startsWith("motion-streak__")) return "motion-streak";
+    if (tool === "baroque-surround" || file.includes("baroque")) return "baroque-surround";
+    return "others";
+  }
+
+  function renderFavs() {
+    const grid = document.getElementById("favs-grid");
+    const cnt = document.getElementById("favs-count");
+    grid.innerHTML = "";
+    const filtered = favsFilter === "all" ? favsAll : favsAll.filter(f => favCategory(f) === favsFilter);
+    cnt.textContent = `${filtered.length} faves`;
+    for (const f of filtered) {
+      const card = document.createElement("div");
+      card.style.cssText = "cursor:pointer; background:#000; border:1px solid var(--border); border-radius:8px; overflow:hidden; aspect-ratio:1/1; position:relative;";
+      card.innerHTML = `<img src="/api/image?path=${encodeURIComponent(f.path)}" style="width:100%; height:100%; object-fit:cover; display:block;">
+        <div style="position:absolute; bottom:0; left:0; right:0; background:linear-gradient(transparent,rgba(0,0,0,0.85)); padding:14px 6px 4px; font-size:10px; color:#fff;">${(f.tool||"")} · ${(f.style||"")}</div>`;
+      card.addEventListener("click", () => showFavDetail(f));
+      grid.appendChild(card);
+    }
+  }
+
+  function showFavDetail(f) {
+    favsSelected = f;
+    const det = document.getElementById("favs-detail");
+    det.style.display = "block";
+    document.getElementById("favs-detail-title").textContent = f.file;
+    document.getElementById("favs-detail-img").src = "/api/image?path=" + encodeURIComponent(f.path);
+    document.getElementById("favs-detail-json").textContent = JSON.stringify(f.raw || f, null, 2);
+    // 2-col layout on desktop when detail visible
+    const layout = document.getElementById("favs-layout");
+    if (window.innerWidth >= 900) layout.style.gridTemplateColumns = "1fr 1fr";
+  }
+
+  document.getElementById("favs-detail-close").addEventListener("click", () => {
+    document.getElementById("favs-detail").style.display = "none";
+    document.getElementById("favs-layout").style.gridTemplateColumns = "1fr";
+    favsSelected = null;
+  });
+
+  document.getElementById("favs-copy-cmd").addEventListener("click", () => {
+    if (!favsSelected) return;
+    const cmd = favsSelected.command || "(no command in sidecar)";
+    navigator.clipboard.writeText(cmd).then(() => showToast("📋 Copied command"))
+      .catch(() => showToast("Copy failed"));
+  });
+  document.getElementById("favs-copy-path").addEventListener("click", () => {
+    if (!favsSelected) return;
+    navigator.clipboard.writeText(favsSelected.path).then(() => showToast("📋 Copied path"))
+      .catch(() => showToast("Copy failed"));
+  });
+
+  document.querySelectorAll('#favs-filters [data-favfilter]').forEach(b => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll('#favs-filters .pill').forEach(p => p.classList.remove("active"));
+      b.classList.add("active");
+      favsFilter = b.dataset.favfilter;
+      renderFavs();
+    });
+  });
+
+  function maybeLoadFavs() {
+    if (currentTab() !== "favs") return;
+    if (!favsLoaded) { favsLoaded = true; loadFavs(); }
+  }
+  window.addEventListener("hashchange", maybeLoadFavs);
+  maybeLoadFavs();
+
+  // ---- Tree tab (iframe of /tree) ----
+  let treeLoaded = false;
+  function maybeLoadTree() {
+    if (currentTab() !== "tree") return;
+    if (treeLoaded) return;
+    treeLoaded = true;
+    document.getElementById("tree-iframe").src = "/tree";
+  }
+  window.addEventListener("hashchange", maybeLoadTree);
+  maybeLoadTree();
 </script>
 </body>
 </html>

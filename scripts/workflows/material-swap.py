@@ -456,6 +456,8 @@ def main():
                         help="Where to output results (default: local)")
     parser.add_argument("--local-output-dir", default=None, help="Custom local output directory")
     parser.add_argument("--list-presets", action="store_true", help="List all material presets and exit")
+    parser.add_argument("--save-stack", action="store_true",
+                        help="export pipeline stages as a multi-page TIFF")
     add_affect_args(parser)  # adds --affect (default: subject) and --exclude
     args = parser.parse_args()
 
@@ -689,6 +691,28 @@ def main():
             with open(finals_dest, "wb") as f_out:
                 f_out.write(f_in.read())
         log(output_dir, f"Final copied to: {finals_dest}")
+
+        # --save-stack
+        if args.save_stack:
+            try:
+                from _layered_tiff import save_stack
+                stage_files = [
+                    ("00_original",          "0_original.jpg"),
+                    ("01_mask",              "1_mask.png"),
+                    ("02_subject_input",     "2_subject_input.jpg"),
+                    ("03_material_stylized", "2_material_stylized.jpg"),
+                ]
+                layers = []
+                for name, fname in stage_files:
+                    fp = os.path.join(output_dir, fname)
+                    if os.path.isfile(fp):
+                        layers.append((name, Image.open(fp)))
+                layers.append(("99_final", Image.open(final_path)))
+                stack_path = os.path.join(finals_dir, os.path.basename(output_dir) + "__stack.tif")
+                save_stack(stack_path, layers)
+                log(output_dir, f"Stack: {stack_path} ({len(layers)} layers)")
+            except Exception as e:
+                log(output_dir, f"save-stack failed: {e}", "WARN")
 
         # Push to phone
         try:

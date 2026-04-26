@@ -78,6 +78,7 @@ graph TD
     NSFW_INPAINT["💭 NSFW-safe inpainting<br/>SDXL uncensored or ComfyUI"]:::idea
     REFARTIST["💭 reference artist style<br/>Forms engulf subject<br/>The original goal — 80% there"]:::idea
     BGONLYSTYLE["💭 BG-only style transfer<br/>Apply IPAdapter only to BG via mask<br/>Composite original subject back<br/>Avoids clothing/skin contamination"]:::idea
+    LAYEREDTIFF["💭 layered TIFF/PSD export<br/>--save-stack flag on surreal_with_face<br/>bw_relit, surreal, mask, matched, final<br/>each as a layer, opens in Photoshop"]:::idea
 
     %% EDGES  (foundation nodes — MASK/SEGMENT/NOTIFY/PHOTODB/CAND/CROP —
     %%  are intentionally isolated: they connect to everything, so drawing

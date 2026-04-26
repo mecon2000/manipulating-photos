@@ -135,44 +135,49 @@ def face_bbox(pose):
 
 # ---- Placement -----------------------------------------------------------
 
-def candidate_bboxes(W, H, pose, text_w, text_h):
-    """Return a list of (x, y) candidate top-left positions, ordered preferred-first.
+MIN_MARGIN = 40   # min pixels from any image edge
 
-    Heuristic: if face detected, place opposite the face horizontally at chin
-    height; otherwise four corner / center candidates.
+
+def candidate_bboxes(W, H, pose, text_w, text_h, margin=MIN_MARGIN):
+    """Return a list of (x, y) candidate top-left positions, ordered preferred-first.
+    All candidates respect at least `margin` px from any edge.
     """
-    pad = int(min(W, H) * 0.04)
     out = []
     if pose:
         bb = face_bbox(pose)
         if bb:
             fx0, fy0, fx1, fy1 = bb
             face_cx = (fx0 + fx1) / 2
-            chin_y = fy1                              # chin line approx
+            chin_y = fy1
             # opposite-face horizontal at chin height
             if face_cx > W / 2:
-                # face on right → text on left
-                x_left = pad
+                x = margin                             # text on left
             else:
-                x_left = W - text_w - pad
-            out.append((int(x_left), int(min(chin_y, H - text_h - pad))))
-            # also try below-knees
+                x = W - text_w - margin                # text on right
+            y = int(min(chin_y, H - text_h - margin))
+            y = max(margin, y)
+            out.append((int(x), int(y)))
+            # also try below-knees, centered
             P = pose["P"]
             try:
                 knee_y = max(P(25)[1], P(26)[1])
-                out.append((max(pad, (W - text_w)//2), int(min(knee_y + pad, H - text_h - pad))))
+                cy = int(min(knee_y + margin, H - text_h - margin))
+                cy = max(margin, cy)
+                out.append((max(margin, (W - text_w)//2), cy))
             except Exception:
                 pass
     # generic fallbacks (4 corners + center-bottom)
     out += [
-        (pad, pad),
-        (W - text_w - pad, pad),
-        (pad, H - text_h - pad),
-        (W - text_w - pad, H - text_h - pad),
-        (max(pad, (W - text_w)//2), H - text_h - pad),
+        (margin, margin),
+        (W - text_w - margin, margin),
+        (margin, H - text_h - margin),
+        (W - text_w - margin, H - text_h - margin),
+        (max(margin, (W - text_w)//2), H - text_h - margin),
     ]
-    # filter in-bounds
-    return [(x, y) for (x, y) in out if 0 <= x <= W - text_w and 0 <= y <= H - text_h]
+    # filter: must fit inside image with margin
+    return [(x, y) for (x, y) in out
+            if margin <= x <= W - text_w - margin
+            and margin <= y <= H - text_h - margin]
 
 
 def bbox_score(luma, x, y, w, h):
@@ -181,10 +186,83 @@ def bbox_score(luma, x, y, w, h):
     return float(patch.std())
 
 
-def text_color(mean_l):
-    """Opposite-luminance gray, clamped 40-220."""
-    g = int(round(255 - mean_l))
-    return (max(40, min(220, g)),) * 3
+def region_blur_score(luma, x, y, w, h):
+    """Laplacian variance — higher = sharper, lower = blurrier."""
+    patch = luma[y:y+h, x:x+w]
+    return float(cv2.Laplacian(patch, cv2.CV_32F).var())
+
+
+def text_blur_sigma_to_match(lapvar, sharper_factor=0.7):
+    """Estimate how much to blur the text so it reads slightly sharper than
+    the photo region behind it. Heuristic mapping LapVar → sigma:
+
+      LapVar  ~50  (very blurry)  → sigma ≈ 2.5
+      LapVar ~200  (mid)          → sigma ≈ 1.2
+      LapVar ~1000 (sharp)        → sigma ≈ 0.3
+      LapVar ~5000 (very sharp)   → sigma ≈ 0   (no blur)
+
+    `sharper_factor` (0..1): 1.0 = match photo blur exactly,
+                             0.7 = text is 30%% sharper than photo (default).
+    """
+    if lapvar <= 0: return 0.0
+    sigma_photo_est = 16.0 / (lapvar ** 0.5 + 5.0)   # empirical, smooth
+    sigma_text = sigma_photo_est * sharper_factor
+    return float(max(0.0, min(3.0, sigma_text)))
+
+
+def text_color_from_highlights(luma, top_pct=15):
+    """Mean luminance of the brightest top_pct% of the image.
+    Text gets this gray so it matches the photo's actual highlight tone
+    (not pure white — feels integrated rather than pasted on)."""
+    flat = luma.flatten()
+    cutoff = np.percentile(flat, 100 - top_pct)
+    highs = flat[flat >= cutoff]
+    g = int(round(highs.mean()))
+    return (g, g, g)
+
+
+def wrap_text(text, font, max_width_px):
+    """Wrap into 1-3 lines fitting max_width_px. Uses simple greedy word-wrap.
+    Adds soft breaks at commas/em-dashes when line is still too long."""
+    import textwrap
+    words = text.split()
+    if not words:
+        return [text]
+
+    # Greedy line-break by pixel width
+    def measure(s):
+        try:
+            l, t, r, b = font.getbbox(s)
+            return r - l
+        except Exception:
+            return font.getsize(s)[0]
+
+    lines = []
+    cur = ""
+    for w in words:
+        candidate = (cur + " " + w).strip()
+        if measure(candidate) <= max_width_px:
+            cur = candidate
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+
+    # If we still have a single line over limit, force-split at ~half by punctuation
+    if len(lines) == 1 and measure(lines[0]) > max_width_px:
+        s = lines[0]
+        for sep in [", ", "; ", " — ", " - "]:
+            if sep in s:
+                i = s.index(sep) + len(sep)
+                lines = [s[:i].rstrip(), s[i:]]
+                break
+
+    # Cap at 3 lines: collapse extras by re-joining last segments
+    if len(lines) > 3:
+        lines = lines[:2] + [" ".join(lines[2:])]
+    return lines
 
 
 # ---- Render --------------------------------------------------------------
@@ -214,82 +292,128 @@ def render_text(pil_rgb, text, font_path, font_size, pos, color, glow=False, glo
 def overlay(rgb_arr, text, *, style="quote", orientation="horizontal",
              font_size_pct=3.0, manual_angle_deg=None,
              font_quote=DEFAULT_QUOTE_FONT, font_subtitle=DEFAULT_SUBTITLE_FONT,
-             debug=False):
-    """Apply text overlay. orientation in {horizontal, body, manual}."""
+             max_width_pct=42.0, blur_match_factor=0.5, debug=False):
+    """Apply text overlay. Always horizontal by default.
+
+    - Wraps long text into up to 3 lines fitting `max_width_pct`% of image width.
+    - Bbox candidate must clear MIN_MARGIN from every edge.
+    - Multiline alignment: flush to whichever side (L/R) is closer to the image border.
+    - Color: mean luminance of the photo's top-15% highlights, so text matches
+      the actual highlight tone (not pure white).
+    - Faint outer glow only if the chosen bbox spans mixed light/shadow.
+    """
     H, W = rgb_arr.shape[:2]
     short = min(W, H)
     font_path = font_quote if style == "quote" else font_subtitle
     font_size = max(14, int(short * font_size_pct / 100.0))
     font = ImageFont.truetype(font_path, font_size)
 
-    # Measure text
-    dummy = Image.new("RGB", (10, 10))
-    draw = ImageDraw.Draw(dummy)
-    try:
-        l, t, r, b = draw.textbbox((0, 0), text, font=font)
-    except Exception:
-        r, b = draw.textsize(text, font=font); l = t = 0
-    text_w, text_h = (r - l), (b - t)
-
-    # Decide orientation angle
+    # Decide orientation angle (default horizontal; --orientation body is opt-in)
     angle = 0.0
     pose = None
-    if orientation in ("body", "horizontal"):
-        try:
-            pose = detect_pose(rgb_arr)
-        except Exception as e:
-            print(f"  [text] pose failed: {e}")
+    try:
+        pose = detect_pose(rgb_arr)
+    except Exception as e:
+        print(f"  [text] pose failed: {e}")
     if orientation == "body" and pose is not None:
         ang = body_axis_degrees(pose)
-        # only auto-rotate if tilt > 5°; otherwise keep horizontal (looks weird at small angles)
-        if abs(ang) > 5: angle = -ang   # negate: PIL rotation positive=CCW
+        if abs(ang) > 5: angle = -ang
     elif orientation == "manual" and manual_angle_deg is not None:
         angle = float(manual_angle_deg)
 
-    # Pick best bbox by luminance-variance score
+    # Wrap into lines fitting max_width_pct% of image
+    max_line_w = int(W * max_width_pct / 100.0)
+    lines = wrap_text(text, font, max_line_w)
+    print(f"  [text] wrapped to {len(lines)} line(s): {lines}")
+
+    # Measure block
+    def measure(s):
+        try:
+            l, t, r, b = font.getbbox(s)
+            return (r - l), (b - t)
+        except Exception:
+            return font.getsize(s)
+    line_sizes = [measure(s) for s in lines]
+    line_h = max(h for _, h in line_sizes)
+    leading = int(line_h * 0.25)
+    block_w = max(w for w, _ in line_sizes)
+    block_h = len(lines) * line_h + (len(lines) - 1) * leading
+
+    # Pick best bbox
     luma = cv2.cvtColor(rgb_arr, cv2.COLOR_RGB2LAB)[..., 0]
-    cands = candidate_bboxes(W, H, pose, text_w, text_h)
+    cands = candidate_bboxes(W, H, pose, block_w, block_h)
     if not cands:
-        # Fallback: just bottom-left
-        cands = [(int(W*0.04), int(H*0.92 - text_h))]
-    scored = [(bbox_score(luma, x, y, text_w, text_h), x, y) for (x, y) in cands]
+        cands = [(MIN_MARGIN, max(MIN_MARGIN, H - block_h - MIN_MARGIN))]
+    scored = [(bbox_score(luma, x, y, block_w, block_h), x, y) for (x, y) in cands]
     scored.sort()
     score, bx, by = scored[0]
-    print(f"  [text] best bbox @ ({bx},{by}) std={score:.1f}, "
-          f"font={Path(font_path).stem}, size={font_size}px, angle={angle:.1f}°")
 
-    # Color: opposite-luminance gray
-    mean_l = float(luma[by:by+text_h, bx:bx+text_w].mean())
-    color = text_color(mean_l)
-    glow = score > 25.0   # high variance (mixed light/shadow) → glow
+    # Decide alignment: flush to whichever edge is closer
+    bbox_cx = bx + block_w // 2
+    align_right = (bbox_cx > W / 2)
+    blur_score = region_blur_score(luma, bx, by, block_w, block_h)
+    print(f"  [text] block {block_w}×{block_h} @ ({bx},{by}) std={score:.1f} "
+          f"blur(LapVar)={blur_score:.1f} align={'right' if align_right else 'left'} "
+          f"angle={angle:.1f}°")
 
-    # Render. For non-zero angle, render text on a separate transparent canvas,
-    # rotate, then paste with alpha.
+    # Compute how much to blur the text layer so it matches the photo's local
+    # blur but stays slightly sharper (so text reads without feeling pasted-on).
+    text_blur_sigma = text_blur_sigma_to_match(blur_score, blur_match_factor)
+    print(f"  [text] text blur sigma={text_blur_sigma:.2f}px (match factor={blur_match_factor})")
+
+    # Color from photo highlights (not pure white)
+    color = text_color_from_highlights(luma, top_pct=15)
+
+    # Glow only if mixed light/shadow at the chosen bbox
+    glow = score > 25.0
+    glow_radius = max(1, int(font_size * 0.15))
+    # glow color = the OPPOSITE end of the gray ramp from text color, so it
+    # contrasts against text and renders as a soft halo
+    glow_color = (255 - color[0], 255 - color[1], 255 - color[2])
+
     pil_rgb = Image.fromarray(rgb_arr)
-    if abs(angle) < 0.5:
-        out = render_text(pil_rgb, text, font_path, font_size, (bx, by), color,
-                          glow=glow, glow_radius=int(font_size * 0.15))
-    else:
-        # Render onto transparent layer, rotate, paste
-        layer = Image.new("RGBA", (text_w + 80, text_h + 80), (0, 0, 0, 0))
+
+    # Build the text block on a transparent layer, then paste (with optional rotate)
+    pad = max(20, glow_radius * 3)
+    layer = Image.new("RGBA", (block_w + pad*2, block_h + pad*2), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+
+    def line_x(line_w):
+        return (block_w - line_w) if align_right else 0
+
+    if glow:
+        gl = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+        gld = ImageDraw.Draw(gl)
+        cy = pad
+        for line, (lw, lh) in zip(lines, line_sizes):
+            gld.text((pad + line_x(lw), cy), line, font=font,
+                     fill=glow_color + (200,))
+            cy += line_h + leading
+        gl = gl.filter(ImageFilter.GaussianBlur(glow_radius))
+        layer = Image.alpha_composite(layer, gl)
         ld = ImageDraw.Draw(layer)
-        if glow:
-            glow_color = (255 - color[0], 255 - color[1], 255 - color[2], 200)
-            gl = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-            ImageDraw.Draw(gl).text((40 - l, 40 - t), text, font=font, fill=glow_color)
-            gl = gl.filter(ImageFilter.GaussianBlur(int(font_size * 0.15)))
-            layer = Image.alpha_composite(layer, gl)
-            ld = ImageDraw.Draw(layer)
-        ld.text((40 - l, 40 - t), text, font=font, fill=color + (255,))
+
+    cy = pad
+    for line, (lw, lh) in zip(lines, line_sizes):
+        ld.text((pad + line_x(lw), cy), line, font=font, fill=color + (255,))
+        cy += line_h + leading
+
+    # Optionally blur the text layer to nearly match the photo's local blur
+    # (text stays slightly sharper — see text_blur_sigma_to_match).
+    if text_blur_sigma > 0.05:
+        layer = layer.filter(ImageFilter.GaussianBlur(text_blur_sigma))
+
+    if abs(angle) < 0.5:
+        out_rgba = pil_rgb.convert("RGBA")
+        out_rgba.alpha_composite(layer, (bx - pad, by - pad))
+        return np.asarray(out_rgba.convert("RGB"))
+    else:
         rot = layer.rotate(angle, resample=Image.BICUBIC, expand=True)
-        # paste onto pil_rgb at (bx, by) offset for new layer's bbox center
-        paste_x = bx - (rot.size[0] - text_w) // 2
-        paste_y = by - (rot.size[1] - text_h) // 2
+        paste_x = bx - (rot.size[0] - block_w) // 2
+        paste_y = by - (rot.size[1] - block_h) // 2
         out_rgba = pil_rgb.convert("RGBA")
         out_rgba.alpha_composite(rot, (paste_x, paste_y))
-        out = out_rgba.convert("RGB")
-
-    return np.asarray(out)
+        return np.asarray(out_rgba.convert("RGB"))
 
 
 # ---- CLI -----------------------------------------------------------------
@@ -301,8 +425,13 @@ def main():
                    help='quote text, or "auto" for semantic NN over literary DB')
     p.add_argument("--style", choices=["quote", "subtitle"], default="quote")
     p.add_argument("--orientation", choices=["horizontal", "body", "manual"],
-                   default="body",
-                   help="body = align with shoulder line if tilted >5°")
+                   default="horizontal",
+                   help="default horizontal; body = align with shoulder line if tilted >5°")
+    p.add_argument("--max-width-pct", type=float, default=42.0,
+                   help="max line width as %% of image width before wrapping")
+    p.add_argument("--blur-match-factor", type=float, default=0.5,
+                   help="0.0-1.0: text blur as fraction of photo's local blur. "
+                        "1.0=match exactly, 0.7=text 30%% sharper than photo, 0=crisp text")
     p.add_argument("--manual-angle", type=float, default=None)
     p.add_argument("--font-size-pct", type=float, default=3.0,
                    help="font size as %% of short edge")
@@ -317,7 +446,9 @@ def main():
 
     out = overlay(arr, text, style=args.style, orientation=args.orientation,
                    manual_angle_deg=args.manual_angle,
-                   font_size_pct=args.font_size_pct)
+                   font_size_pct=args.font_size_pct,
+                   max_width_pct=args.max_width_pct,
+                   blur_match_factor=args.blur_match_factor)
     out_path = args.out or str(Path(args.source).with_suffix(".__text.jpg"))
     Image.fromarray(out).save(out_path, quality=92)
     print(f"  → {out_path}")

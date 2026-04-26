@@ -36,6 +36,52 @@ def from_lab(lab):
 
 # ---- Face ellipse mask (lifted from surreal_with_face.py) ----------------
 
+def face_ellipse_mask_biased(img_size, source_arr, inner_mult=1.0, outer_mult=6.0,
+                              vertical_bias=1.6):
+    """Same as face_ellipse_mask but with a downward-only stretch — the outer
+    ellipse extends further DOWN (toward shoulders/torso) than UP, so warmth
+    naturally hits face + upper body instead of being a symmetric blob."""
+    import mediapipe as mp
+    W, H = img_size
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    cx, cy, a, b, angle_deg = W*0.5, H*0.33, min(W,H)*0.13, min(W,H)*0.13, 0.0
+    try:
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=source_arr.astype(np.uint8))
+        base = mp.tasks.BaseOptions(model_asset_path=str(POSE_MODEL))
+        opts = mp.tasks.vision.PoseLandmarkerOptions(base_options=base, num_poses=1)
+        det = mp.tasks.vision.PoseLandmarker.create_from_options(opts)
+        res = det.detect(mp_img); det.close()
+        if res.pose_landmarks:
+            lms = res.pose_landmarks[0]
+            def P(i): return np.array([lms[i].x*W, lms[i].y*H], np.float32)
+            nose, le, re, lear, rear, lm, rm = P(0),P(2),P(5),P(7),P(8),P(9),P(10)
+            eye_mid   = (le+re)/2
+            mouth_mid = (lm+rm)/2
+            cx, cy = np.stack([nose, le, re, lm, rm]).mean(axis=0)
+            axis = eye_mid - mouth_mid
+            an = axis / (np.linalg.norm(axis) + 1e-6)
+            angle_deg = float(np.degrees(np.arctan2(-an[1], an[0]))) - 90.0
+            face_h = float(np.linalg.norm(eye_mid - mouth_mid))
+            face_w = float(np.linalg.norm(lear - rear)) * 0.4
+            a, b = face_w, face_h
+    except Exception:
+        pass
+    rad = np.deg2rad(angle_deg)
+    cos_t, sin_t = np.cos(-rad), np.sin(-rad)
+    dx, dy = xx - cx, yy - cy
+    # rotate into face-local frame
+    lx_unscaled = dx*cos_t - dy*sin_t
+    ly_unscaled = dx*sin_t + dy*cos_t
+    # vertical bias: when the local-y is positive (DOWN in face frame, toward
+    # body), divide by a larger semi-axis so the ellipse reaches further down
+    b_eff = np.where(ly_unscaled > 0, b * vertical_bias, b)
+    lx = lx_unscaled / a
+    ly = ly_unscaled / b_eff
+    d = np.sqrt(lx**2 + ly**2)
+    t = np.clip((d - inner_mult) / max(outer_mult - inner_mult, 1e-3), 0, 1)
+    return (1.0 - t).astype(np.float32)
+
+
 def face_ellipse_mask(img_size, source_arr, inner_mult=1.0, outer_mult=3.5):
     import mediapipe as mp
     W, H = img_size
@@ -74,16 +120,21 @@ def face_ellipse_mask(img_size, source_arr, inner_mult=1.0, outer_mult=3.5):
 
 # ---- Mode A: radial warm-cool --------------------------------------------
 
-def grade_warm_cool(rgb_arr, mask, strength=0.2):
-    """Inside mask: warmer (a+, b+).  Outside: cooler (a-, b-)."""
+def grade_warm_cool(rgb_arr, mask, strength=0.4):
+    """Inside mask: warm (orange-skin).  Outside: cold-blue (not teal).
+
+    Mask is expected to extend well past the face — covers face + upper torso —
+    so warmth lands on skin and the cold-blue takes the lower body and BG.
+    """
     lab = to_lab(rgb_arr)
-    # warm shift toward orange-skin = +a +b; cool toward teal = -a -b
-    warm = np.array([0, +14*strength*5, +14*strength*5], dtype=np.float32)
-    cool = np.array([0, -10*strength*5, -10*strength*5], dtype=np.float32)
+    # warm = orange shift on skin: +a (slight red), +b (yellow)
+    warm = np.array([0, +14, +14], dtype=np.float32) * (strength * 5)
+    # cold-BLUE (not teal), less saturated than v3: slight magenta lean,
+    # moderate blue. Tweaked 2026-04-26 per Ronnie: too saturated before.
+    cool = np.array([0, +2, -12], dtype=np.float32) * (strength * 5)
     m3 = mask[..., None]
     delta = warm * m3 + cool * (1.0 - m3)
-    lab_out = lab + delta
-    return from_lab(lab_out)
+    return from_lab(lab + delta)
 
 
 # ---- Mode B: split-tone teal-orange --------------------------------------
@@ -117,7 +168,7 @@ WASH_PALETTE = {
     "cyan":        (-25, -5),
 }
 
-def grade_wash(rgb_arr, color, strength=0.3):
+def grade_wash(rgb_arr, color, strength=0.22):
     if color not in WASH_PALETTE:
         raise ValueError(f"unknown wash color {color!r}; pick from {sorted(WASH_PALETTE)}")
     da, db = WASH_PALETTE[color]
@@ -129,14 +180,23 @@ def grade_wash(rgb_arr, color, strength=0.3):
 
 # ---- Driver --------------------------------------------------------------
 
-def grade(rgb_arr, mode, strength=0.2, mask_inner=1.0, mask_outer=3.5):
+def grade(rgb_arr, mode, strength=0.4, mask_inner=0.2, mask_outer=6.0,
+          warm_vertical_bias=1.6):
     """Single entry point — used both as CLI and as a library import from
-    surreal_with_face.py."""
+    surreal_with_face.py.
+
+    For warm-cool mode, `mask_outer` controls falloff size as multiple of the
+    face ellipse, and `warm_vertical_bias` extends the ellipse downward more
+    than sideways (so warm light reaches upper torso, not just face).
+    Defaults: outer_mult=6, vertical bias 1.6×.
+    """
     if mode == "off":
         return rgb_arr
     if mode == "warm-cool":
-        mask = face_ellipse_mask((rgb_arr.shape[1], rgb_arr.shape[0]), rgb_arr,
-                                  inner_mult=mask_inner, outer_mult=mask_outer)
+        mask = face_ellipse_mask_biased(
+            (rgb_arr.shape[1], rgb_arr.shape[0]), rgb_arr,
+            inner_mult=mask_inner, outer_mult=mask_outer,
+            vertical_bias=warm_vertical_bias)
         return grade_warm_cool(rgb_arr, mask, strength)
     if mode == "split":
         return grade_split_tone(rgb_arr, strength)

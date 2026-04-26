@@ -229,6 +229,9 @@ TOOLS = {
     # botanical-overlay: dropped — petals landed on clothes, aesthetic didn't work
 }
 
+# Snapshot of tool weights at module load — used by /api/auto/weights/reset
+DEFAULT_TOOL_WEIGHTS = {n: t["weight"] for n, t in TOOLS.items()}
+
 # --- Helpers ---------------------------------------------------------------
 
 def weighted_choice(items, weights=None, default_weight=5):
@@ -1381,6 +1384,69 @@ def api_resume():
     GALLERY_STATE.stats["paused"] = False
     GALLERY_STATE.save()
     return jsonify({"paused": False})
+
+@app.route("/api/auto/state")
+def api_auto_state():
+    """Snapshot of the autonomous gallery generation loop."""
+    today = datetime.now(ISRAEL_TZ).strftime("%Y-%m-%d")
+    cost_today = float(GALLERY_STATE.stats.get("cost_today", 0.0)) \
+        if GALLERY_STATE.stats.get("cost_date") == today else 0.0
+    pending = GALLERY_STATE.all_pending()
+    # newest first; queue has newest at the right end (append), priority too
+    recent = list(reversed(pending))[:6]
+    recent_out = [{
+        "id": it.get("id"),
+        "tool": it.get("tool"),
+        "preset": it.get("preset"),
+        "model": it.get("model"),
+        "output": it.get("output"),
+        "generated_at": it.get("generated_at"),
+    } for it in recent]
+    weights = {n: TOOLS[n]["weight"] for n in TOOLS}
+    return jsonify({
+        "running": bool(GALLERY_STATE.stats.get("running", True)),
+        "paused": bool(GALLERY_STATE.stats.get("paused", False)),
+        "queue_size": GALLERY_STATE.pending_count(),
+        "cost_today": round(cost_today, 4),
+        "cost_cap": 2.00,
+        "weights": weights,
+        "default_weights": DEFAULT_TOOL_WEIGHTS,
+        "recent_outputs": recent_out,
+    })
+
+@app.route("/api/auto/weights", methods=["POST"])
+def api_auto_weights():
+    """Update per-tool weights live. Body: {tool_name: weight, ...}."""
+    body = request.get_json(silent=True) or {}
+    updated = {}
+    for name, val in body.items():
+        if name not in TOOLS:
+            continue
+        try:
+            w = max(0, int(round(float(val))))
+        except (TypeError, ValueError):
+            continue
+        TOOLS[name]["weight"] = w
+        updated[name] = w
+    return jsonify({"weights": {n: TOOLS[n]["weight"] for n in TOOLS},
+                    "updated": updated})
+
+@app.route("/api/auto/weights/reset", methods=["POST"])
+def api_auto_weights_reset():
+    for n, w in DEFAULT_TOOL_WEIGHTS.items():
+        if n in TOOLS:
+            TOOLS[n]["weight"] = w
+    return jsonify({"weights": {n: TOOLS[n]["weight"] for n in TOOLS}})
+
+@app.route("/api/auto/skip", methods=["POST"])
+def api_auto_skip():
+    """Best-effort skip: brief pause/resume cycle.
+
+    The worker is mid-subprocess; we cannot truly cancel it without killing
+    the workflow tool. This endpoint is a no-op acknowledgement for now.
+    """
+    return jsonify({"ok": True, "note": "skip is a no-op; worker finishes current job"})
+
 
 @app.route("/api/candidates/pause", methods=["POST"])
 def api_candidates_pause():

@@ -324,6 +324,7 @@
   <nav class="tabbar" role="tablist">
     <button class="tabbtn" data-tab="candidates" role="tab">📋<span class="label">Candidates</span></button>
     <button class="tabbtn" data-tab="run" role="tab">🎬<span class="label">Run</span></button>
+    <button class="tabbtn" data-tab="auto" role="tab">🤖<span class="label">Auto</span></button>
     <button class="tabbtn" data-tab="vote" role="tab">🗳<span class="label">Vote</span></button>
     <button class="tabbtn" data-tab="favs" role="tab">⭐<span class="label">Favs</span></button>
     <button class="tabbtn" data-tab="tree" role="tab">🌳<span class="label">Tree</span></button>
@@ -422,6 +423,35 @@
           </div>
           <div class="jobs-board" id="jobs-board">
             <div class="job-empty">No jobs yet — kick one off from the left.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section id="tab-auto" role="tabpanel">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+        <h2 style="margin:0;">🤖 Auto</h2>
+        <span id="auto-status-chip" class="chip" style="font-size:12px;">…</span>
+        <span style="flex:1"></span>
+        <button class="btn" id="auto-pause-btn" style="flex:0; padding:6px 12px;">⏸ Pause</button>
+        <button class="btn" id="auto-skip-btn" style="flex:0; padding:6px 12px;" title="Best-effort: lets current job finish">⏭ Skip</button>
+      </div>
+      <div style="display:grid; grid-template-columns: minmax(280px, 1fr) 2fr; gap:18px; align-items:start;">
+        <div>
+          <div class="run-section-title" style="margin-bottom:8px;">Per-tool weights</div>
+          <div id="auto-weights-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <button class="btn" id="auto-weights-reset" style="flex:0; padding:6px 12px;">Reset to defaults</button>
+          </div>
+          <div style="margin-top:18px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--panel);">
+            <div style="font-size:12px; color:var(--dim);">Cost today (gallery)</div>
+            <div id="auto-cost" style="font-size:18px; font-variant-numeric:tabular-nums; margin-top:4px;">$0.00 / cap $2.00</div>
+          </div>
+        </div>
+        <div>
+          <div class="run-section-title" style="margin-bottom:8px;">Live feed (newest 6)</div>
+          <div id="auto-feed" class="jobs-board"
+               style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px;">
+            <div class="job-empty">Empty — waiting for the worker to produce something.</div>
           </div>
         </div>
       </div>
@@ -580,7 +610,7 @@
   </div>
 
 <script>
-  const TABS = ["candidates", "run", "vote", "favs", "tree"];
+  const TABS = ["candidates", "run", "auto", "vote", "favs", "tree"];
 
   function currentTab() {
     const h = (location.hash || "").replace(/^#/, "");
@@ -616,7 +646,7 @@
     if (e.target && e.target.tagName === "INPUT") return;
     if (e.target && e.target.tagName === "TEXTAREA") return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const idx = ["1","2","3","4","5"].indexOf(e.key);
+    const idx = ["1","2","3","4","5","6"].indexOf(e.key);
     if (idx >= 0) {
       e.preventDefault();
       navigate(TABS[idx]);
@@ -2149,6 +2179,185 @@
   }
   window.addEventListener("hashchange", maybeLoadTree);
   maybeLoadTree();
+
+  // ---- Auto tab ----
+  let autoPollTimer = null;
+  let autoWeightsRendered = false;
+  let autoWeightsDirty = false;  // user dragging — pause overwrites
+
+  function autoToolLabel(name) {
+    return name.replace(/-/g, " ");
+  }
+
+  function renderAutoWeights(weights) {
+    const list = document.getElementById("auto-weights-list");
+    if (!list) return;
+    if (autoWeightsDirty) return;
+    const entries = Object.entries(weights).sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]));
+    list.innerHTML = "";
+    for (const [name, val] of entries) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:grid; grid-template-columns: 1fr 80px 50px; gap:8px; align-items:center; font-size:13px;";
+      row.innerHTML = `
+        <label style="color:var(--fg);" title="${name}">${autoToolLabel(name)}</label>
+        <input type="range" min="0" max="100" value="${val}" data-tool="${name}" class="auto-w-slider" style="width:100%;">
+        <span class="auto-w-val" data-tool-val="${name}" style="text-align:right; color:var(--dim); font-variant-numeric:tabular-nums;">${val}</span>
+      `;
+      list.appendChild(row);
+    }
+    autoWeightsRendered = true;
+  }
+
+  function updateAutoWeightLabel(name, val) {
+    const el = document.querySelector(`[data-tool-val="${name}"]`);
+    if (el) el.textContent = val;
+  }
+
+  // Debounced POST
+  let autoWeightsTimer = null;
+  function postAutoWeights(payload) {
+    if (autoWeightsTimer) clearTimeout(autoWeightsTimer);
+    autoWeightsTimer = setTimeout(async () => {
+      try { await fetch("/api/auto/weights", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload)}); }
+      catch (e) {}
+    }, 300);
+  }
+
+  document.getElementById("auto-weights-list").addEventListener("input", e => {
+    if (!e.target.classList.contains("auto-w-slider")) return;
+    autoWeightsDirty = true;
+    const name = e.target.dataset.tool;
+    const v = parseInt(e.target.value, 10);
+    updateAutoWeightLabel(name, v);
+    postAutoWeights({[name]: v});
+  });
+  document.getElementById("auto-weights-list").addEventListener("change", () => {
+    // release the dirty flag shortly after user lets go
+    setTimeout(() => { autoWeightsDirty = false; }, 800);
+  });
+
+  document.getElementById("auto-weights-reset").addEventListener("click", async () => {
+    try {
+      const r = await fetch("/api/auto/weights/reset", {method:"POST"});
+      const j = await r.json();
+      autoWeightsDirty = false;
+      autoWeightsRendered = false;
+      renderAutoWeights(j.weights || {});
+      showToast("Weights reset to defaults");
+    } catch { showToast("Reset failed"); }
+  });
+
+  document.getElementById("auto-pause-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("auto-pause-btn");
+    const isPaused = btn.dataset.paused === "1";
+    try {
+      await fetch(isPaused ? "/api/resume" : "/api/pause", {method:"POST"});
+      refreshAutoState();
+    } catch { showToast("Toggle failed"); }
+  });
+
+  document.getElementById("auto-skip-btn").addEventListener("click", async () => {
+    try {
+      const r = await fetch("/api/auto/skip", {method:"POST"});
+      const j = await r.json();
+      showToast(j.note || "Skip ack'd");
+    } catch { showToast("Skip failed"); }
+  });
+
+  function renderAutoFeed(items) {
+    const feed = document.getElementById("auto-feed");
+    if (!feed) return;
+    if (!items || !items.length) {
+      feed.innerHTML = '<div class="job-empty">Empty — waiting for the worker to produce something.</div>';
+      return;
+    }
+    feed.innerHTML = "";
+    for (const it of items) {
+      const card = document.createElement("div");
+      card.className = "job-card";
+      const title = `${it.tool || "?"} · ${it.preset || ""} · ${it.model || ""}`;
+      const out = it.output || "";
+      const outFn = out ? out.split("/").pop() : "";
+      card.innerHTML = `
+        <div class="job-thumb" data-act="open" style="cursor:zoom-in;">
+          ${out ? `<img src="${imgUrl(out)}" alt="">` : ""}
+        </div>
+        <div class="job-body">
+          <div class="job-title" title="${title}">${title}</div>
+          <div class="job-actions">
+            <button class="btn primary" data-act="decorate">✨ Decorate</button>
+            <button class="btn" data-act="bad">👎 Bad</button>
+            <a class="btn" download href="${out ? imgUrl(out) : "#"}">⬇️</a>
+            <button class="btn" data-act="fav">⭐ Quick-fav</button>
+          </div>
+        </div>`;
+      card.addEventListener("click", async (ev) => {
+        const t = ev.target.closest("[data-act]");
+        if (!t) return;
+        const act = t.dataset.act;
+        if (act === "decorate" && outFn) {
+          openDecorate(outFn, title);
+        } else if (act === "bad") {
+          try {
+            const r = await fetch(`/api/queue/${it.id}/dislike`, {method:"POST"});
+            if (r.ok) { showToast("Marked bad"); card.remove(); refreshAutoState(); }
+            else showToast("Bad failed");
+          } catch { showToast("Bad failed"); }
+        } else if (act === "fav") {
+          try {
+            const r = await fetch(`/api/queue/${it.id}/like`, {method:"POST"});
+            if (r.ok) { showToast("Favorited ⭐"); refreshAutoState(); }
+            else showToast("Fav failed");
+          } catch { showToast("Fav failed"); }
+        }
+      });
+      feed.appendChild(card);
+    }
+  }
+
+  async function refreshAutoState() {
+    if (currentTab() !== "auto") return;
+    try {
+      const r = await fetch("/api/auto/state");
+      if (!r.ok) return;
+      const s = await r.json();
+      // status chip
+      const chip = document.getElementById("auto-status-chip");
+      const running = s.running && !s.paused;
+      chip.textContent = (s.paused ? "⏸ paused" : (s.running ? "🟢 running" : "⚪ stopped"))
+        + ` · ${s.queue_size} in queue`;
+      chip.style.background = s.paused ? "#553" : (s.running ? "#243" : "#333");
+      chip.style.color = "#eee";
+      // pause button
+      const btn = document.getElementById("auto-pause-btn");
+      btn.dataset.paused = s.paused ? "1" : "0";
+      btn.textContent = s.paused ? "▶ Resume" : "⏸ Pause";
+      // cost
+      const cost = document.getElementById("auto-cost");
+      const over = s.cost_today >= s.cost_cap;
+      cost.innerHTML = `<span style="color:${over ? "#e66" : "var(--fg)"}">$${(s.cost_today||0).toFixed(2)}</span>`
+        + ` <span style="color:var(--dim);">/ cap $${(s.cost_cap||2).toFixed(2)}${over ? " 🛑" : ""}</span>`;
+      // weights
+      if (!autoWeightsRendered) renderAutoWeights(s.weights || {});
+      // live feed
+      renderAutoFeed(s.recent_outputs || []);
+    } catch {}
+  }
+
+  function startAutoPolling() {
+    if (autoPollTimer) return;
+    refreshAutoState();
+    autoPollTimer = setInterval(refreshAutoState, 5000);
+  }
+  function stopAutoPolling() {
+    if (autoPollTimer) { clearInterval(autoPollTimer); autoPollTimer = null; }
+  }
+  function maybeAutoTab() {
+    if (currentTab() === "auto") startAutoPolling();
+    else stopAutoPolling();
+  }
+  window.addEventListener("hashchange", maybeAutoTab);
+  maybeAutoTab();
 </script>
 </body>
 </html>

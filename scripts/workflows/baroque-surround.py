@@ -774,6 +774,8 @@ def main():
     parser.add_argument("--foreground-wisp", type=float, default=0.0,
                         help="Foreground wisp opacity 0.0-1.0 (default 0.0=off). Generates 2nd BG, blurs, masks to avoid face. Good: 0.3-0.5")
     parser.add_argument("--fg-holes", type=int, default=5, help="Number of feathered bg-showthrough holes in FG wisp mask (default 5)")
+    parser.add_argument("--save-stack", action="store_true",
+                        help="export pipeline stages as a multi-page TIFF (<finals>__stack.tif)")
     args = parser.parse_args()
 
     if args.list_presets:
@@ -1005,6 +1007,32 @@ def main():
     finals_dest = os.path.join(finals_dir, finals_name)
     final_img.save(finals_dest, "JPEG", quality=95)
     log(output_dir, f"Final: {finals_dest}")
+
+    # --save-stack: aggregate intermediates into a multi-page TIFF
+    if args.save_stack:
+        try:
+            from _layered_tiff import save_stack
+            stage_files = [
+                ("00_original",   "0_original.jpg"),
+                ("01_mask",       "1_mask.png"),
+                ("02_bg",         "2_bg.jpg"),
+                ("03_fgwisp_bg",  "4_fgwisp_bg.jpg"),
+                ("04_fgwisp_mask","4_fgwisp_mask.png"),
+                ("05_grain_layer","8_grain_layer.jpg"),
+                ("06_tile_refined","7b_tile_refined.jpg"),
+                ("07_face_swapped","7c_face_swapped.jpg"),
+            ]
+            layers = []
+            for name, fname in stage_files:
+                fp = os.path.join(output_dir, fname)
+                if os.path.isfile(fp):
+                    layers.append((name, Image.open(fp)))
+            layers.append(("99_final", final_img))
+            stack_path = os.path.join(finals_dir, os.path.basename(output_dir) + "__stack.tif")
+            save_stack(stack_path, layers)
+            log(output_dir, f"Stack: {stack_path} ({len(layers)} layers)")
+        except Exception as e:
+            log(output_dir, f"save-stack failed: {e}", "WARN")
 
     # Push to phone
     try:

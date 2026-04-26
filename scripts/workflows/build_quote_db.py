@@ -65,6 +65,17 @@ def extract_lines(poems, min_words=5, max_words=14):
         for raw in p.get("lines", []):
             line = raw.strip()
             if not line or len(line) < 8: continue
+            # Drop Project Gutenberg italic markup like _word_ or _Gondola_
+            if re.search(r"_[A-Za-z][^_]*_", line): continue
+            # Drop dramatic-script character cues like _Lor._  _Arn._
+            if re.match(r"^_[A-Z][a-z]+\._", line): continue
+            # Also drop unmarked character cues like "LOR. " or "Arn. " at line start
+            if re.match(r"^[A-Z][a-z]{1,4}\.\s", line): continue
+            # Drop stage directions in brackets: [Aside], [Exit], [Enter X]
+            if re.search(r"\[(Aside|Exit|Enter|Exeunt|Scene|Act)\b", line, re.I): continue
+            if re.match(r"^\[.*\]\s*$", line): continue
+            # Drop any line with stray underscores (Gutenberg artifacts)
+            if "_" in line: continue
             # Must end with sentence-terminating punctuation or em-dash/quote
             if not re.search(r"[.!?—\";]\s*$", line): continue
             words = line.split()

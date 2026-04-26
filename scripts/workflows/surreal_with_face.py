@@ -250,6 +250,9 @@ def main():
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--save-intermediates", action="store_true",
                    help="save bw_relit, surreal_gray, mask, matched, alongside final")
+    p.add_argument("--save-stack", action="store_true",
+                   help="export each pipeline step as a layer in a multi-page TIFF "
+                        "(saved alongside final as <tag>__stack.tif)")
     p.add_argument("--no-face-overlay", action="store_true",
                    help="skip face mask + composite (use when source has no detectable face)")
     p.add_argument("--upscale", type=int, default=4, choices=[0, 2, 4],
@@ -282,16 +285,29 @@ def main():
     if not relit_path.is_file(): print(f"missing relit: {relit_path}"); sys.exit(2)
     if not style_path.is_file(): print(f"missing style: {style_path}"); sys.exit(2)
 
+    # Stack of pipeline stages for --save-stack
+    stack_layers = []
+    def _stash(name, img):
+        if not args.save_stack: return
+        if isinstance(img, np.ndarray):
+            if img.ndim == 2:
+                img = Image.fromarray(img).convert("RGB")
+            else:
+                img = Image.fromarray(img)
+        stack_layers.append((name, img.copy() if hasattr(img, "copy") else img))
+
     stem = relit_path.stem.replace(" ", "_").replace("-", "_")[:60]
     style_stem = style_path.stem.replace(" ", "_").replace("-", "_")[:30]
     tag = f"{stem}__style_{style_stem}"
 
     # 0.5 — B&W with curve
     relit_pil = Image.open(relit_path).convert("RGB")
+    _stash("00_relit", relit_pil)
     bw_relit = bw_with_curve(relit_pil)
     bw_relit_path = out_dir / f"{tag}__bw_relit.jpg"
     bw_relit.save(bw_relit_path, quality=95)
     print(f"step 0.5: bw_with_curve → {bw_relit_path.name}")
+    _stash("01_bw_relit", bw_relit)
 
     # 1 — become-image
     print("step 1: become-image …")
@@ -311,8 +327,10 @@ def main():
     if surreal_pil.size != bw_relit.size:
         print(f"  resizing surreal {surreal_pil.size} → {bw_relit.size}")
         surreal_pil = surreal_pil.resize(bw_relit.size, Image.LANCZOS)
+    _stash("02_surreal", surreal_pil)
     surreal_gray = grayscale(surreal_pil)        # H×W uint8
     bw_arr      = grayscale(bw_relit)            # H×W uint8
+    _stash("03_surreal_gray", surreal_gray)
 
     # 2 — face radial mask on bw_relit (skipped in --no-face-overlay)
     relit_arr = np.asarray(relit_pil)
@@ -328,9 +346,12 @@ def main():
                                   outer_mult=args.mask_outer_mult,
                                   falloff_power=args.mask_falloff_power)
 
+    _stash("04_face_mask", (mask * 255).astype(np.uint8))
+
     # 3 — histogram-match bw_relit's tone to surreal_gray
     print("step 3: histogram match …")
     bw_matched = match_histograms(bw_arr, surreal_gray).astype(np.uint8)
+    _stash("05_bw_matched", bw_matched)
 
     # 4 — composite
     print("step 4: composite …")
@@ -354,6 +375,7 @@ def main():
                 out_dir / f"{tag}__grain_mask.png")
         print(f"  added grain ({args.grain} outside, {args.grain*args.grain_inside_pct:.3f} inside, ellipse-scale={scale})")
     final_arr = np.stack([final_u8]*3, axis=-1)
+    _stash("06_composite", final_arr)
 
     # Step 4.5 — optional text overlay (BEFORE grading so grade sweeps text too)
     if args.text:
@@ -367,6 +389,7 @@ def main():
                 style=args.text_style, orientation=args.text_orientation,
                 manual_angle_deg=args.text_angle, font_size_pct=args.text_size_pct)
             print(f"  step 4.5 text overlay applied")
+            _stash("07_post_text", final_arr)
         except Exception as e:
             print(f"  text overlay FAIL: {e}")
 
@@ -376,6 +399,7 @@ def main():
             from color_grade import grade as _grade
             final_arr = _grade(final_arr, args.grade, strength=args.grade_strength)
             print(f"  step 4.7 grade applied ({args.grade})")
+            _stash("08_post_grade", final_arr)
         except Exception as e:
             print(f"  grade FAIL: {e}")
 
@@ -383,6 +407,17 @@ def main():
     final_path = out_dir / f"{tag}__final.jpg"
     final_pil.save(final_path, quality=92)
     print(f"  → {final_path}")
+    _stash("09_final", final_pil)
+
+    # Write multi-page TIFF stack alongside final
+    if args.save_stack and stack_layers:
+        try:
+            from _layered_tiff import save_stack
+            stack_path = out_dir / f"{tag}__stack.tif"
+            save_stack(stack_path, stack_layers)
+            print(f"  → stack: {stack_path}  ({len(stack_layers)} layers)")
+        except Exception as e:
+            print(f"  save-stack FAIL: {e}")
 
     # Step 5 — optional Real-ESRGAN upscale
     if args.upscale and args.upscale > 0:

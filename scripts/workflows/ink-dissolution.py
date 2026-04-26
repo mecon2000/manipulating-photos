@@ -418,7 +418,8 @@ def generate_medium_overlay(shape, medium_params, seed=None):
 
 def ink_dissolve(img_pil, subject_mask, medium="ink-wash",
                  dissolve_strength=0.85, face_preserve=0.85,
-                 num_levels=5, seed=None, fade_multiplier=3.5):
+                 num_levels=5, seed=None, fade_multiplier=3.5,
+                 stages=None):
     """Apply ink dissolution effect.
 
     The approach:
@@ -523,6 +524,14 @@ def ink_dissolve(img_pil, subject_mask, medium="ink-wash",
     smoothed = smoothed * (1.0 - edge_darken[:, :, np.newaxis])
 
     result = np.clip(smoothed, 0, 255).astype(np.uint8)
+    if stages is not None:
+        # 0-1 → 0-255 grayscale visualisations for the stack
+        stages["dissolution_map"] = Image.fromarray(
+            (np.clip(dissolution, 0, 1) * 255).astype(np.uint8)).convert("RGB")
+        # Pre-overlay smoothed (just before texture) approximated by re-running
+        # would double cost — skip; we have the final result + map + texture.
+        tex_vis = (np.clip(medium_tex, -1, 1) + 1) * 127.5
+        stages["medium_texture"] = Image.fromarray(tex_vis.astype(np.uint8)).convert("RGB")
     return Image.fromarray(result)
 
 
@@ -558,6 +567,7 @@ def run_pipeline(args):
 
     # Run dissolution
     log("INFO", f"Applying {args.medium} dissolution (strength={args.dissolve_strength}, face_preserve={args.face_preserve})...")
+    stages = {} if getattr(args, "save_stack", False) else None
     result = ink_dissolve(
         img, mask,
         medium=args.medium,
@@ -566,6 +576,7 @@ def run_pipeline(args):
         num_levels=args.levels,
         seed=args.seed,
         fade_multiplier=args.fade_distance,
+        stages=stages,
     )
 
     # Output
@@ -593,6 +604,26 @@ def run_pipeline(args):
     comp_path = os.path.join(finals_dir, f"{src_name}_ink-dissolution_{args.medium}_comparison.jpg")
     comparison.save(comp_path, quality=92)
     log("INFO", f"Comparison: {comp_path}")
+
+    # --save-stack: write multi-page TIFF
+    if getattr(args, "save_stack", False):
+        try:
+            from _layered_tiff import save_stack
+            layers = [
+                ("00_original", img),
+                ("01_subject_mask", mask.convert("RGB")),
+            ]
+            if stages:
+                if "dissolution_map" in stages:
+                    layers.append(("02_dissolution_map", stages["dissolution_map"]))
+                if "medium_texture" in stages:
+                    layers.append(("03_medium_texture", stages["medium_texture"]))
+            layers.append(("99_final", result))
+            stack_path = os.path.join(finals_dir, f"{src_name}_ink-dissolution_{args.medium}__stack.tif")
+            save_stack(stack_path, layers)
+            log("INFO", f"Stack: {stack_path} ({len(layers)} layers)")
+        except Exception as e:
+            log("WARN", f"save-stack failed: {e}")
 
     # Push to phone
     try:
@@ -629,6 +660,8 @@ def main():
                         default=os.path.expanduser("~/.openclaw/workspace/shared/tool-outputs-intermediates"))
     parser.add_argument("--list-media", action="store_true",
                         help="List available dissolution media")
+    parser.add_argument("--save-stack", action="store_true",
+                        help="export pipeline stages as a multi-page TIFF")
 
     args = parser.parse_args()
 

@@ -1094,6 +1094,27 @@ def run_workflow(args):
                 f_out.write(f_in.read())
         log(output_dir, f"Final copied to: {finals_dest}")
 
+        # --save-stack
+        if args.save_stack:
+            try:
+                from _layered_tiff import save_stack
+                stage_files = [
+                    ("00_original",       "00_original.jpg"),
+                    ("01_mask",           "01_mask.png"),
+                    ("02_time_corrupted", "02_time_corrupted.jpg"),
+                ]
+                layers = []
+                for name, fname in stage_files:
+                    fp = os.path.join(output_dir, fname)
+                    if os.path.isfile(fp):
+                        layers.append((name, Image.open(fp)))
+                layers.append(("99_final", Image.open(final_path)))
+                stack_path = os.path.join(finals_dir, os.path.basename(output_dir) + "__stack.tif")
+                save_stack(stack_path, layers)
+                log(output_dir, f"Stack: {stack_path} ({len(layers)} layers)")
+            except Exception as e:
+                log(output_dir, f"save-stack failed: {e}", "WARN")
+
         # Push to phone
         try:
             from notify import push_image
@@ -1190,6 +1211,8 @@ Deprecated (still works, prints warning):
                         help="Where to output results (default: both)")
     parser.add_argument("--local-output-dir", default=None,
                         help="Custom local output directory")
+    parser.add_argument("--save-stack", action="store_true",
+                        help="export pipeline stages as a multi-page TIFF")
 
     args = parser.parse_args()
 

@@ -22,6 +22,12 @@ graph TD
     CAND["📋 find-candidates<br/>DB picker<br/>✅"]:::foundation
     IGCLEAN["🧹 clean-ig-screenshots<br/>Strip IG chrome via cross-stack variance<br/>✅"]:::foundation
     BATCHRUN["🎛️ batch-runner<br/>Autonomous review UI<br/>⚡ $2/hr cap<br/>schnell default + BG cache<br/>+ weights reweighted toward free"]:::happy
+    PIPEUI["🧪 pipeline-ui<br/>/pipeline 3-pane: candidate picker +<br/>style multi-select + run/results<br/>face-quality auto + has_face + crop<br/>✅ shipped f75c26c"]:::done
+    QUOTEDB["📚 literary-quotes-db<br/>~10k PoetryDB lines + MiniLM-L6 384-d<br/>embeddings, local JSON<br/>✅ foundation for text_overlay"]:::foundation
+
+    %% NEW EFFECTS (wip)
+    TEXTOVR["✍️ text-overlay<br/>Literary quote on stylized image<br/>Gemini mood → embed → cosine-NN<br/>brightness-aware placement, glow<br/>🚧 wip — free, ~3s"]:::wip
+    COLORGRADE["🎨 color-grade<br/>LAB grading: radial warm-cool /<br/>split-tone teal-orange / global wash<br/>🚧 wip — pure local, ~1s"]:::wip
 
     %% COMPOSITING
     STYLIZE["🎨 stylizing-bg-model-separately<br/>Tensor Art BG+model parallel<br/>✅ mature"]:::done

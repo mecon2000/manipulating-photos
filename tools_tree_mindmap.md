@@ -30,6 +30,8 @@ graph TD
     FOUNDATION --> CAND["📋 find-candidates<br/>DB picker"]:::foundation
     FOUNDATION --> CROP["✂️ smart-crop<br/>12 crop types, dual panel<br/>⚡ outpaint still weak"]:::foundation
     FOUNDATION --> BATCHRUN["🎛️ batch-runner<br/>Autonomous review UI<br/>$2/hr cap, schnell + BG cache"]:::happy
+    FOUNDATION --> PIPEUI["🧪 pipeline-ui<br/>/pipeline 3-pane: candidates +<br/>style multi-select + run/results<br/>✅ shipped f75c26c"]:::done
+    FOUNDATION --> QUOTEDB["📚 literary-quotes-db<br/>~10k PoetryDB lines + MiniLM-L6<br/>384-d embeddings, local JSON"]:::foundation
 
     %% Compositing
     COMPOSITING --> STYLIZE["🎨 stylizing-bg-model<br/>Tensor Art BG+model parallel<br/>mature"]:::done
@@ -55,6 +57,9 @@ graph TD
     EFFECTS --> STYLEXFER["🎭 style-transfer-replicate<br/>fofr/style-transfer<br/>😴 superseded by become-image"]:::tired
     EFFECTS --> BECOMEIMG["🎭 become-image-replicate<br/>fofr/become-image<br/>InstantID + IPAdapter, face+style"]:::done
     EFFECTS --> SURREALFACE["🎨 surreal-with-face<br/>relight→bw→become→mask→hist-match→4×<br/>⭐ identity-preserving 0010 imitation"]:::happy
+    EFFECTS --> TEXTOVR["✍️ text-overlay<br/>Literary quote on stylized image<br/>Gemini mood → embed → cosine-NN<br/>brightness-aware placement, glow<br/>🚧 wip — free, ~3s"]:::wip
+    EFFECTS --> COLORGRADE["🎨 color-grade<br/>LAB grading: radial warm-cool /<br/>split-tone teal-orange / global wash<br/>🚧 wip — pure local, ~1s"]:::wip
+    QUOTEDB --> TEXTOVR
     FOUNDATION --> IGCLEAN["🧹 clean-ig-screenshots<br/>Cross-stack variance + cv2.inpaint<br/>strip IG chrome from style refs"]:::foundation
     FOUNDATION --> UPSCALE["⬆️ upscale-replicate<br/>Real-ESRGAN 2x/4x"]:::foundation
     FOUNDATION --> WMCHK["🛂 watermark-check<br/>Gemini Vision pre-flight"]:::foundation

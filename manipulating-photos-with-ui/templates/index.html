@@ -241,6 +241,57 @@
   .job-actions .btn { flex: 0 0 auto; padding: 6px 10px; font-size: 12px; }
   .job-actions .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); }
   .job-empty { color: var(--dim); font-size: 13px; font-style: italic; padding: 20px; text-align: center; }
+
+  /* Decorate modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+    z-index: 200; display: none; align-items: center; justify-content: center;
+    padding: 12px;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: #131316; border: 1px solid var(--border); border-radius: 12px;
+    width: 100%; max-width: 1100px; max-height: 92vh; overflow-y: auto;
+    padding: 16px;
+  }
+  .modal h3 { margin: 0 0 12px; font-size: 17px; }
+  .modal section.dec { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .modal section.dec:last-of-type { border-bottom: none; }
+  .modal h4 { margin: 0 0 8px; font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .dec-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .dec-row label { font-size: 13px; cursor: pointer; }
+  .dec-row input[type=text] { flex: 1; min-width: 200px; background: #0a0a0c; color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  .dec-row .author { color: var(--dim); font-size: 11px; margin-left: 4px; }
+  .pos-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pos-thumb {
+    width: 130px; height: 90px; border: 2px solid var(--border); border-radius: 6px;
+    overflow: hidden; cursor: pointer; background: #000; position: relative;
+  }
+  .pos-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pos-thumb.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(255,179,71,0.35); }
+  .pos-thumb .idx { position: absolute; left: 4px; top: 4px; background: rgba(0,0,0,0.7);
+    border-radius: 3px; padding: 1px 5px; font-size: 10px; }
+  .pos-thumb.loading { opacity: 0.5; }
+  .dec-preview { width: 100%; max-height: 60vh; object-fit: contain;
+    background: #000; border-radius: 8px; display: block; }
+  .dec-preview-wrap { position: relative; }
+  .dec-preview-wrap.loading::after {
+    content: "rendering…"; position: absolute; top: 8px; right: 8px;
+    background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 12px; color: var(--accent);
+  }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; }
+  .modal-actions .btn { padding: 8px 16px; font-size: 14px; }
+  .dec-slider-row { display: flex; align-items: center; gap: 10px; }
+  .dec-slider-row input[type=range] { flex: 1; }
+  .dec-slider-row .val { color: var(--accent); font-size: 13px; min-width: 36px; text-align: right; }
+  select { background: #0a0a0c; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 6px; font-size: 13px; }
+  @media (min-width: 900px) {
+    .dec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .dec-grid > .dec-controls { min-width: 0; }
+    .dec-grid > .dec-preview-col { min-width: 0; position: sticky; top: 0; align-self: start; }
+  }
 </style>
 </head>
 <body>
@@ -327,6 +378,89 @@
       <p class="placeholder">Tree tab — port from /tree in a later phase. (Direct link still works at <a href="/tree" style="color: var(--accent);">/tree</a>.)</p>
     </section>
   </main>
+
+  <div id="decorate-backdrop" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal" id="decorate-modal">
+      <h3 id="dec-title">Decorate</h3>
+      <div class="dec-grid">
+        <div class="dec-controls">
+        <section class="dec">
+          <h4>Text <span id="dec-mood" style="color:var(--dim); text-transform:none; font-size:11px;"></span></h4>
+          <div id="dec-text-options"></div>
+          <div class="dec-row">
+            <button class="btn" id="dec-text-refresh">↻ refresh</button>
+            <button class="btn" id="dec-text-edit">✏ edit selected</button>
+          </div>
+          <div class="dec-row">
+            <label><input type="radio" name="dec-text" value="__own__"> my own:</label>
+            <input type="text" id="dec-text-own" placeholder="type your own line">
+          </div>
+        </section>
+
+        <section class="dec">
+          <h4>Position</h4>
+          <div id="dec-pos-thumbs" class="pos-thumbs"></div>
+        </section>
+
+        <section class="dec">
+          <h4>Align</h4>
+          <div class="dec-row">
+            <label><input type="radio" name="dec-align" value="auto" checked> auto-edge</label>
+            <label><input type="radio" name="dec-align" value="left"> left</label>
+            <label><input type="radio" name="dec-align" value="right"> right</label>
+            <label><input type="radio" name="dec-align" value="center"> center</label>
+          </div>
+        </section>
+
+        <section class="dec">
+          <h4>Color grade</h4>
+          <div class="dec-row">
+            <label><input type="radio" name="dec-grade" value="off" checked> off</label>
+            <label><input type="radio" name="dec-grade" value="warm-cool"> warm-cool</label>
+            <label><input type="radio" name="dec-grade" value="split"> split</label>
+            <label><input type="radio" name="dec-grade" value="wash"> wash:</label>
+            <select id="dec-wash-color">
+              <option value="teal">teal</option>
+              <option value="red">red</option>
+              <option value="ochre">ochre</option>
+              <option value="amber">amber</option>
+              <option value="blue-hour">blue-hour</option>
+              <option value="rose">rose</option>
+              <option value="sepia">sepia</option>
+              <option value="emerald">emerald</option>
+              <option value="magenta">magenta</option>
+              <option value="cyan">cyan</option>
+            </select>
+          </div>
+          <div class="dec-slider-row">
+            <span style="font-size:12px;color:var(--dim);">strength</span>
+            <input type="range" id="dec-grade-strength" min="0" max="0.6" step="0.05" value="0.30">
+            <span class="val" id="dec-grade-strength-val">0.30</span>
+          </div>
+        </section>
+
+        <section class="dec">
+          <h4>Export</h4>
+          <div class="dec-row">
+            <label><input type="checkbox" id="dec-save-tiff"> Save layered TIFF stack alongside JPG</label>
+          </div>
+        </section>
+        </div>
+
+        <div class="dec-preview-col">
+          <h4 style="margin:0 0 8px;font-size:13px;color:var(--dim);">Live preview</h4>
+          <div class="dec-preview-wrap" id="dec-preview-wrap">
+            <img class="dec-preview" id="dec-preview-img" alt="">
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" id="dec-discard">Discard</button>
+        <button class="btn primary" id="dec-save">Save & Fav</button>
+      </div>
+    </div>
+  </div>
 
 <script>
   const TABS = ["candidates", "run", "vote", "favs", "tree"];
@@ -824,7 +958,7 @@
         if (!t) return;
         const act = t.dataset.act;
         if (act === "decorate") {
-          alert("Decorate modal — coming in Phase 4");
+          if (outFn) openDecorate(outFn, title);
         } else if (act === "bad" && outFn) {
           jobAction(outFn, "bad", card);
         } else if (act === "fav" && outFn) {
@@ -894,13 +1028,253 @@
       if (!j || !j.output) return;
       const fn = j.output.split("/").pop();
       e.preventDefault();
-      if (e.key === "d") alert("Decorate modal — coming in Phase 4");
+      if (e.key === "d") openDecorate(fn, j.candidate + " × " + j.style);
       else if (e.key === "f") jobAction(fn, "fav", null);
       else if (e.key === "b") {
         const card = document.querySelector(`.job-card[data-job-id="${j.id}"]`);
         jobAction(fn, "bad", card);
       }
     }
+  });
+
+  // --- Decorate modal ------------------------------------------------------
+  const decState = {
+    filename: null,
+    suggestions: [],
+    nextOffset: 0,
+    selectedTextValue: "__none__", // radio value: "__none__", "__own__", or index
+    positionIdx: 0,
+    numPositions: 6,
+    debounceTimer: null,
+  };
+
+  function openDecorate(filename, title) {
+    decState.filename = filename;
+    decState.suggestions = [];
+    decState.nextOffset = 0;
+    decState.selectedTextValue = "__none__";
+    decState.positionIdx = 0;
+    document.getElementById("dec-title").textContent = "Decorate — " + (title || filename);
+    document.getElementById("dec-text-own").value = "";
+    document.getElementById("dec-mood").textContent = "";
+    document.getElementById("dec-preview-img").src = "";
+    document.getElementById("dec-pos-thumbs").innerHTML = '<div style="color:var(--dim); font-size:12px;">(pick text first)</div>';
+    document.querySelectorAll('input[name=dec-align]').forEach(r => r.checked = (r.value === "auto"));
+    document.querySelectorAll('input[name=dec-grade]').forEach(r => r.checked = (r.value === "off"));
+    document.getElementById("dec-grade-strength").value = "0.30";
+    document.getElementById("dec-grade-strength-val").textContent = "0.30";
+    document.getElementById("dec-save-tiff").checked = false;
+    document.getElementById("decorate-backdrop").classList.add("show");
+    loadDecorateSuggestions(0);
+    schedulePreview(0);  // initial preview without text
+  }
+
+  function closeDecorate() {
+    document.getElementById("decorate-backdrop").classList.remove("show");
+    decState.filename = null;
+    if (decState.debounceTimer) clearTimeout(decState.debounceTimer);
+  }
+
+  async function loadDecorateSuggestions(offset) {
+    const fn = decState.filename;
+    if (!fn) return;
+    const cont = document.getElementById("dec-text-options");
+    cont.innerHTML = '<div style="color:var(--dim); font-size:12px;">loading…</div>';
+    try {
+      const r = await fetch(`/api/decorate/text-suggestions?filename=${encodeURIComponent(fn)}&n=5&offset=${offset}`);
+      const j = await r.json();
+      if (!r.ok) {
+        cont.innerHTML = `<div style="color:var(--danger); font-size:12px;">${j.error||"failed"}</div>`;
+        return;
+      }
+      decState.suggestions = j.suggestions || [];
+      decState.nextOffset = j.next_offset || 0;
+      if (j.mood) document.getElementById("dec-mood").textContent = "mood: " + j.mood;
+      let html = `<div class="dec-row"><label><input type="radio" name="dec-text" value="__none__"${decState.selectedTextValue==="__none__"?" checked":""}> ○ none</label></div>`;
+      decState.suggestions.forEach((s, i) => {
+        const t = s.text.replace(/</g, "&lt;");
+        const author = (s.author || "").replace(/</g, "&lt;");
+        html += `<div class="dec-row"><label><input type="radio" name="dec-text" value="${i}"> "${t}" <span class="author">— ${author}</span></label></div>`;
+      });
+      cont.innerHTML = html;
+    } catch (e) {
+      cont.innerHTML = `<div style="color:var(--danger); font-size:12px;">network error</div>`;
+    }
+  }
+
+  function decGetText() {
+    const v = decState.selectedTextValue;
+    if (v === "__none__") return "";
+    if (v === "__own__") return document.getElementById("dec-text-own").value.trim();
+    const i = parseInt(v, 10);
+    if (!isNaN(i) && decState.suggestions[i]) return decState.suggestions[i].text;
+    return "";
+  }
+
+  function decGetGrade() {
+    const mode = document.querySelector('input[name=dec-grade]:checked')?.value || "off";
+    if (mode === "wash") {
+      const c = document.getElementById("dec-wash-color").value;
+      return `wash:${c}`;
+    }
+    return mode;
+  }
+
+  function decGetPayload() {
+    return {
+      filename: decState.filename,
+      text: decGetText(),
+      text_align: document.querySelector('input[name=dec-align]:checked')?.value || "auto",
+      position_idx: decState.positionIdx,
+      grade_mode: decGetGrade(),
+      grade_strength: parseFloat(document.getElementById("dec-grade-strength").value),
+    };
+  }
+
+  function schedulePreview(delay = 500) {
+    if (decState.debounceTimer) clearTimeout(decState.debounceTimer);
+    decState.debounceTimer = setTimeout(renderPreview, delay);
+  }
+
+  async function renderPreview() {
+    if (!decState.filename) return;
+    const wrap = document.getElementById("dec-preview-wrap");
+    wrap.classList.add("loading");
+    try {
+      const r = await fetch("/api/decorate/preview", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(decGetPayload()),
+      });
+      const j = await r.json();
+      if (j.preview_url) {
+        document.getElementById("dec-preview-img").src = j.preview_url;
+      }
+    } catch (e) {}
+    wrap.classList.remove("loading");
+  }
+
+  async function loadPositionThumbs() {
+    const cont = document.getElementById("dec-pos-thumbs");
+    const text = decGetText();
+    if (!text) {
+      cont.innerHTML = '<div style="color:var(--dim); font-size:12px;">(pick text first to see position options)</div>';
+      return;
+    }
+    cont.innerHTML = "";
+    const N = decState.numPositions;
+    for (let i = 0; i < N; i++) {
+      const div = document.createElement("div");
+      div.className = "pos-thumb loading" + (i === decState.positionIdx ? " active" : "");
+      div.dataset.idx = i;
+      div.innerHTML = `<span class="idx">${i+1}</span>`;
+      div.addEventListener("click", () => {
+        decState.positionIdx = i;
+        cont.querySelectorAll(".pos-thumb").forEach(t => t.classList.toggle("active", parseInt(t.dataset.idx,10) === i));
+        schedulePreview(0);
+      });
+      cont.appendChild(div);
+    }
+    // Fire all in parallel
+    const base = decGetPayload();
+    Promise.all([...Array(N).keys()].map(async (i) => {
+      const payload = {...base, position_idx: i};
+      try {
+        const r = await fetch("/api/decorate/preview", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        const div = cont.querySelector(`.pos-thumb[data-idx="${i}"]`);
+        if (div && j.preview_url) {
+          div.classList.remove("loading");
+          const img = document.createElement("img");
+          img.src = j.preview_url;
+          div.appendChild(img);
+        }
+      } catch (e) {}
+    }));
+  }
+
+  // Modal event wiring
+  document.getElementById("dec-discard").addEventListener("click", closeDecorate);
+  document.getElementById("decorate-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "decorate-backdrop") closeDecorate();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!document.getElementById("decorate-backdrop").classList.contains("show")) return;
+    if (e.key === "Escape") { e.preventDefault(); closeDecorate(); }
+    if (e.key === "Enter" && e.target.tagName !== "TEXTAREA" && e.target.tagName !== "INPUT") {
+      e.preventDefault(); document.getElementById("dec-save").click();
+    }
+  });
+
+  document.getElementById("dec-text-options").addEventListener("change", (e) => {
+    if (e.target.name === "dec-text") {
+      decState.selectedTextValue = e.target.value;
+      loadPositionThumbs();
+      schedulePreview(0);
+    }
+  });
+  document.querySelector('input[name="dec-text"][value="__own__"]')?.addEventListener; // placeholder
+  // The "my own" radio is in a separate row — hook it
+  document.querySelector('#decorate-modal').addEventListener("change", (e) => {
+    if (e.target.name === "dec-text" && e.target.value === "__own__") {
+      decState.selectedTextValue = "__own__";
+      loadPositionThumbs();
+      schedulePreview(0);
+    } else if (e.target.name === "dec-align" || e.target.name === "dec-grade") {
+      schedulePreview();
+    } else if (e.target.id === "dec-wash-color") {
+      schedulePreview();
+    }
+  });
+  document.getElementById("dec-text-own").addEventListener("input", () => {
+    document.querySelector('input[name="dec-text"][value="__own__"]').checked = true;
+    decState.selectedTextValue = "__own__";
+    schedulePreview();
+  });
+  document.getElementById("dec-text-own").addEventListener("blur", () => {
+    if (decState.selectedTextValue === "__own__") loadPositionThumbs();
+  });
+
+  document.getElementById("dec-text-refresh").addEventListener("click", () => {
+    loadDecorateSuggestions(decState.nextOffset);
+  });
+  document.getElementById("dec-text-edit").addEventListener("click", () => {
+    const t = decGetText();
+    if (!t) { showToast("pick a suggestion first"); return; }
+    document.getElementById("dec-text-own").value = t;
+    document.querySelector('input[name="dec-text"][value="__own__"]').checked = true;
+    decState.selectedTextValue = "__own__";
+    document.getElementById("dec-text-own").focus();
+  });
+
+  document.getElementById("dec-grade-strength").addEventListener("input", (e) => {
+    document.getElementById("dec-grade-strength-val").textContent = parseFloat(e.target.value).toFixed(2);
+    schedulePreview();
+  });
+
+  document.getElementById("dec-save").addEventListener("click", async () => {
+    const btn = document.getElementById("dec-save");
+    btn.disabled = true; btn.textContent = "Saving…";
+    const payload = decGetPayload();
+    payload.save_tiff = document.getElementById("dec-save-tiff").checked;
+    try {
+      const r = await fetch("/api/decorate/save", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        showToast("Save failed: " + (j.error || ""));
+      } else {
+        showToast("Saved & favorited ⭐" + (j.tiff_path ? " (+TIFF)" : ""));
+        closeDecorate();
+      }
+    } catch (e) {
+      showToast("Save failed");
+    }
+    btn.disabled = false; btn.textContent = "Save & Fav";
   });
 </script>
 </body>

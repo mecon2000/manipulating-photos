@@ -1845,6 +1845,264 @@ def api_pipe_bad(filename):
     return jsonify({"ok": True})
 
 
+# --- Decorate modal endpoints ---------------------------------------------
+
+DECORATE_CACHE_DIR = SHARED_DIR / "decorate_cache"
+DECORATE_PREVIEWS_DIR = SHARED_DIR / "decorate_previews"
+
+
+def _decorate_get_google_key():
+    k = os.environ.get("GOOGLE_API_KEY")
+    if k:
+        return k
+    env = Path("~/sol/.env").expanduser()
+    if env.is_file():
+        for line in env.read_text().splitlines():
+            if line.startswith("GOOGLE_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return None
+
+
+def _decorate_cleanup_old_previews(max_age_h=24):
+    if not DECORATE_PREVIEWS_DIR.is_dir():
+        return
+    cutoff = time.time() - max_age_h * 3600
+    for p in DECORATE_PREVIEWS_DIR.iterdir():
+        try:
+            if p.is_file() and p.stat().st_mtime < cutoff:
+                p.unlink()
+        except Exception:
+            pass
+
+
+@app.route("/api/decorate/text-suggestions")
+def api_decorate_text_suggestions():
+    filename = request.args.get("filename", "")
+    n = int(request.args.get("n", "5"))
+    offset = int(request.args.get("offset", "0"))
+    src = PIPELINE_OUT_DIR / filename
+    if not filename or not src.is_file():
+        return jsonify({"error": "file not found"}), 404
+    DECORATE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = DECORATE_CACHE_DIR / f"{filename}.json"
+    cache = None
+    if cache_path.is_file():
+        try:
+            cache = json.loads(cache_path.read_text())
+        except Exception:
+            cache = None
+    if cache is None:
+        try:
+            import text_overlay  # type: ignore
+        except Exception as e:
+            return jsonify({"error": f"text_overlay import: {e}"}), 500
+        api_key = _decorate_get_google_key()
+        if not api_key:
+            return jsonify({"error": "GOOGLE_API_KEY missing"}), 500
+        try:
+            mood = text_overlay.gemini_mood_phrase(str(src), api_key)
+        except Exception as e:
+            return jsonify({"error": f"mood phrase: {e}"}), 500
+        try:
+            ranked, order = text_overlay.rank_quotes_by_mood(mood, top_k=50)
+        except Exception as e:
+            return jsonify({"error": f"rank: {e}"}), 500
+        cache = {"mood": mood, "ranked": ranked}
+        try:
+            cache_path.write_text(json.dumps(cache))
+        except Exception:
+            pass
+    ranked = cache.get("ranked", [])
+    sl = ranked[offset:offset + n]
+    next_offset = offset + len(sl)
+    if next_offset >= len(ranked):
+        next_offset = 0  # wrap-around for refresh
+    return jsonify({
+        "suggestions": [{"text": q.get("text", ""),
+                          "author": q.get("author", ""),
+                          "title": q.get("title", "")} for q in sl],
+        "next_offset": next_offset,
+        "mood": cache.get("mood", ""),
+    })
+
+
+def _decorate_knob_hash(payload):
+    import hashlib
+    keys = ("filename", "text", "text_align", "position_idx",
+            "grade_mode", "grade_strength")
+    s = json.dumps({k: payload.get(k) for k in keys}, sort_keys=True)
+    return hashlib.md5(s.encode()).hexdigest()[:16]
+
+
+def _decorate_render(payload, return_intermediates=False):
+    """Returns (final_pil, source_pil, with_text_pil, with_grade_pil)."""
+    from PIL import Image as _PI
+    import numpy as _np
+    filename = payload["filename"]
+    src = PIPELINE_OUT_DIR / filename
+    if not src.is_file():
+        raise FileNotFoundError(filename)
+    text = (payload.get("text") or "").strip()
+    text_align = payload.get("text_align", "auto") or "auto"
+    position_idx = int(payload.get("position_idx") or 0)
+    grade_mode = payload.get("grade_mode", "off") or "off"
+    grade_strength = float(payload.get("grade_strength") or 0.3)
+
+    source_pil = _PI.open(src).convert("RGB")
+    arr = _np.asarray(source_pil)
+
+    with_text_pil = None
+    with_grade_pil = None
+
+    cur = arr
+    if text:
+        try:
+            import text_overlay  # type: ignore
+            force_align = None if text_align == "auto" else text_align
+            cur = text_overlay.overlay(
+                cur, text,
+                force_bbox_idx=position_idx,
+                force_align=force_align,
+            )
+        except Exception as e:
+            print(f"[decorate] text overlay failed: {e}")
+    with_text_pil = _PI.fromarray(cur)
+
+    if grade_mode and grade_mode != "off":
+        try:
+            import color_grade  # type: ignore
+            cur = color_grade.grade(cur, grade_mode, strength=grade_strength)
+        except Exception as e:
+            print(f"[decorate] grade failed: {e}")
+    with_grade_pil = _PI.fromarray(cur)
+
+    final_pil = _PI.fromarray(cur)
+    if return_intermediates:
+        return final_pil, source_pil, with_text_pil, with_grade_pil
+    return final_pil
+
+
+@app.route("/api/decorate/preview", methods=["POST"])
+def api_decorate_preview():
+    payload = request.get_json(force=True, silent=True) or {}
+    filename = payload.get("filename", "")
+    src = PIPELINE_OUT_DIR / filename
+    if not filename or not src.is_file():
+        return jsonify({"error": "file not found"}), 404
+    DECORATE_PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        _decorate_cleanup_old_previews()
+    except Exception:
+        pass
+    h = _decorate_knob_hash(payload)
+    out_name = f"{Path(filename).stem}__{h}.jpg"
+    out_path = DECORATE_PREVIEWS_DIR / out_name
+    if not out_path.is_file():
+        try:
+            final_pil = _decorate_render(payload, return_intermediates=False)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        # Cap preview to 1280px long edge to keep responsive
+        w, hh = final_pil.size
+        long_edge = max(w, hh)
+        if long_edge > 1280:
+            sc = 1280.0 / long_edge
+            final_pil = final_pil.resize((max(1, int(w * sc)), max(1, int(hh * sc))))
+        final_pil.save(out_path, quality=88)
+    return jsonify({
+        "preview_url": "/api/image?path=" + str(out_path),
+        "cache_key": h,
+    })
+
+
+@app.route("/api/decorate/save", methods=["POST"])
+def api_decorate_save():
+    payload = request.get_json(force=True, silent=True) or {}
+    filename = payload.get("filename", "")
+    src = PIPELINE_OUT_DIR / filename
+    if not filename or not src.is_file():
+        return jsonify({"error": "file not found"}), 404
+    save_tiff = bool(payload.get("save_tiff", False))
+    FAVORITES_DIR.mkdir(parents=True, exist_ok=True)
+
+    try:
+        final_pil, source_pil, with_text_pil, with_grade_pil = _decorate_render(
+            payload, return_intermediates=True)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    base = Path(filename).stem
+    fav_name = f"{base}__decorated.jpg"
+    fav_path = FAVORITES_DIR / fav_name
+    final_pil.save(fav_path, quality=95)
+
+    try:
+        git_hash = subprocess.check_output(
+            ["git", "-C", str(WORKFLOWS_DIR), "rev-parse", "--short", "HEAD"],
+            text=True, timeout=5).strip()
+    except Exception:
+        git_hash = None
+
+    sidecar_path = FAVORITES_DIR / f"{base}__decorated.json"
+    sidecar = {
+        "source": str(src),
+        "filename": filename,
+        "knobs": {
+            "text": payload.get("text", ""),
+            "text_align": payload.get("text_align", "auto"),
+            "position_idx": payload.get("position_idx", 0),
+            "grade_mode": payload.get("grade_mode", "off"),
+            "grade_strength": payload.get("grade_strength", 0.3),
+            "save_tiff": save_tiff,
+        },
+        "git_commit": git_hash,
+        "saved_at": now_str(),
+    }
+    sidecar_path.write_text(json.dumps(sidecar, indent=2))
+
+    tiff_path = None
+    if save_tiff:
+        try:
+            import _layered_tiff  # type: ignore
+            tp = FAVORITES_DIR / f"{base}__decorated__stack.tif"
+            _layered_tiff.save_stack(str(tp), [
+                ("00_source", source_pil),
+                ("01_text", with_text_pil),
+                ("02_grade", with_grade_pil),
+                ("99_final", final_pil),
+            ])
+            tiff_path = str(tp)
+        except Exception as e:
+            print(f"[decorate] TIFF save failed: {e}")
+
+    # Append to favorites.json
+    entry = {
+        "file": fav_name,
+        "tool": "decorate",
+        "source": filename,
+        "knobs": sidecar["knobs"],
+        "git_commit": git_hash,
+        "favorited_at": now_str(),
+    }
+    if tiff_path:
+        entry["tiff"] = Path(tiff_path).name
+    data = {"favorites": []}
+    if FAVORITES_JSON.is_file():
+        try:
+            data = json.loads(FAVORITES_JSON.read_text())
+        except Exception:
+            pass
+    data.setdefault("favorites", []).append(entry)
+    FAVORITES_JSON.write_text(json.dumps(data, indent=2))
+
+    return jsonify({
+        "ok": True,
+        "fav_path": str(fav_path),
+        "sidecar_path": str(sidecar_path),
+        "tiff_path": tiff_path,
+    })
+
+
 # --- Cloudflared tunnel ----------------------------------------------------
 
 def start_cloudflared(port):

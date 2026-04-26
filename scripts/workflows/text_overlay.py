@@ -78,6 +78,21 @@ def gemini_mood_phrase(image_path, api_key):
     return d["candidates"][0]["content"]["parts"][0]["text"].strip().strip('"')
 
 
+def rank_quotes_by_mood(mood, top_k=50):
+    """Return ordered list of {text,author,title} ranked by similarity to mood."""
+    if not (QUOTES_JSON.is_file() and QUOTES_NPY.is_file()):
+        raise RuntimeError("literary DB not built yet")
+    from sentence_transformers import SentenceTransformer
+    meta = json.loads(QUOTES_META.read_text())
+    m = SentenceTransformer(meta["model"])
+    q_vec = m.encode([mood], normalize_embeddings=True)[0]
+    db_vecs = np.load(QUOTES_NPY)
+    sims = db_vecs @ q_vec
+    order = np.argsort(-sims)[:top_k].tolist()
+    lines = json.loads(QUOTES_JSON.read_text())
+    return [lines[int(i)] for i in order], order
+
+
 def pick_quote_auto(image_path, top_k=20):
     """Semantic NN over local literary DB."""
     if not (QUOTES_JSON.is_file() and QUOTES_NPY.is_file()):
@@ -265,6 +280,33 @@ def wrap_text(text, font, max_width_px):
     return lines
 
 
+def count_candidate_bboxes(rgb_arr, text, *, font_size_pct=3.0, max_width_pct=42.0,
+                            font_path=DEFAULT_QUOTE_FONT):
+    """Return number of candidate bbox positions for a given text/image."""
+    H, W = rgb_arr.shape[:2]
+    short = min(W, H)
+    font_size = max(14, int(short * font_size_pct / 100.0))
+    font = ImageFont.truetype(font_path, font_size)
+    pose = None
+    try:
+        pose = detect_pose(rgb_arr)
+    except Exception:
+        pass
+    max_line_w = int(W * max_width_pct / 100.0)
+    lines = wrap_text(text or "x", font, max_line_w)
+    def measure(s):
+        try:
+            l, t, r, b = font.getbbox(s); return (r - l), (b - t)
+        except Exception:
+            return font.getsize(s)
+    line_sizes = [measure(s) for s in lines]
+    line_h = max(h for _, h in line_sizes)
+    leading = int(line_h * 0.25)
+    block_w = max(w for w, _ in line_sizes)
+    block_h = len(lines) * line_h + (len(lines) - 1) * leading
+    return len(candidate_bboxes(W, H, pose, block_w, block_h))
+
+
 # ---- Render --------------------------------------------------------------
 
 def render_text(pil_rgb, text, font_path, font_size, pos, color, glow=False, glow_radius=3):
@@ -292,7 +334,8 @@ def render_text(pil_rgb, text, font_path, font_size, pos, color, glow=False, glo
 def overlay(rgb_arr, text, *, style="quote", orientation="horizontal",
              font_size_pct=3.0, manual_angle_deg=None,
              font_quote=DEFAULT_QUOTE_FONT, font_subtitle=DEFAULT_SUBTITLE_FONT,
-             max_width_pct=42.0, blur_match_factor=0.5, debug=False):
+             max_width_pct=42.0, blur_match_factor=0.5, debug=False,
+             force_bbox_idx=None, force_align=None):
     """Apply text overlay. Always horizontal by default.
 
     - Wraps long text into up to 3 lines fitting `max_width_pct`% of image width.
@@ -347,10 +390,18 @@ def overlay(rgb_arr, text, *, style="quote", orientation="horizontal",
     scored = [(bbox_score(luma, x, y, block_w, block_h), x, y) for (x, y) in cands]
     scored.sort()
     score, bx, by = scored[0]
+    if force_bbox_idx is not None and 0 <= int(force_bbox_idx) < len(cands):
+        bx, by = cands[int(force_bbox_idx)]
+        score = bbox_score(luma, bx, by, block_w, block_h)
 
     # Decide alignment: flush to whichever edge is closer
     bbox_cx = bx + block_w // 2
     align_right = (bbox_cx > W / 2)
+    if force_align in ("left", "right", "center"):
+        align_right = (force_align == "right")
+        align_center = (force_align == "center")
+    else:
+        align_center = False
     blur_score = region_blur_score(luma, bx, by, block_w, block_h)
     print(f"  [text] block {block_w}×{block_h} @ ({bx},{by}) std={score:.1f} "
           f"blur(LapVar)={blur_score:.1f} align={'right' if align_right else 'left'} "
@@ -379,6 +430,8 @@ def overlay(rgb_arr, text, *, style="quote", orientation="horizontal",
     ld = ImageDraw.Draw(layer)
 
     def line_x(line_w):
+        if align_center:
+            return (block_w - line_w) // 2
         return (block_w - line_w) if align_right else 0
 
     if glow:

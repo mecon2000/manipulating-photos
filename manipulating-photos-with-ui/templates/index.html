@@ -327,7 +327,26 @@
     <button class="tabbtn" data-tab="vote" role="tab">🗳<span class="label">Vote</span></button>
     <button class="tabbtn" data-tab="favs" role="tab">⭐<span class="label">Favs</span></button>
     <button class="tabbtn" data-tab="tree" role="tab">🌳<span class="label">Tree</span></button>
+    <span style="flex:1"></span>
+    <span id="cost-today" title="Today's accrued cost (gallery + candidates + pipeline)"
+          style="color:var(--dim); font-variant-numeric:tabular-nums; padding:4px 10px;
+                 font-size:13px; border:1px solid #333; border-radius:6px; align-self:center;">
+      $0.00
+    </span>
   </nav>
+  <script>
+  async function refreshCostToday() {
+    try {
+      const d = await fetch('/api/cost/today').then(r => r.json());
+      const el = document.getElementById('cost-today');
+      if (!el) return;
+      el.textContent = '$' + d.total.toFixed(2);
+      el.title = `Today (${d.date}): gallery $${d.gallery.toFixed(2)} · candidates $${d.candidates.toFixed(2)} · pipeline $${d.pipeline.toFixed(2)}`;
+    } catch (e) { /* ignore */ }
+  }
+  refreshCostToday();
+  setInterval(refreshCostToday, 30000);
+  </script>
 
   <main>
     <section id="tab-candidates" role="tabpanel">

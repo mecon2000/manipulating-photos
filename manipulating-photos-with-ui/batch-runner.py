@@ -849,6 +849,28 @@ def api_st_scoreboard():
         key=lambda x: -x["score"])
     return jsonify({"styles": ranked})
 
+@app.route("/api/cost/today")
+def api_cost_today():
+    """Today's accrued cost across all sources, in USD."""
+    today = datetime.now(ISRAEL_TZ).strftime("%Y-%m-%d")
+    def _state_today(s):
+        if s.stats.get("cost_date") == today:
+            return float(s.stats.get("cost_today", 0.0))
+        return 0.0
+    gallery = _state_today(GALLERY_STATE)
+    candidates = _state_today(CANDIDATES_STATE)
+    with PIPELINE_COST_LOCK:
+        pipeline = float(PIPELINE_COST["cost_today"]) \
+            if PIPELINE_COST["date"] == today else 0.0
+    return jsonify({
+        "date": today,
+        "gallery": round(gallery, 4),
+        "candidates": round(candidates, 4),
+        "pipeline": round(pipeline, 4),
+        "total": round(gallery + candidates + pipeline, 4),
+    })
+
+
 @app.route("/api/tree")
 def api_tree():
     view = request.args.get("view", "graph")
@@ -1474,6 +1496,22 @@ PIPELINE_STATE_PATH = SHARED_DIR / "pipeline_state.json"
 PIPELINE_JOBS = {}  # job_id -> dict
 PIPELINE_JOBS_LOCK = threading.RLock()
 
+# Today's pipeline-subprocess accrued cost (resets daily). Each pipeline run
+# adds the surreal_with_face per-image cost (~$0.07: $0.06 relight + ~$0.01
+# become-image, +$0.005 if upscale).
+PIPELINE_COST = {"date": "", "cost_today": 0.0}
+PIPELINE_COST_LOCK = threading.RLock()
+
+
+def _pipeline_accrue(amount):
+    today = datetime.now(ISRAEL_TZ).strftime("%Y-%m-%d")
+    with PIPELINE_COST_LOCK:
+        if PIPELINE_COST["date"] != today:
+            PIPELINE_COST["date"] = today
+            PIPELINE_COST["cost_today"] = 0.0
+        PIPELINE_COST["cost_today"] = round(
+            PIPELINE_COST["cost_today"] + amount, 4)
+
 
 def _pipe_load_state():
     if not PIPELINE_STATE_PATH.is_file():
@@ -1736,6 +1774,8 @@ def _pipe_run_one(job_id, candidate_path, style_path, no_face_overlay):
         return
     setj(status="done", phase="done", output=str(out_path),
          ended_at=now_str())
+    # Accrue today's pipeline cost: relight $0.06 + become-image $0.01 + upscale $0.005
+    _pipeline_accrue(0.075)
 
 
 @app.route("/api/pipeline/run", methods=["POST"])

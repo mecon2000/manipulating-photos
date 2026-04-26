@@ -174,7 +174,8 @@
   }
   .crop-modal-header .zoom-val { color: var(--dim); font-size: 12px; min-width: 40px; }
   .crop-img-wrap {
-    width: 100%; max-width: 100%; max-height: 70vh;
+    width: 100%; max-width: 100%; max-height: 70vh; min-height: 200px;
+    position: relative;
     overflow: auto; display: flex; align-items: center; justify-content: center;
     background: #000;
   }
@@ -368,7 +369,8 @@
         <button class="zoom-btn" id="crop-close" type="button" title="Close">✕</button>
       </div>
       <div class="crop-img-wrap" id="crop-img-wrap">
-        <img id="crop-img" src="">
+        <div id="crop-loading" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:14px; pointer-events:none;">Generating crop options…</div>
+        <img id="crop-img" src="" style="display:none;">
       </div>
       <div style="margin-top:8px;">Pick crop number (1-12) and press Enter:</div>
       <input id="crop-num" type="number" min="1" max="12" placeholder="1-12" autofocus>
@@ -749,6 +751,23 @@
       // Lazy watermark observation (only if not already known)
       if (!c.watermark) obs.observe(card);
     }
+    // Append placeholder cards for outstanding replenishments.
+    for (let i = 0; i < pendingReplenish; i++) {
+      const ph = document.createElement("div");
+      ph.className = "cand-card";
+      ph.style.opacity = "0.6";
+      ph.style.pointerEvents = "none";
+      ph.innerHTML = `
+        <div class="cand-thumb" style="display:flex; align-items:center; justify-content:center; background:#111; aspect-ratio: 3/4;">
+          <div style="text-align:center; color:var(--dim); font-size:13px; padding:12px;">
+            <div style="font-size:24px; margin-bottom:8px;">✨</div>
+            <div>New candidate on the way…</div>
+          </div>
+        </div>
+        <div class="cand-meta"><div class="cand-name">replenishing</div></div>
+      `;
+      grid.appendChild(ph);
+    }
   }
 
   function toggleSelect(fn) {
@@ -801,23 +820,39 @@
     // gets feedback on the first click.
     const modal = document.getElementById("crop-modal");
     const cropImg = document.getElementById("crop-img");
+    const cropLoading = document.getElementById("crop-loading");
     cropImg.src = "";
-    cropImg.alt = "Generating crop options…";
+    cropImg.style.display = "none";
+    cropLoading.textContent = "Generating crop options…";
+    cropLoading.style.display = "flex";
     document.getElementById("crop-num").value = "";
     setCropZoom(1.0);
     modal.classList.add("show");
     // Focus the number input so Enter works immediately after typing
     setTimeout(() => document.getElementById("crop-num").focus(), 50);
+    // Wire onload/onerror so the placeholder is replaced (or surfaces an
+    // error) instead of staying stuck forever.
+    cropImg.onload = () => {
+      cropLoading.style.display = "none";
+      cropImg.style.display = "block";
+    };
+    cropImg.onerror = () => {
+      cropLoading.textContent = "Crop generation failed: image not found";
+    };
     try {
       const r = await fetch(`/api/pipeline/candidate/${encodeURIComponent(c.filename)}/crop-options`,
         { method: "POST" });
-      const j = await r.json();
-      if (!j.ok) { showToast("Crop options failed"); closeCropModal(); return; }
+      let j = null;
+      try { j = await r.json(); } catch { j = null; }
+      if (!r.ok || !j || !j.ok) {
+        const msg = (j && j.error) ? j.error : ("HTTP " + r.status);
+        cropLoading.textContent = "Crop generation failed: " + msg;
+        return;
+      }
       // Bust cache so previously-cropped items show fresh options.
       cropImg.src = imgUrl(j.options_path) + "&_=" + Date.now();
-    } catch {
-      showToast("Crop options failed");
-      closeCropModal();
+    } catch (e) {
+      cropLoading.textContent = "Crop generation failed: " + (e && e.message ? e.message : "network error");
       return;
     } finally {
       cropOpening = false;
@@ -932,8 +967,11 @@
 
   // --- Remove + Undo stack ---
   const removeUndoStack = []; // {filename, items_snapshot}
+  // Outstanding replenishment count — drives placeholder cards at the bottom
+  // of the candidates grid. Each remove bumps it; each new candidate that
+  // shows up via polling decrements it.
+  let pendingReplenish = 0;
   async function removeCandidate(c) {
-    if (!confirm(`Remove ${c.filename} and add to rejects?`)) return;
     try {
       const r = await fetch(`/api/pipeline/candidate/${encodeURIComponent(c.filename)}/remove`,
         { method: "POST" });
@@ -944,12 +982,43 @@
       candState.items = candState.items.filter(x => x.filename !== c.filename);
       selected.delete(c.filename);
       saveSelected(selected);
+      pendingReplenish += 1;
       renderCandidates();
       updateUndoBtn();
-      showToast("Removed " + c.filename);
+      ensureReplenishPoll();
     } catch {
       showToast("Remove failed");
     }
+  }
+  // Track filenames known at the moment a remove happened so the next "new"
+  // arrival can replace a placeholder.
+  let knownFilenames = new Set();
+  let replenishPollHandle = null;
+  function ensureReplenishPoll() {
+    if (replenishPollHandle) return;
+    replenishPollHandle = setInterval(async () => {
+      if (pendingReplenish <= 0) {
+        clearInterval(replenishPollHandle);
+        replenishPollHandle = null;
+        return;
+      }
+      try {
+        const r = await fetch("/api/pipeline/candidates");
+        const j = await r.json();
+        const items = j.candidates || [];
+        const before = new Set(candState.items.map(x => x.filename));
+        const newOnes = items.filter(x => !before.has(x.filename));
+        if (newOnes.length) {
+          // Append new entries; cap pendingReplenish reduction to # of new.
+          for (const n of newOnes) {
+            candState.items.push(n);
+            if (pendingReplenish > 0) pendingReplenish -= 1;
+            if (pendingReplenish <= 0) break;
+          }
+          renderCandidates();
+        }
+      } catch {}
+    }, 5000);
   }
   function updateUndoBtn() {
     const b = document.getElementById("cand-undo");

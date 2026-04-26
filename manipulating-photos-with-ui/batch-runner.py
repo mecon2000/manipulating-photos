@@ -2115,6 +2115,68 @@ def api_favs_thumbnail(filename):
 PIPE_REMOVED_BYTES: dict = {}
 
 
+def _pipe_replenish_one():
+    """Pick a fresh photo, validate via motion-streak --up-to-step 1, then copy
+    the source into PIPELINE_CAND_DIR so it appears as a new pipeline candidate.
+
+    Mirrors the legacy "good" handler logic without going through the
+    candidates-queue review step. One call -> one new candidate (best-effort).
+    """
+    try:
+        model_name, photo = pick_ms_candidate_photo()
+        if not photo:
+            print("[replenish] no candidate photos available", flush=True)
+            return None
+        job_id = uuid.uuid4().hex[:8]
+        # Run motion-streak preview as a sanity / preview pass (~10s, $0).
+        script = WORKFLOWS_DIR / "motion-streak.py"
+        cmd = [PYTHON, str(script), "--source", str(photo), "--up-to-step", "1"]
+        print(f"[replenish] [{job_id}] {model_name}/{Path(photo).stem}", flush=True)
+        try:
+            child_env = {**os.environ, "NOTIFY_DISABLE_IMAGE": "1"}
+            res = subprocess.run(cmd, capture_output=True, text=True,
+                                 timeout=300, env=child_env)
+        except subprocess.TimeoutExpired:
+            print(f"[replenish] [{job_id}] TIMEOUT", flush=True)
+            return None
+        if res.returncode != 0:
+            print(f"[replenish] [{job_id}] motion-streak failed rc={res.returncode}", flush=True)
+            return None
+        # Copy the SOURCE photo into the pipeline candidates folder, prefixed
+        # by model name (same convention as /api/candidates/<id>/good).
+        PIPELINE_CAND_DIR.mkdir(parents=True, exist_ok=True)
+        safe_model = re.sub(r"[^\w]+", "_", model_name or "Unknown").strip("_") or "Unknown"
+        copied_name = f"{safe_model}__{Path(photo).name}"
+        dest = PIPELINE_CAND_DIR / copied_name
+        if not dest.exists():
+            try:
+                shutil.copyfile(str(photo), str(dest))
+            except OSError as e:
+                print(f"[replenish] [{job_id}] copy failed: {e}", flush=True)
+                return None
+        # Also record in ms_candidates manifest for parity with the legacy
+        # "good" path.
+        try:
+            entries = load_ms_candidates()
+            if not any(e.get("source") == str(photo) for e in entries):
+                entries.append({
+                    "source": str(photo),
+                    "filename": Path(photo).name,
+                    "model": model_name,
+                    "copied_to": str(dest),
+                    "marked_at": now_str(),
+                    "auto_replenish": True,
+                })
+                save_ms_candidates(entries)
+        except Exception:
+            pass
+        print(f"[replenish] [{job_id}] OK -> {dest.name}", flush=True)
+        return dest
+    except Exception as e:
+        print(f"[replenish] error: {e}", flush=True)
+        return None
+
+
 @app.route("/api/pipeline/candidate/<filename>/remove", methods=["POST"])
 def api_pipe_candidate_remove(filename):
     src = PIPELINE_CAND_DIR / filename
@@ -2142,6 +2204,8 @@ def api_pipe_candidate_remove(filename):
         _pipe_save_state(state)
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    # Spawn one-shot replenishment so the slot fills back in ~15s.
+    threading.Thread(target=_pipe_replenish_one, daemon=True).start()
     return jsonify({"ok": True})
 
 

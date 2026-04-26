@@ -1,5 +1,5 @@
 {# Shared 3-dot navigation menu. Pass `current` (one of:
-    'gallery','candidates','style-transfer','tree') to highlight the active page.
+    'gallery','candidates','style-transfer','tree','pipeline') to highlight the active page.
    Pages can prepend page-specific items by setting `extra_top` (raw HTML)
    and `extra_bottom` likewise. #}
 <div style="position:relative;">
@@ -22,6 +22,10 @@
        style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;
               border-top:1px solid #2a2a30;
               {% if current == 'style-transfer' %}background:#2d4a6d;{% endif %}">🎭 Choose good 0010x0010 imitations</a>
+    <a href="/pipeline"
+       style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;
+              border-top:1px solid #2a2a30;
+              {% if current == 'pipeline' %}background:#2d4a6d;{% endif %}">🪄 0010x0010 pipeline</a>
     <a href="/tree"
        style="display:block; padding:10px 14px; color:#e7e7ea; text-decoration:none;
               border-top:1px solid #2a2a30;

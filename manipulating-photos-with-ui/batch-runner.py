@@ -1461,6 +1461,348 @@ def api_more_similar(item_id):
         queued += 1
     return jsonify({"queued": queued})
 
+# --- 0010x0010 pipeline page ----------------------------------------------
+
+PIPELINE_CAND_DIR = SHARED_DIR / "candidates-for-motion-streak"
+PIPELINE_STYLE_DIR = SHARED_DIR / "0010x0010" / "cleaned"
+PIPELINE_OUT_DIR = SHARED_DIR / "surreal-with-face"
+PIPELINE_BAD_DIR = SHARED_DIR / "surreal-with-face-bad"
+PIPELINE_STATE_PATH = SHARED_DIR / "pipeline_state.json"
+PIPELINE_JOBS = {}  # job_id -> dict
+PIPELINE_JOBS_LOCK = threading.RLock()
+
+
+def _pipe_load_state():
+    if not PIPELINE_STATE_PATH.is_file():
+        return {"candidates": {}}
+    try:
+        return json.loads(PIPELINE_STATE_PATH.read_text())
+    except Exception:
+        return {"candidates": {}}
+
+
+def _pipe_save_state(d):
+    SHARED_DIR.mkdir(parents=True, exist_ok=True)
+    PIPELINE_STATE_PATH.write_text(json.dumps(d, indent=2))
+
+
+def _pipe_face_quality(path):
+    """Return 'clear' / 'partial' / 'none' from MediaPipe face detector."""
+    try:
+        import mediapipe as mp
+        import cv2
+        img = cv2.imread(str(path))
+        if img is None:
+            return "none"
+        h, w = img.shape[:2]
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        with mp.solutions.face_detection.FaceDetection(
+                model_selection=1, min_detection_confidence=0.4) as fd:
+            res = fd.process(rgb)
+        if not res.detections:
+            return "none"
+        best = max(res.detections,
+                   key=lambda d: d.score[0] if d.score else 0)
+        score = best.score[0] if best.score else 0
+        bb = best.location_data.relative_bounding_box
+        face_frac = max(0.0, min(1.0, bb.width)) * max(0.0, min(1.0, bb.height))
+        if score >= 0.7 and face_frac >= 0.01:
+            return "clear"
+        if score >= 0.4:
+            return "partial"
+        return "none"
+    except Exception:
+        return "none"
+
+
+@app.route("/pipeline")
+def pipeline_page():
+    return render_template("pipeline.html")
+
+
+@app.route("/api/pipeline/candidates")
+def api_pipe_candidates():
+    state = _pipe_load_state()
+    cands = state.setdefault("candidates", {})
+    out = []
+    if PIPELINE_CAND_DIR.is_dir():
+        for f in sorted(PIPELINE_CAND_DIR.iterdir()):
+            if f.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+                continue
+            try:
+                mt = int(f.stat().st_mtime)
+            except OSError:
+                continue
+            entry = cands.get(f.name) or {}
+            if entry.get("face_mtime") != mt or "face_quality" not in entry:
+                entry["face_quality"] = _pipe_face_quality(f)
+                entry["face_mtime"] = mt
+                cands[f.name] = entry
+            # watermark sidecar lookup
+            wm = None
+            wm_json = f.with_suffix(f.suffix + ".watermark.json")
+            if wm_json.is_file():
+                try:
+                    wm = json.loads(wm_json.read_text()).get("suspect")
+                except Exception:
+                    pass
+            out.append({
+                "filename": f.name,
+                "path": str(f),
+                "face_quality": entry["face_quality"],
+                "has_face": entry.get("has_face",
+                                       entry["face_quality"] != "none"),
+                "watermark": wm,
+            })
+    _pipe_save_state(state)
+    return jsonify({"candidates": out})
+
+
+@app.route("/api/pipeline/candidate/<filename>/face", methods=["POST"])
+def api_pipe_set_face(filename):
+    body = request.get_json(silent=True) or {}
+    has_face = bool(body.get("has_face"))
+    state = _pipe_load_state()
+    cands = state.setdefault("candidates", {})
+    entry = cands.setdefault(filename, {})
+    entry["has_face"] = has_face
+    cands[filename] = entry
+    _pipe_save_state(state)
+    return jsonify({"ok": True, "has_face": has_face})
+
+
+@app.route("/api/pipeline/candidate/<filename>/crop-options", methods=["POST"])
+def api_pipe_crop_options(filename):
+    src = PIPELINE_CAND_DIR / filename
+    if not src.is_file():
+        abort(404)
+    out, err = _run_crop_options(str(src))
+    if err:
+        return jsonify({"ok": False, "error": err}), 500
+    return jsonify({"ok": True, "options_path": out})
+
+
+@app.route("/api/pipeline/candidate/<filename>/crop/<int:n>", methods=["POST"])
+def api_pipe_crop_apply(filename, n):
+    src = PIPELINE_CAND_DIR / filename
+    if not src.is_file():
+        abort(404)
+    out, err = _run_crop_apply(str(src), n)
+    if err:
+        return jsonify({"ok": False, "error": err}), 500
+    # Replace the candidate file in-place with the cropped result
+    try:
+        shutil.copyfile(out, src)
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    # Invalidate cached face quality
+    state = _pipe_load_state()
+    state.setdefault("candidates", {}).pop(filename, None)
+    _pipe_save_state(state)
+    return jsonify({"ok": True, "output": str(src)})
+
+
+@app.route("/api/pipeline/styles")
+def api_pipe_styles():
+    items = []
+    if PIPELINE_STYLE_DIR.is_dir():
+        for f in sorted(PIPELINE_STYLE_DIR.iterdir()):
+            if f.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+                continue
+            if f.stem.startswith("_"):
+                continue
+            items.append({"name": f.stem, "filename": f.name, "path": str(f)})
+    return jsonify({"styles": items})
+
+
+def _pipe_run_one(job_id, candidate_path, style_path, no_face_overlay):
+    """Run relighting + surreal_with_face. Updates PIPELINE_JOBS[job_id]."""
+    def setj(**kw):
+        with PIPELINE_JOBS_LOCK:
+            PIPELINE_JOBS[job_id].update(kw)
+
+    setj(status="running", phase="relighting", started_at=now_str())
+    intermediates = SHARED_DIR / "tool-outputs-intermediates"
+    relight_cmd = [PYTHON, str(WORKFLOWS_DIR / "relighting.py"),
+                   "--source", str(candidate_path),
+                   "--lighting", "Window Light",
+                   "--output-to", "local",
+                   "--local-output-dir", str(intermediates)]
+    start_ts = time.time()
+    try:
+        env = {**os.environ, "NOTIFY_DISABLE_IMAGE": "1"}
+        res = subprocess.run(relight_cmd, capture_output=True, text=True,
+                             timeout=900, env=env)
+    except subprocess.TimeoutExpired:
+        setj(status="fail", error="relight timeout", ended_at=now_str())
+        return
+    if res.returncode != 0:
+        setj(status="fail", error=(res.stderr or "")[-400:],
+             ended_at=now_str())
+        return
+    relit = find_output_after(start_ts, hint_source=Path(candidate_path).stem,
+                              search_dirs=[FINALS_DIR])
+    if not relit:
+        setj(status="fail", error="relit output not found", ended_at=now_str())
+        return
+    setj(phase="become-image", relit=str(relit))
+
+    sw_cmd = [PYTHON, str(WORKFLOWS_DIR / "surreal_with_face.py"),
+              "--relit", str(relit), "--style", str(style_path),
+              "--out-dir", str(PIPELINE_OUT_DIR), "--seed", "42"]
+    if no_face_overlay:
+        sw_cmd.append("--no-face-overlay")
+    sw_start = time.time()
+    try:
+        env = {**os.environ, "NOTIFY_DISABLE_IMAGE": "1"}
+        res = subprocess.run(sw_cmd, capture_output=True, text=True,
+                             timeout=1200, env=env)
+    except subprocess.TimeoutExpired:
+        setj(status="fail", error="surreal timeout", ended_at=now_str())
+        return
+    if res.returncode != 0:
+        setj(status="fail", error=(res.stderr or "")[-400:],
+             ended_at=now_str())
+        return
+    out_path = None
+    for line in (res.stdout or "").splitlines():
+        m = re.search(r"(\S+__final(?:_\dx)?\.jpg)", line)
+        if m:
+            cand = Path(m.group(1))
+            if cand.is_file():
+                out_path = cand
+                break
+    if not out_path:
+        # newest *_final*.jpg in PIPELINE_OUT_DIR after sw_start
+        cands = []
+        if PIPELINE_OUT_DIR.is_dir():
+            for f in PIPELINE_OUT_DIR.iterdir():
+                if "_final" in f.name and f.suffix.lower() == ".jpg":
+                    try:
+                        if f.stat().st_mtime >= sw_start - 2:
+                            cands.append((f.stat().st_mtime, f))
+                    except OSError:
+                        pass
+        if cands:
+            cands.sort(reverse=True)
+            # prefer upscaled
+            up = [c for c in cands if "_final_" in c[1].name]
+            out_path = (up or cands)[0][1]
+    if not out_path:
+        setj(status="fail", error="surreal output not found",
+             ended_at=now_str())
+        return
+    setj(status="done", phase="done", output=str(out_path),
+         ended_at=now_str())
+
+
+@app.route("/api/pipeline/run", methods=["POST"])
+def api_pipe_run():
+    body = request.get_json(silent=True) or {}
+    cand = body.get("candidate")
+    styles = body.get("styles") or []
+    no_face = bool(body.get("no_face_overlay"))
+    if not cand or not styles:
+        abort(400)
+    cand_path = PIPELINE_CAND_DIR / cand
+    if not cand_path.is_file():
+        abort(404)
+    job_ids = []
+    for style_filename in styles:
+        style_path = PIPELINE_STYLE_DIR / style_filename
+        if not style_path.is_file():
+            continue
+        jid = uuid.uuid4().hex[:8]
+        with PIPELINE_JOBS_LOCK:
+            PIPELINE_JOBS[jid] = {
+                "id": jid, "candidate": cand, "style": style_filename,
+                "no_face_overlay": no_face, "status": "queued",
+                "phase": "queued", "queued_at": now_str(),
+            }
+        threading.Thread(target=_pipe_run_one,
+                         args=(jid, cand_path, style_path, no_face),
+                         daemon=True).start()
+        job_ids.append(jid)
+    return jsonify({"ok": True, "job_ids": job_ids})
+
+
+@app.route("/api/pipeline/jobs")
+def api_pipe_jobs():
+    with PIPELINE_JOBS_LOCK:
+        jobs = list(PIPELINE_JOBS.values())
+    # newest first
+    jobs.sort(key=lambda j: j.get("queued_at", ""), reverse=True)
+    return jsonify({"jobs": jobs})
+
+
+@app.route("/api/pipeline/jobs/clear", methods=["POST"])
+def api_pipe_jobs_clear():
+    with PIPELINE_JOBS_LOCK:
+        for k in list(PIPELINE_JOBS.keys()):
+            if PIPELINE_JOBS[k].get("status") in ("done", "fail"):
+                del PIPELINE_JOBS[k]
+    return jsonify({"ok": True})
+
+
+@app.route("/api/pipeline/output/<filename>/fav", methods=["POST"])
+def api_pipe_fav(filename):
+    src = PIPELINE_OUT_DIR / filename
+    if not src.is_file():
+        abort(404)
+    FAVORITES_DIR.mkdir(parents=True, exist_ok=True)
+    fav_name = f"surreal-with-face__{filename}"
+    fav_path = FAVORITES_DIR / fav_name
+    try:
+        shutil.copy2(src, fav_path)
+    except Exception:
+        from PIL import Image
+        Image.open(src).save(fav_path, quality=95)
+    sidecar = src.with_name(src.stem.replace("_final", "_final") + ".json")
+    # Look for a sibling .json (may be __final.json variant)
+    meta = {}
+    base_stem = re.sub(r"(__final(?:_\dx)?)$", "__final", src.stem)
+    j = src.parent / f"{base_stem}.json"
+    if j.is_file():
+        try:
+            meta = json.loads(j.read_text())
+        except Exception:
+            pass
+    try:
+        git_hash = subprocess.check_output(
+            ["git", "-C", str(WORKFLOWS_DIR), "rev-parse", "--short", "HEAD"],
+            text=True, timeout=5).strip()
+    except Exception:
+        git_hash = None
+    entry = {
+        "file": fav_name, "tool": "surreal_with_face",
+        "relit": meta.get("relit"), "style": meta.get("style"),
+        "params": meta.get("params"), "git_commit": git_hash,
+        "favorited_at": now_str(),
+    }
+    data = {"favorites": []}
+    if FAVORITES_JSON.is_file():
+        try:
+            data = json.loads(FAVORITES_JSON.read_text())
+        except Exception:
+            pass
+    data.setdefault("favorites", []).append(entry)
+    FAVORITES_JSON.write_text(json.dumps(data, indent=2))
+    return jsonify({"ok": True, "fav": fav_name})
+
+
+@app.route("/api/pipeline/output/<filename>/bad", methods=["POST"])
+def api_pipe_bad(filename):
+    src = PIPELINE_OUT_DIR / filename
+    if not src.is_file():
+        abort(404)
+    PIPELINE_BAD_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(src), str(PIPELINE_BAD_DIR / filename))
+    except OSError:
+        pass
+    return jsonify({"ok": True})
+
+
 # --- Cloudflared tunnel ----------------------------------------------------
 
 def start_cloudflared(port):

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>0010x0010 pipeline</title>
+<style>
+  :root { --bg:#0b0b0c; --fg:#e9e9ea; --dim:#9a9a9e; --panel:#1a1a1f;
+          --line:#2a2a30; --accent:#2d4a6d; --good:#2f7a3f; --bad:#7a2929;
+          --fav:#c49a1a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; background:var(--bg); color:var(--fg);
+    font:14px/1.4 -apple-system,system-ui,sans-serif;
+    -webkit-tap-highlight-color:transparent; }
+  .topbar { display:flex; justify-content:space-between; align-items:center;
+    padding:10px 14px; border-bottom:1px solid var(--line); position:sticky;
+    top:0; background:var(--bg); z-index:5; }
+  .topbar h1 { margin:0; font-size:16px; font-weight:600; }
+  .layout { display:flex; flex-direction:column; gap:0; }
+  .pane { border-bottom:1px solid var(--line); padding:12px 14px; }
+  .pane h2 { margin:0 0 10px; font-size:13px; font-weight:600; color:var(--dim);
+    text-transform:uppercase; letter-spacing:0.05em; }
+  @media (min-width:900px) {
+    .layout { flex-direction:row; height:calc(100vh - 49px); }
+    .pane { flex:1; border-bottom:none; border-right:1px solid var(--line);
+      overflow-y:auto; }
+    .pane:last-child { border-right:none; }
+  }
+  .grid { display:grid; gap:8px;
+    grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); }
+  .card { position:relative; background:var(--panel); border:2px solid transparent;
+    border-radius:8px; overflow:hidden; cursor:pointer; }
+  .card.selected { border-color:var(--accent); }
+  .card img { display:block; width:100%; height:120px; object-fit:cover; }
+  .card .label { padding:4px 6px; font-size:11px; color:var(--dim);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chips { position:absolute; top:4px; left:4px; display:flex; gap:3px; }
+  .chip { font-size:10px; padding:2px 5px; border-radius:10px;
+    background:rgba(0,0,0,0.7); color:#fff; }
+  .chip.face-clear { background:#2f7a3f; }
+  .chip.face-partial { background:#a07020; }
+  .chip.face-none { background:#7a2929; }
+  .chip.wm { background:#7a2929; }
+  .actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .btn { padding:8px 12px; border-radius:6px; border:1px solid var(--line);
+    background:var(--panel); color:var(--fg); font-size:13px; cursor:pointer; }
+  .btn:hover { background:#23232a; }
+  .btn-primary { background:var(--accent); border-color:var(--accent); }
+  .btn-good { background:var(--good); border-color:var(--good); }
+  .btn-bad { background:var(--bad); border-color:var(--bad); }
+  .btn-fav { background:var(--fav); border-color:var(--fav); color:#000; }
+  .btn:disabled { opacity:0.4; cursor:not-allowed; }
+  .toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px;
+    color:var(--dim); cursor:pointer; }
+  .selected-info { background:var(--panel); padding:10px; border-radius:6px;
+    margin-bottom:10px; font-size:12px; }
+  .job { background:var(--panel); border-radius:8px; padding:8px;
+    margin-bottom:8px; display:flex; gap:10px; }
+  .job img { width:120px; height:120px; object-fit:cover; border-radius:4px;
+    background:#000; }
+  .job .info { flex:1; min-width:0; }
+  .job .status { font-size:11px; color:var(--dim); margin-bottom:4px; }
+  .job .status.running { color:#5da4d4; }
+  .job .status.done { color:var(--good); }
+  .job .status.fail { color:var(--bad); }
+  .job .filename { font-size:11px; color:var(--dim); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; }
+  .toast { position:fixed; top:60px; left:50%; transform:translateX(-50%);
+    background:var(--panel); padding:8px 16px; border-radius:20px;
+    z-index:20; font-size:13px; opacity:0; transition:opacity 0.2s;
+    border:1px solid var(--line); }
+  .toast.show { opacity:1; }
+  .empty { color:var(--dim); padding:20px; text-align:center; font-size:13px; }
+  .crop-modal { position:fixed; inset:0; background:rgba(0,0,0,0.9); z-index:50;
+    display:none; align-items:center; justify-content:center; flex-direction:column;
+    padding:20px; }
+  .crop-modal.show { display:flex; }
+  .crop-modal img { max-width:100%; max-height:75vh; object-fit:contain; }
+  .crop-modal input { padding:8px; margin:10px 0; background:var(--panel);
+    color:var(--fg); border:1px solid var(--line); border-radius:6px;
+    font-size:14px; width:100px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>🪄 0010x0010 pipeline</h1>
+  {% with current="pipeline" %}{% include "_modemenu.html" %}{% endwith %}
+</div>
+
+<div class="layout">
+
+  <div class="pane" id="pane-candidates">
+    <h2>1. Candidates</h2>
+    <div id="cand-grid" class="grid"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="pane" id="pane-styles">
+    <h2>2. Styles (multi-select)</h2>
+    <div id="style-grid" class="grid"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="pane" id="pane-run">
+    <h2>3. Run &amp; results</h2>
+    <div id="selected-info" class="selected-info">No candidate selected</div>
+    <div class="actions">
+      <button class="btn btn-primary" id="run-btn" disabled>Run pipeline</button>
+      <button class="btn" id="clear-btn">Clear done</button>
+    </div>
+    <div id="jobs" style="margin-top:14px;"></div>
+  </div>
+
+</div>
+
+<div id="toast" class="toast"></div>
+
+<div id="crop-modal" class="crop-modal">
+  <img id="crop-img" src="">
+  <div>Pick crop number:</div>
+  <input id="crop-num" type="number" min="1" max="12" placeholder="1-12">
+  <div class="actions">
+    <button class="btn btn-primary" id="crop-apply">Apply</button>
+    <button class="btn" id="crop-cancel">Cancel</button>
+  </div>
+</div>
+
+<script>
+const state = {
+  candidates: [],
+  styles: [],
+  selectedCandidate: null,
+  selectedStyles: new Set(),
+  cropTarget: null,
+};
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+function imgUrl(path) {
+  return '/api/image?path=' + encodeURIComponent(path) + '&t=' + Date.now();
+}
+
+async function fetchCandidates() {
+  const r = await fetch('/api/pipeline/candidates');
+  const j = await r.json();
+  state.candidates = j.candidates || [];
+  renderCandidates();
+}
+
+function renderCandidates() {
+  const g = document.getElementById('cand-grid');
+  if (!state.candidates.length) {
+    g.innerHTML = '<div class="empty">No candidates found</div>'; return;
+  }
+  g.innerHTML = '';
+  for (const c of state.candidates) {
+    const d = document.createElement('div');
+    d.className = 'card';
+    if (state.selectedCandidate === c.filename) d.classList.add('selected');
+    const fc = c.face_quality || 'none';
+    const faceLabel = fc === 'clear' ? '🟢' : fc === 'partial' ? '🟡' : '🔴';
+    const wmChip = c.watermark ? '<span class="chip wm">⚠</span>' : '';
+    d.innerHTML = `
+      <div class="chips">
+        <span class="chip face-${fc}" title="auto: ${fc} | has_face: ${c.has_face}">${faceLabel}${c.has_face ? '✓' : '✗'}</span>
+        ${wmChip}
+      </div>
+      <img src="${imgUrl(c.path)}" loading="lazy">
+      <div class="label">${c.filename}</div>
+      <div style="display:flex; gap:4px; padding:4px 6px 6px;">
+        <button class="btn" style="flex:1; font-size:11px; padding:4px;" data-act="face">${c.has_face ? 'Face ✓' : 'Face ✗'}</button>
+        <button class="btn" style="flex:1; font-size:11px; padding:4px;" data-act="crop">Crop</button>
+      </div>
+    `;
+    d.addEventListener('click', (ev) => {
+      const act = ev.target.closest('button')?.dataset.act;
+      if (act === 'face') { ev.stopPropagation(); toggleFace(c); return; }
+      if (act === 'crop') { ev.stopPropagation(); openCrop(c); return; }
+      state.selectedCandidate = c.filename;
+      renderCandidates(); updateSelectedInfo();
+    });
+    g.appendChild(d);
+  }
+}
+
+async function toggleFace(c) {
+  const newVal = !c.has_face;
+  await fetch(`/api/pipeline/candidate/${encodeURIComponent(c.filename)}/face`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({has_face:newVal})
+  });
+  c.has_face = newVal;
+  renderCandidates(); updateSelectedInfo();
+}
+
+async function openCrop(c) {
+  state.cropTarget = c;
+  toast('Generating crop options…');
+  const r = await fetch(`/api/pipeline/candidate/${encodeURIComponent(c.filename)}/crop-options`,
+                       {method:'POST'});
+  const j = await r.json();
+  if (!j.ok) { toast('Crop failed: ' + (j.error||'')); return; }
+  document.getElementById('crop-img').src = imgUrl(j.options_path);
+  document.getElementById('crop-num').value = '';
+  document.getElementById('crop-modal').classList.add('show');
+}
+
+document.getElementById('crop-cancel').addEventListener('click', () => {
+  document.getElementById('crop-modal').classList.remove('show');
+  state.cropTarget = null;
+});
+document.getElementById('crop-apply').addEventListener('click', async () => {
+  const n = parseInt(document.getElementById('crop-num').value, 10);
+  if (!n || !state.cropTarget) return;
+  const fn = state.cropTarget.filename;
+  toast('Applying crop ' + n + '…');
+  const r = await fetch(`/api/pipeline/candidate/${encodeURIComponent(fn)}/crop/${n}`,
+                       {method:'POST'});
+  const j = await r.json();
+  if (!j.ok) { toast('Crop failed: ' + (j.error||'')); return; }
+  document.getElementById('crop-modal').classList.remove('show');
+  state.cropTarget = null;
+  toast('Cropped');
+  fetchCandidates();
+});
+
+async function fetchStyles() {
+  const r = await fetch('/api/pipeline/styles');
+  const j = await r.json();
+  state.styles = j.styles || [];
+  // default-select first 4
+  state.selectedStyles = new Set(state.styles.slice(0, 4).map(s => s.filename));
+  renderStyles();
+}
+
+function renderStyles() {
+  const g = document.getElementById('style-grid');
+  if (!state.styles.length) {
+    g.innerHTML = '<div class="empty">No styles found</div>'; return;
+  }
+  g.innerHTML = '';
+  for (const s of state.styles) {
+    const d = document.createElement('div');
+    d.className = 'card';
+    if (state.selectedStyles.has(s.filename)) d.classList.add('selected');
+    d.innerHTML = `<img src="${imgUrl(s.path)}" loading="lazy"><div class="label">${s.name}</div>`;
+    d.addEventListener('click', () => {
+      if (state.selectedStyles.has(s.filename)) state.selectedStyles.delete(s.filename);
+      else state.selectedStyles.add(s.filename);
+      renderStyles(); updateSelectedInfo();
+    });
+    g.appendChild(d);
+  }
+}
+
+function updateSelectedInfo() {
+  const el = document.getElementById('selected-info');
+  const cand = state.candidates.find(c => c.filename === state.selectedCandidate);
+  const styleCount = state.selectedStyles.size;
+  if (!cand) { el.textContent = 'No candidate selected'; }
+  else {
+    el.innerHTML = `<b>${cand.filename}</b><br>
+      face: ${cand.has_face ? 'yes (overlay enabled)' : 'no (--no-face-overlay)'}<br>
+      styles selected: ${styleCount}`;
+  }
+  document.getElementById('run-btn').disabled = !cand || styleCount === 0;
+}
+
+document.getElementById('run-btn').addEventListener('click', async () => {
+  const cand = state.candidates.find(c => c.filename === state.selectedCandidate);
+  if (!cand || !state.selectedStyles.size) return;
+  const body = {
+    candidate: cand.filename,
+    styles: [...state.selectedStyles],
+    no_face_overlay: !cand.has_face,
+  };
+  const r = await fetch('/api/pipeline/run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  toast('Started ' + (j.job_ids||[]).length + ' jobs');
+});
+
+document.getElementById('clear-btn').addEventListener('click', async () => {
+  await fetch('/api/pipeline/jobs/clear', {method:'POST'});
+  fetchJobs();
+});
+
+async function fetchJobs() {
+  const r = await fetch('/api/pipeline/jobs');
+  const j = await r.json();
+  renderJobs(j.jobs || []);
+}
+
+function renderJobs(jobs) {
+  const el = document.getElementById('jobs');
+  if (!jobs.length) { el.innerHTML = '<div class="empty">No jobs yet</div>'; return; }
+  el.innerHTML = '';
+  for (const j of jobs) {
+    const d = document.createElement('div');
+    d.className = 'job';
+    const thumb = j.output ? `<img src="${imgUrl(j.output)}">` :
+      `<div style="width:120px; height:120px; background:#000; display:flex;
+                   align-items:center; justify-content:center; color:#5da4d4;
+                   font-size:11px; border-radius:4px;">${j.phase || j.status}…</div>`;
+    const filename = j.output ? j.output.split('/').pop() : '';
+    let buttons = '';
+    if (j.status === 'done' && j.output) {
+      buttons = `
+        <button class="btn btn-fav" data-act="fav">★ Fav</button>
+        <button class="btn btn-bad" data-act="bad">Bad</button>
+        <a class="btn" href="${imgUrl(j.output)}" download>⬇</a>`;
+    } else if (j.status === 'fail') {
+      buttons = `<span style="color:var(--bad); font-size:11px;">${(j.error||'').slice(0,80)}</span>`;
+    }
+    d.innerHTML = `
+      ${thumb}
+      <div class="info">
+        <div class="status ${j.status}">${j.status} — ${j.phase || ''}</div>
+        <div style="font-size:12px;">style: ${j.style || ''}</div>
+        <div class="filename">${filename}</div>
+        <div class="actions">${buttons}</div>
+      </div>`;
+    d.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('[data-act]'); if (!btn) return;
+      const act = btn.dataset.act;
+      if (!filename) return;
+      if (act === 'fav') {
+        const r = await fetch(`/api/pipeline/output/${encodeURIComponent(filename)}/fav`,
+                              {method:'POST'});
+        const jr = await r.json();
+        toast(jr.ok ? '★ Favved' : 'Fav failed');
+      } else if (act === 'bad') {
+        const r = await fetch(`/api/pipeline/output/${encodeURIComponent(filename)}/bad`,
+                              {method:'POST'});
+        const jr = await r.json();
+        toast(jr.ok ? 'Moved to bad' : 'Failed');
+        fetchJobs();
+      }
+    });
+    el.appendChild(d);
+  }
+}
+
+// Keyboard shortcuts: f=fav focused done job, b=bad
+document.addEventListener('keydown', async (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  const r = await fetch('/api/pipeline/jobs');
+  const j = await r.json();
+  const done = (j.jobs||[]).filter(x => x.status === 'done' && x.output);
+  if (!done.length) return;
+  const target = done[0];
+  const fn = target.output.split('/').pop();
+  if (e.key === 'f') {
+    await fetch(`/api/pipeline/output/${encodeURIComponent(fn)}/fav`, {method:'POST'});
+    toast('★ Favved ' + fn);
+  } else if (e.key === 'b') {
+    await fetch(`/api/pipeline/output/${encodeURIComponent(fn)}/bad`, {method:'POST'});
+    toast('Bad ' + fn); fetchJobs();
+  }
+});
+
+// Boot + polling
+fetchCandidates();
+fetchStyles();
+fetchJobs();
+setInterval(fetchJobs, 2000);
+</script>
+</body>
+</html>

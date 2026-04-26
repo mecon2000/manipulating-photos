@@ -254,6 +254,19 @@ def main():
                    help="skip face mask + composite (use when source has no detectable face)")
     p.add_argument("--upscale", type=int, default=4, choices=[0, 2, 4],
                    help="post Real-ESRGAN upscale (0=off, 2x, 4x). Default 4x.")
+    # Step 4.5 — text overlay (before grading so grade sweeps text too)
+    p.add_argument("--text", default=None,
+                   help='overlay text; "auto" = semantic NN over literary DB; '
+                        'or explicit "..." string. Empty = no text.')
+    p.add_argument("--text-style", choices=["quote","subtitle"], default="quote")
+    p.add_argument("--text-orientation", choices=["horizontal","body","manual"],
+                   default="body")
+    p.add_argument("--text-angle", type=float, default=None)
+    p.add_argument("--text-size-pct", type=float, default=3.0)
+    # Step 5 — color grade
+    p.add_argument("--grade", default="off",
+                   help='warm-cool | split | wash:<color> | off')
+    p.add_argument("--grade-strength", type=float, default=0.25)
     args = p.parse_args()
 
     token = load_token()
@@ -340,7 +353,33 @@ def main():
             Image.fromarray((grain_mask * 255).astype(np.uint8)).save(
                 out_dir / f"{tag}__grain_mask.png")
         print(f"  added grain ({args.grain} outside, {args.grain*args.grain_inside_pct:.3f} inside, ellipse-scale={scale})")
-    final_pil = Image.fromarray(np.stack([final_u8]*3, axis=-1))
+    final_arr = np.stack([final_u8]*3, axis=-1)
+
+    # Step 4.5 — optional text overlay (BEFORE grading so grade sweeps text too)
+    if args.text:
+        try:
+            from text_overlay import overlay as _txt_overlay, pick_quote_auto
+            tmp_path = out_dir / f"{tag}__pre_text.jpg"
+            Image.fromarray(final_arr).save(tmp_path, quality=92)
+            text = pick_quote_auto(tmp_path) if args.text == "auto" else args.text
+            tmp_path.unlink(missing_ok=True)
+            final_arr = _txt_overlay(final_arr, text,
+                style=args.text_style, orientation=args.text_orientation,
+                manual_angle_deg=args.text_angle, font_size_pct=args.text_size_pct)
+            print(f"  step 4.5 text overlay applied")
+        except Exception as e:
+            print(f"  text overlay FAIL: {e}")
+
+    # Step 4.7 — optional color grade
+    if args.grade and args.grade != "off":
+        try:
+            from color_grade import grade as _grade
+            final_arr = _grade(final_arr, args.grade, strength=args.grade_strength)
+            print(f"  step 4.7 grade applied ({args.grade})")
+        except Exception as e:
+            print(f"  grade FAIL: {e}")
+
+    final_pil = Image.fromarray(final_arr)
     final_path = out_dir / f"{tag}__final.jpg"
     final_pil.save(final_path, quality=92)
     print(f"  → {final_path}")

@@ -1,0 +1,29 @@
+# Generated 2026-04-27 — produced from a working ~/openclaw-venv on Linux/WSL.
+# Pinning is loose; bump with `pip install -U` when needed.
+# Use Python 3.12+.
+
+# Core
+numpy>=2.0
+Pillow>=10.0
+opencv-python>=4.10
+scipy>=1.13
+scikit-image>=0.24
+matplotlib>=3.8
+flask>=3.0
+requests>=2.31
+tqdm>=4.66
+PyYAML>=6.0
+
+# AI clients
+anthropic>=0.30
+fal_client>=0.5
+replicate>=1.0
+
+# ML for text overlay (mood phrase semantic NN)
+sentence-transformers>=3.0
+huggingface_hub>=0.24
+torch>=2.4   # transformers dep
+transformers>=4.40
+
+# Vision / pose
+mediapipe>=0.10

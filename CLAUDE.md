@@ -2,6 +2,21 @@
 
 Photo transformation pipeline for portrait/boudoir photography. Fourteen active tools with unified `--affect`/`--exclude` masking. See `tools_tree.md` (at repo root) for the full map with status (active/paused/dropped).
 
+## Bootstrap (fresh machine)
+
+Run `./scripts/setup.sh` from the repo root. The script is idempotent and:
+- Creates `~/openclaw-venv/` and installs from `requirements.txt`.
+- Creates the workspace directory tree under `~/.openclaw/workspace/{shared,_photos}/`.
+- Downloads MediaPipe models (pose / hand / face / selfie_multiclass) to `~/openclaw-venv/mediapipe_models/`.
+- Writes a template `~/sol/.env` if absent — fill in `FAL_API_KEY`, `REPLICATE_API_TOKEN`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY` (and optionally `PUSHBULLET_TOKEN`).
+- Symlinks the legacy `0010x0010/cleaned/` to `style-refs/0010x0010/` if found.
+- Runs `build_quote_db.py` once to generate `literary_quotes.{json,npy,meta.json}` for `text_overlay.py --text auto`.
+- Warns about missing `cloudflared` (needed for the public tunnel).
+
+What the script CAN'T provide: the photo catalog SQLite DB at `~/.openclaw/workspace/shared/data/photo-catalog.db` (built externally from a Lightroom catalog) and your photos themselves.
+
+After bootstrap, start the UI: `./manipulating-photos-with-ui/start-gallery.sh` (with cloudflared) or `./manipulating-photos-with-ui/batch-runner.py --no-tunnel --port 5555` (local-only). 6 tabs at `/`: Candidates / Run / Auto / Vote / Favs / Tree.
+
 ## Environment
 
 - **Python venv**: `~/openclaw-venv/` (numpy, Pillow, requests, anthropic, mediapipe, fal_client)

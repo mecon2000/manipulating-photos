@@ -11,7 +11,7 @@ Photo transformation pipeline for portrait/boudoir photography. Runs as a tabbed
 1. **Clone:** `git clone https://github.com/mecon2000/manipulating-photos.git && cd manipulating-photos`
 2. **Run the bootstrap:** `./scripts/setup.sh` — creates the venv, installs deps, downloads MediaPipe models, scaffolds folders, builds the literary quote DB.
 3. **Fill API keys** in `~/sol/.env` (template written by setup if missing). Required: `FAL_API_KEY`, `REPLICATE_API_TOKEN`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`. Optional: `PUSHBULLET_TOKEN` (image-share via S3 only — Pushbullet's free tier no longer supports push notifications).
-4. **Drop photos** under `~/.openclaw/workspace/_photos/<model-name>/Processed/` and/or `Unprocessed/`.
+4. **Drop photos** under `~/.openclaw/workspace/_photos/<model-name>/...` — any subfolder layout works (`Processed/`, `<session>/processed/`, `bts/`, etc — tools walk recursively). Typically a symlink to your GDrive library: `ln -s "/mnt/g/My Drive/photos/Anya" ~/.openclaw/workspace/_photos/Anya`.
 5. **Drop style references** under `~/.openclaw/workspace/style-refs/<family>/` (e.g. `0010x0010/`, future `pulpbrother/`). The Run tab auto-discovers families on each load.
 6. **Start it:** `./manipulating-photos-with-ui/start-gallery.sh` (with cloudflared tunnel) or `./manipulating-photos-with-ui/batch-runner.py --no-tunnel --port 5555` for local-only.
 
@@ -35,7 +35,7 @@ These bits are external and must be supplied manually:
 
 - **`~/.openclaw/workspace/shared/data/photo-catalog.db`** — SQLite catalog built externally from your Lightroom library. ~13MB. Tools that pick photos by metadata (`find-candidates.py`, the Auto worker) need it. Manual workflows (`--source <path>`) work fine without it.
 - **API keys** — fill in `~/sol/.env` with real tokens.
-- **Photos** — copy your library to `~/.openclaw/workspace/_photos/<model>/...`.
+- **Photos** — copy or symlink your library (often a GDrive mount) to `~/.openclaw/workspace/_photos/<model>/...`. Layout under `<model>/` is flexible.
 - **Style references** — drop cleaned reference images into `~/.openclaw/workspace/shared/style-refs/<family>/`.
 
 ## API key sources

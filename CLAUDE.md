@@ -21,7 +21,7 @@ After bootstrap, start the UI: `./manipulating-photos-with-ui/start-gallery.sh` 
 
 - **Python venv**: `~/openclaw-venv/` (numpy, Pillow, requests, anthropic, mediapipe, fal_client)
 - **API keys**: `~/sol/.env` (FAL_API_KEY, TENSOR_API_KEY, GOOGLE_API_KEY, ANTHROPIC_API_KEY)
-- **Photos**: `~/.openclaw/workspace/_photos/` — subfolders per model name, each has `Processed/` and/or `Unprocessed/`
+- **Photos**: `~/.openclaw/workspace/_photos/` — subfolders per model name; layout under each model is flexible (e.g. `Processed/`, `<session>/processed/`, `bts/`). Tools walk recursively. Often a symlink to a GDrive mount.
 - **Shared folder** (visible from Windows): `~/.openclaw/workspace/shared/`
 - **Styles**: `scripts/workflows/styles.json` — 111 art styles with prompt additions
 - **Style guide**: `scripts/workflows/style-guide.json` — per-category strength recommendations

@@ -42,10 +42,24 @@ echo "→ installing/updating Python deps from requirements.txt"
 "$VENV/bin/pip" install -r "$REPO/requirements.txt" | tail -5
 
 # 4. Workspace folders ----------------------------------------------------
-mkdir -p "$SHARED"/{finals,favorites,candidates-for-motion-streak,style-refs,style-transfer-finals,surreal-with-face,surreal-with-face-bad,decorate_previews,tool-outputs-intermediates,data,bg_cache,edit-later,text-grade-tests,become-image-finals,motion-streak-finals,style-transfer-bad,decorated_votes_data}
+mkdir -p "$SHARED"/{finals,favorites,candidates-for-motion-streak,style-transfer-finals,style-transfer-bad,surreal-with-face,surreal-with-face-bad,decorate_previews,decorate_cache,decorated_votes_data,tool-outputs-intermediates,data,bg_cache,edit-later}
 mkdir -p "$PHOTOS"
 mkdir -p "$MP_MODELS"
 echo "✅ folders under ~/.openclaw/workspace/{shared,_photos}"
+
+if [ -z "$(ls -A "$PHOTOS" 2>/dev/null)" ]; then
+  cat <<EOF
+
+⚠️  $PHOTOS is empty.
+   The pipeline needs source photos here, organized by model name. Layout is
+   flexible — anything under <model>/ works (e.g. <model>/Processed/,
+   <model>/<session>/processed/, <model>/bts/, etc). Tools walk recursively.
+   Typical setup: copy or symlink your GDrive photo library into:
+       $PHOTOS/<model-name>/...
+   e.g.  ln -s "/mnt/g/My Drive/photos/Anya"  "$PHOTOS/Anya"
+
+EOF
+fi
 
 # 5. MediaPipe models -----------------------------------------------------
 download_mp() {

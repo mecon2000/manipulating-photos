@@ -144,15 +144,25 @@ fi
 
 # 10. Cloudflared ---------------------------------------------------------
 if ! command -v cloudflared >/dev/null; then
-  cat <<EOF
+  echo "→ cloudflared not found; attempting install (requires sudo)"
+  CF_TMP="/tmp/cloudflared-$$"
+  if curl -fL --output "$CF_TMP" \
+       https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+     && sudo install -m 755 "$CF_TMP" /usr/local/bin/cloudflared; then
+    rm -f "$CF_TMP"
+    echo "✅ cloudflared installed: $(cloudflared --version 2>&1 | head -1)"
+  else
+    rm -f "$CF_TMP"
+    cat <<EOF
 
-⚠️  cloudflared not found. start-gallery.sh uses it for the public tunnel.
-   Install on Linux/WSL:
+⚠️  cloudflared install failed (sudo unavailable, network, or curl error).
+   start-gallery.sh uses it for the public tunnel. Install manually:
        curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
        sudo chmod +x /usr/local/bin/cloudflared
    Or run with --no-tunnel for local-only access.
 
 EOF
+  fi
 else
   echo "✅ cloudflared"
 fi

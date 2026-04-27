@@ -2682,11 +2682,26 @@ def api_decorate_save():
     data.setdefault("favorites", []).append(entry)
     FAVORITES_JSON.write_text(json.dumps(data, indent=2))
 
+    # Remove from the Auto live feed (gallery queue) so the card disappears.
+    removed_id = None
+    with GALLERY_STATE.lock:
+        for lst in (GALLERY_STATE.priority, GALLERY_STATE.queue):
+            for i, it in enumerate(lst):
+                out = it.get("output") or ""
+                if out and Path(out).name == filename:
+                    removed_id = it.get("id")
+                    del lst[i]
+                    GALLERY_STATE.save()
+                    break
+            if removed_id:
+                break
+
     return jsonify({
         "ok": True,
         "fav_path": str(fav_path),
         "sidecar_path": str(sidecar_path),
         "tiff_path": tiff_path,
+        "removed_queue_id": removed_id,
     })
 
 

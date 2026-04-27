@@ -2011,6 +2011,7 @@
       } else {
         showToast("Saved & favorited ⭐" + (j.tiff_path ? " (+TIFF)" : ""));
         closeDecorate();
+        if (currentTab() === "auto") refreshAutoState();
       }
     } catch (e) {
       showToast("Save failed");

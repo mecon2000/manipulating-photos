@@ -254,6 +254,8 @@
   .job-thumb { width: 96px; height: 96px; flex-shrink: 0;
     background: #000; border-radius: 6px; overflow: hidden; }
   .job-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .auto-card .job-thumb { width: 200px; height: 200px; }
+  .auto-card .job-thumb img { object-fit: contain; }
   .job-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
   .job-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .job-status { font-size: 12px; color: var(--dim); }
@@ -2381,7 +2383,7 @@
     feed.innerHTML = "";
     for (const it of items) {
       const card = document.createElement("div");
-      card.className = "job-card";
+      card.className = "job-card auto-card";
       const title = `${it.tool || "?"} · ${it.preset || ""} · ${it.model || ""}`;
       const out = it.output || "";
       const outFn = out ? out.split("/").pop() : "";
@@ -2402,7 +2404,13 @@
         const t = ev.target.closest("[data-act]");
         if (!t) return;
         const act = t.dataset.act;
-        if (act === "decorate" && outFn) {
+        if (act === "open" && out) {
+          const lb = document.getElementById("cand-lightbox");
+          document.getElementById("lb-img").src = imgUrl(out);
+          document.getElementById("lb-name").textContent = title;
+          lb.dataset.mode = "auto";
+          lb.classList.add("show");
+        } else if (act === "decorate" && outFn) {
           openDecorate(outFn, title);
         } else if (act === "bad") {
           try {

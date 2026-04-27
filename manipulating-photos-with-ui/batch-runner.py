@@ -1393,7 +1393,7 @@ def api_auto_state():
         if GALLERY_STATE.stats.get("cost_date") == today else 0.0
     pending = GALLERY_STATE.all_pending()
     # newest first; queue has newest at the right end (append), priority too
-    recent = list(reversed(pending))[:6]
+    recent = list(reversed(pending))
     recent_out = [{
         "id": it.get("id"),
         "tool": it.get("tool"),

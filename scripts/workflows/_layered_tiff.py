@@ -9,14 +9,16 @@ Usage:
     save_stack(out_path, [
         ("00_original", pil_img),
         ("01_relit",    pil_img),
-        ...
+        ("99_final_4x", upscaled_pil_img),
     ])
 
-Notes:
-- Always 8-bit RGB.
-- Any layer with long edge > 4096 is downsampled to 4096 to keep TIFF size sane.
-- None images in the list are skipped silently (so callers can pass optional
-  intermediates without guarding).
+Behaviour:
+- All 8-bit RGB.
+- All layers are normalized to the SAME dimensions = the largest layer's
+  dimensions, capped at MAX_EDGE on the long edge. Smaller layers are
+  upsampled (LANCZOS) to match. This keeps Photoshop layers aligned when
+  one of them is an upscaled final.
+- None images are skipped silently.
 """
 
 from PIL import Image, TiffImagePlugin
@@ -25,14 +27,14 @@ MAX_EDGE = 4096
 DEFAULT_COMPRESSION = "tiff_lzw"
 
 
-def _prep(img):
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    w, h = img.size
-    long_edge = max(w, h)
-    if long_edge > MAX_EDGE:
-        scale = MAX_EDGE / float(long_edge)
-        img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+def _to_rgb(img):
+    return img if img.mode == "RGB" else img.convert("RGB")
+
+
+def _normalize_to_target(img, target_w, target_h):
+    img = _to_rgb(img)
+    if img.size != (target_w, target_h):
+        img = img.resize((target_w, target_h), Image.LANCZOS)
     return img
 
 
@@ -44,17 +46,31 @@ def _name_ifd(name):
 
 
 def save_stack(out_path, layers, compression=DEFAULT_COMPRESSION):
-    """Save (name, PIL.Image) pairs as a multi-page TIFF. Returns path or None."""
-    cleaned = [(str(n), _prep(im)) for (n, im) in layers if im is not None]
-    if not cleaned:
+    """Save (name, PIL.Image) pairs as a multi-page TIFF, all at the same
+    dimensions (largest layer wins, capped at MAX_EDGE long edge).
+    Returns path or None."""
+    pairs = [(str(n), _to_rgb(im)) for (n, im) in layers if im is not None]
+    if not pairs:
         return None
+
+    # Pick target dimensions = largest layer, capped at MAX_EDGE long edge.
+    target_w, target_h = 0, 0
+    for _, im in pairs:
+        w, h = im.size
+        if max(w, h) > max(target_w, target_h):
+            target_w, target_h = w, h
+    long_edge = max(target_w, target_h)
+    if long_edge > MAX_EDGE:
+        scale = MAX_EDGE / float(long_edge)
+        target_w = max(1, int(target_w * scale))
+        target_h = max(1, int(target_h * scale))
+
+    cleaned = [(name, _normalize_to_target(im, target_w, target_h))
+               for (name, im) in pairs]
 
     first_name, first = cleaned[0]
     rest = cleaned[1:]
 
-    # Stash per-page tags via the encoderinfo channel; PIL's save_all will
-    # honor tiffinfo on the first page. For named layers across pages we
-    # rely on AppendingTiffWriter.
     try:
         with TiffImagePlugin.AppendingTiffWriter(str(out_path), True) as tw:
             for name, im in cleaned:
@@ -62,7 +78,6 @@ def save_stack(out_path, layers, compression=DEFAULT_COMPRESSION):
                         tiffinfo=_name_ifd(name))
                 tw.newFrame()
     except Exception:
-        # Fallback: simple multi-page save without per-page names.
         first.save(
             str(out_path),
             save_all=True,

@@ -21,7 +21,7 @@ Behaviour:
 - None images are skipped silently.
 """
 
-from PIL import Image, TiffImagePlugin
+from PIL import Image, TiffImagePlugin  # noqa: F401
 
 MAX_EDGE = 4096
 DEFAULT_COMPRESSION = "tiff_lzw"
@@ -71,19 +71,18 @@ def save_stack(out_path, layers, compression=DEFAULT_COMPRESSION):
     first_name, first = cleaned[0]
     rest = cleaned[1:]
 
-    try:
-        with TiffImagePlugin.AppendingTiffWriter(str(out_path), True) as tw:
-            for name, im in cleaned:
-                im.save(tw, format="TIFF", compression=compression,
-                        tiffinfo=_name_ifd(name))
-                tw.newFrame()
-    except Exception:
-        first.save(
-            str(out_path),
-            save_all=True,
-            append_images=[im for (_, im) in rest],
-            compression=compression,
-            tiffinfo=_name_ifd(first_name),
-        )
+    # PIL's save_all uses each appended image's .encoderinfo['tiffinfo'] when
+    # present, so we can attach per-frame names. The first frame's name comes
+    # from the top-level tiffinfo= kwarg.
+    for name, im in rest:
+        im.encoderinfo = {"tiffinfo": _name_ifd(name), "compression": compression}
+
+    first.save(
+        str(out_path),
+        save_all=True,
+        append_images=[im for (_, im) in rest],
+        compression=compression,
+        tiffinfo=_name_ifd(first_name),
+    )
 
     return str(out_path)

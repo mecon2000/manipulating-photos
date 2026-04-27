@@ -84,4 +84,5 @@ graph TD
     RESEARCH --> I_NSFW["💭 NSFW-safe inpainting<br/>SDXL uncensored or ComfyUI"]:::idea
     RESEARCH --> I_SCOREBOARD["💭 style scoreboard<br/>Analyze favs for patterns"]:::idea
     SURREALFACE --> I_LAYERED["💭 layered TIFF export<br/>--save-stack flag<br/>each pipeline step as a layer"]:::idea
+    SURREALFACE --> I_PULP["💭 pulpbrother via surreal-with-face<br/>collect refs, run pipeline<br/>skip hand-coded noir-paint approach"]:::idea
 ```

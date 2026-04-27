@@ -112,14 +112,24 @@ print(sum(1 for _ in c.execute('SELECT 1 FROM photos')))
 fi
 
 # 8. Style refs ------------------------------------------------------------
-if [ ! -d "$SHARED/style-refs/0010x0010" ] && [ -d "$SHARED/0010x0010/cleaned" ]; then
-  echo "→ creating style-refs/0010x0010 symlink"
-  ln -s "$SHARED/0010x0010/cleaned" "$SHARED/style-refs/0010x0010"
-elif [ -d "$SHARED/style-refs/0010x0010" ]; then
-  echo "✅ style-refs/0010x0010 present"
+# Style refs live in the repo at <REPO>/style-refs/. We symlink the legacy
+# shared path to the repo so any old references still resolve.
+REPO_STYLE_REFS="$REPO/style-refs"
+LEGACY_STYLE_REFS="$SHARED/style-refs"
+if [ -d "$REPO_STYLE_REFS" ]; then
+  if [ -L "$LEGACY_STYLE_REFS" ]; then
+    echo "✅ style-refs symlink → $REPO_STYLE_REFS"
+  elif [ ! -e "$LEGACY_STYLE_REFS" ]; then
+    echo "→ symlinking $LEGACY_STYLE_REFS → $REPO_STYLE_REFS"
+    ln -s "$REPO_STYLE_REFS" "$LEGACY_STYLE_REFS"
+  else
+    echo "ℹ️  $LEGACY_STYLE_REFS exists as a real directory; leaving it alone."
+    echo "   Repo style-refs are at $REPO_STYLE_REFS — point tools there or"
+    echo "   remove the legacy dir and re-run setup to create the symlink."
+  fi
 else
-  echo "⚠️  No 0010x0010 style refs yet. Drop cleaned screenshots into:"
-  echo "       $SHARED/style-refs/0010x0010/"
+  echo "⚠️  No style-refs/ in repo. Drop cleaned screenshots into:"
+  echo "       $REPO_STYLE_REFS/<family>/"
 fi
 
 # 9. Literary quote DB ----------------------------------------------------

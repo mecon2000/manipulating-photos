@@ -1556,7 +1556,7 @@ def api_more_similar(item_id):
 
 PIPELINE_CAND_DIR = SHARED_DIR / "candidates-for-motion-streak"
 PIPELINE_STYLE_DIR = SHARED_DIR / "0010x0010" / "cleaned"
-STYLE_REFS_ROOT = SHARED_DIR / "style-refs"
+STYLE_REFS_ROOT = SCRIPT_DIR.parent / "style-refs"
 DEFAULT_STYLE_FAMILY = "0010x0010"
 _STYLE_REF_EXTS = {".jpg", ".jpeg", ".png"}
 

@@ -1271,6 +1271,10 @@
       const t = document.createElement("div");
       t.className = "run-section-title";
       t.textContent = "Presets";
+      if (entry.presets_description) {
+        t.title = entry.presets_description;
+        t.textContent = "Presets — " + entry.presets_description;
+      }
       form.appendChild(t);
       form.appendChild(makeChipGrid(
         entry.presets, runSelectedPresets[currentTool],
@@ -1282,6 +1286,10 @@
       const t = document.createElement("div");
       t.className = "run-section-title";
       t.textContent = "Artifacts";
+      if (entry.artifacts_description) {
+        t.title = entry.artifacts_description;
+        t.textContent = "Artifacts — " + entry.artifacts_description;
+      }
       form.appendChild(t);
       form.appendChild(makeChipGrid(
         entry.artifacts, runSelectedArtifacts[currentTool],
@@ -1300,19 +1308,24 @@
       for (const [pname, p] of Object.entries(params)) {
         const cur = (pname in runParamValues[currentTool])
           ? runParamValues[currentTool][pname] : p.default;
+        const desc = p.description || "";
+        const descEsc = desc.replace(/"/g, "&quot;");
+        const cell = document.createElement("div");
+        cell.style.cssText = "margin-bottom:8px;";
         const row = document.createElement("div");
-        row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:12px;";
+        row.style.cssText = "display:flex; align-items:center; gap:8px; font-size:12px;";
+        if (desc) row.title = desc;
         const isInt = p.type === "int";
         const step = isInt ? 1 : (p.max - p.min) / 100;
         if (p.type === "bool") {
-          row.innerHTML = `<label style="cursor:pointer;"><input type="checkbox" ${cur?"checked":""}> ${pname}</label>`;
+          row.innerHTML = `<label style="cursor:pointer;" title="${descEsc}"><input type="checkbox" ${cur?"checked":""}> ${pname}</label>`;
           row.querySelector("input").addEventListener("change", (ev) => {
             runParamValues[currentTool][pname] = ev.target.checked;
           });
         } else {
           row.innerHTML = `
-            <label style="flex:0 0 130px; color:var(--dim);">${pname}</label>
-            <input type="range" min="${p.min}" max="${p.max}" step="${step}" value="${cur}" style="flex:1;">
+            <label style="flex:0 0 130px; color:var(--dim);" title="${descEsc}">${pname}</label>
+            <input type="range" min="${p.min}" max="${p.max}" step="${step}" value="${cur}" style="flex:1;" title="${descEsc}">
             <span style="flex:0 0 50px; text-align:right; font-variant-numeric:tabular-nums;">${isInt?Math.round(cur):Number(cur).toFixed(2)}</span>`;
           const inp = row.querySelector("input");
           const out = row.querySelector("span");
@@ -1326,7 +1339,14 @@
             runParamValues[currentTool][pname] = cur;
           }
         }
-        wrap.appendChild(row);
+        cell.appendChild(row);
+        if (desc) {
+          const hint = document.createElement("div");
+          hint.style.cssText = "font-size:11px; color:var(--dim); margin-left:138px; margin-top:2px; line-height:1.3;";
+          hint.textContent = desc;
+          cell.appendChild(hint);
+        }
+        wrap.appendChild(cell);
       }
       form.appendChild(wrap);
     }
@@ -1340,11 +1360,15 @@
       form.appendChild(t);
       const wrap = document.createElement("div");
       wrap.style.marginBottom = "12px";
+      const flagDescs = entry.flag_descriptions || {};
       for (const fl of flags) {
+        const desc = flagDescs[fl] || "";
+        const descEsc = desc.replace(/"/g, "&quot;");
         const row = document.createElement("div");
-        row.style.cssText = "margin-bottom:4px; font-size:13px;";
+        row.style.cssText = "margin-bottom:6px; font-size:13px;";
         const checked = runFlagValues[currentTool].has(fl);
-        row.innerHTML = `<label style="cursor:pointer;"><input type="checkbox" ${checked?"checked":""}> ${fl}</label>`;
+        row.innerHTML = `<label style="cursor:pointer;" title="${descEsc}"><input type="checkbox" ${checked?"checked":""}> ${fl}</label>`
+          + (desc ? `<div style="font-size:11px; color:var(--dim); margin-left:22px; line-height:1.3;">${desc}</div>` : "");
         row.querySelector("input").addEventListener("change", (ev) => {
           if (ev.target.checked) runFlagValues[currentTool].add(fl);
           else runFlagValues[currentTool].delete(fl);

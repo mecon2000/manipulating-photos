@@ -10,14 +10,25 @@
     "artifacts": null,
     "artifact_flag": null,
     "params": {
-      "instant-id-strength": {"type": "float", "min": 0.0, "max": 2.0, "default": 1.0},
-      "image-to-become-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.75},
-      "denoising-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.7},
-      "depth-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
-      "prompt-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
-      "grain": {"type": "float", "min": 0.0, "max": 0.2, "default": 0.03}
+      "instant-id-strength": {"type": "float", "min": 0.0, "max": 2.0, "default": 1.0,
+        "description": "InstantID face-identity strength (default 1.0)"},
+      "image-to-become-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.75,
+        "description": "Image-to-become (style ref) strength (default 0.75)"},
+      "denoising-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.7,
+        "description": "Denoising strength (default 0.7)"},
+      "depth-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5,
+        "description": "Depth ControlNet strength (default 0.5)"},
+      "prompt-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5,
+        "description": "Text prompt strength (default 0.5)"},
+      "grain": {"type": "float", "min": 0.0, "max": 0.2, "default": 0.03,
+        "description": "Film grain outside ellipse, 0=off (0.02-0.04 typical)"}
     },
     "flags": ["--no-face-overlay", "--save-stack", "--save-intermediates"],
+    "flag_descriptions": {
+      "--no-face-overlay": "Skip face mask composite (use when no detectable face)",
+      "--save-stack": "Export pipeline stages as a multi-page TIFF",
+      "--save-intermediates": "Save bw_relit, surreal_gray, mask, matched alongside final"
+    },
     "cost_estimate_usd": 0.07,
     "wall_time_estimate_sec": 240
   },
@@ -31,17 +42,28 @@
                 "coral-smoke", "neon-smoke-rings", "burning-silk", "torn-cloud",
                 "spun-sugar", "powdered-pigment"],
     "preset_flag": "--preset",
+    "presets_description": "Painterly background style preset",
     "artifacts": ["wings", "petals", "hands", "faces", "chains", "serpents",
                   "butterflies", "thorns", "feathers", "flames", "flowers",
                   "skulls", "ribbons", "eyes", "random", "none"],
     "artifact_flag": "--artifact",
+    "artifacts_description": "Story element woven into BG (wings/petals/etc), or random/none",
     "params": {
-      "tile-refine": {"type": "float", "min": 0.0, "max": 0.5, "default": 0.0},
-      "grain-match": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
-      "foreground-wisp": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0},
-      "fg-holes": {"type": "int", "min": 0, "max": 12, "default": 5}
+      "tile-refine": {"type": "float", "min": 0.0, "max": 0.5, "default": 0.0,
+        "description": "Tensor Art tile refine denoise, de-AI-ifies (0=off, 0.15-0.35)"},
+      "grain-match": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5,
+        "description": "Grain match strength, unifies AI BG with photo (default 0.5)"},
+      "foreground-wisp": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0,
+        "description": "FG wisp opacity (0=off, 0.3-0.5 good). Adds blurred 2nd BG"},
+      "fg-holes": {"type": "int", "min": 0, "max": 12, "default": 5,
+        "description": "Number of feathered show-through holes in FG wisp mask"}
     },
     "flags": ["--auto-correct", "--use-cached-bg", "--save-stack"],
+    "flag_descriptions": {
+      "--auto-correct": "Enable Gemini evaluation + auto-correction loop",
+      "--use-cached-bg": "Reuse a pre-generated BG from bg_cache/ (~$0)",
+      "--save-stack": "Export pipeline stages as a multi-page TIFF"
+    },
     "cost_estimate_usd": 0.01,
     "wall_time_estimate_sec": 60
   },
@@ -51,15 +73,23 @@
     "needs_style_ref": false,
     "presets": ["ink-wash", "watercolor", "canvas", "charcoal", "graphite"],
     "preset_flag": "--medium",
+    "presets_description": "Dissolution medium (ink-wash is the user favorite)",
     "artifacts": null,
     "artifact_flag": null,
     "params": {
-      "dissolve-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85},
-      "face-preserve": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85},
-      "fade-distance": {"type": "float", "min": 1.0, "max": 10.0, "default": 3.5},
-      "levels": {"type": "int", "min": 3, "max": 8, "default": 5}
+      "dissolve-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85,
+        "description": "Overall dissolution strength 0-1 (default 0.85)"},
+      "face-preserve": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85,
+        "description": "How much face detail to preserve 0-1 (default 0.85)"},
+      "fade-distance": {"type": "float", "min": 1.0, "max": 10.0, "default": 3.5,
+        "description": "Face-radii multiplier; higher = more body preserved"},
+      "levels": {"type": "int", "min": 3, "max": 8, "default": 5,
+        "description": "Laplacian pyramid levels (default 5)"}
     },
     "flags": ["--save-stack"],
+    "flag_descriptions": {
+      "--save-stack": "Export pipeline stages as a multi-page TIFF"
+    },
     "cost_estimate_usd": 0.003,
     "wall_time_estimate_sec": 30
   },
@@ -69,14 +99,22 @@
     "needs_style_ref": false,
     "presets": ["ghost", "melt", "trails", "glitch", "echo", "full"],
     "preset_flag": "--effect",
+    "presets_description": "Effect: ghost/melt/trails/glitch/echo/full",
     "artifacts": null,
     "artifact_flag": null,
     "params": {
-      "intensity": {"type": "float", "min": 0.3, "max": 1.0, "default": 0.7},
-      "arc-angle": {"type": "float", "min": 0.0, "max": 90.0, "default": 30.0},
-      "direction": {"type": "float", "min": 0.0, "max": 360.0, "default": 0.0}
+      "intensity": {"type": "float", "min": 0.3, "max": 1.0, "default": 0.7,
+        "description": "Effect intensity 0.3-1.0 (default 0.7)"},
+      "arc-angle": {"type": "float", "min": 0.0, "max": 90.0, "default": 30.0,
+        "description": "Arc curve angle for ghost effect on skin (default 30 deg)"},
+      "direction": {"type": "float", "min": 0.0, "max": 360.0, "default": 0.0,
+        "description": "Direction angle, deg (0=melt down/trails right)"}
     },
     "flags": ["--auto-correct", "--save-stack"],
+    "flag_descriptions": {
+      "--auto-correct": "Use Gemini feedback to auto-adjust and retry",
+      "--save-stack": "Export pipeline stages as a multi-page TIFF"
+    },
     "cost_estimate_usd": 0.003,
     "wall_time_estimate_sec": 25
   },
@@ -87,13 +125,20 @@
     "presets": ["wet glass", "cracked glass", "oily glass", "frosted glass",
                 "marble", "liquid metal", "porcelain", "ice", "gold", "obsidian"],
     "preset_flag": "--material",
+    "presets_description": "Material to apply to subject's body/skin",
     "artifacts": null,
     "artifact_flag": null,
     "params": {
-      "strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.4},
-      "cfg-scale": {"type": "float", "min": 1.0, "max": 15.0, "default": 7.0}
+      "strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.4,
+        "description": "Denoising strength; higher = more material, less form"},
+      "cfg-scale": {"type": "float", "min": 1.0, "max": 15.0, "default": 7.0,
+        "description": "CFG scale (default 7)"}
     },
     "flags": ["--auto-correct", "--save-stack"],
+    "flag_descriptions": {
+      "--auto-correct": "Enable Gemini evaluation + auto-correction loop",
+      "--save-stack": "Export pipeline stages as a multi-page TIFF"
+    },
     "cost_estimate_usd": 0.04,
     "wall_time_estimate_sec": 60
   },
@@ -107,16 +152,27 @@
                 "Beauty Dish", "Underwater Caustics", "Moonlight", "Neon Signs",
                 "Firelight", "Laser"],
     "preset_flag": "--lighting",
+    "presets_description": "Lighting preset (Dramatic Rim/Spotlight work on most photos)",
     "artifacts": null,
     "artifact_flag": null,
     "params": {
-      "lowres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85},
-      "highres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
-      "guidance-scale": {"type": "float", "min": 1.0, "max": 10.0, "default": 2.5},
-      "steps": {"type": "int", "min": 10, "max": 60, "default": 28},
-      "bg-blend": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0}
+      "lowres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.85,
+        "description": "Low-res denoising strength (default 0.85)"},
+      "highres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5,
+        "description": "High-res denoise; lower = more faithful (default 0.5)"},
+      "guidance-scale": {"type": "float", "min": 1.0, "max": 10.0, "default": 2.5,
+        "description": "Guidance scale (default 2.5)"},
+      "steps": {"type": "int", "min": 10, "max": 60, "default": 28,
+        "description": "Inference steps (default 28)"},
+      "bg-blend": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0,
+        "description": "Blend original BG back (0=fully relit, 1=original BG)"}
     },
     "flags": ["--auto-correct", "--no-hr", "--save-stack"],
+    "flag_descriptions": {
+      "--auto-correct": "Enable Gemini evaluation + auto-correction loop",
+      "--no-hr": "Disable high-res fix",
+      "--save-stack": "Export pipeline stages as a multi-page TIFF"
+    },
     "cost_estimate_usd": 0.06,
     "wall_time_estimate_sec": 90
   },
@@ -127,17 +183,28 @@
     "presets": ["red-film", "ochre", "teal-moody", "amber", "blue-hour",
                 "rose", "sepia", "emerald", "magenta-dusk", "cyan-ice"],
     "preset_flag": "--preset",
+    "presets_description": "Single-color LAB wash preset",
     "artifacts": null,
     "artifact_flag": null,
     "params": {
-      "strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.75},
-      "grain": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0},
-      "face-preserve-mult": {"type": "float", "min": 0.5, "max": 5.0, "default": 2.5},
-      "scratches": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0},
-      "color-strips": {"type": "int", "min": 0, "max": 10, "default": 0},
-      "light-leak": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0}
+      "strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.75,
+        "description": "Blend weight toward target hue (default 0.75)"},
+      "grain": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0,
+        "description": "Gradient grain; face stays sharp, edges grainier"},
+      "face-preserve-mult": {"type": "float", "min": 0.5, "max": 5.0, "default": 2.5,
+        "description": "Grain preserve radius = face_radius x mult (default 2.5)"},
+      "scratches": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0,
+        "description": "Scratch overlay opacity (0=off)"},
+      "color-strips": {"type": "int", "min": 0, "max": 10, "default": 0,
+        "description": "Number of complementary-hue light leak strips"},
+      "light-leak": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.0,
+        "description": "Corner light leak intensity (0=off)"}
     },
     "flags": ["--preserve-shadows", "--analog"],
+    "flag_descriptions": {
+      "--preserve-shadows": "Keep deep shadows neutral (chiaroscuro)",
+      "--analog": "Enable all analog imperfections at defaults"
+    },
     "cost_estimate_usd": 0.0,
     "wall_time_estimate_sec": 8
   },
@@ -148,17 +215,27 @@
     "presets": ["foliage", "warm foliage", "doorframe", "curtain", "dark curtain",
                 "flowers", "fairy lights", "metal", "smoke", "brick", "auto"],
     "preset_flag": "--framing",
+    "presets_description": "Framing element (or 'auto' for Gemini scene detection)",
     "artifacts": null,
     "artifact_flag": null,
     "params": {
-      "coverage": {"type": "float", "min": 0.1, "max": 0.4, "default": 0.20},
-      "darken": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.55},
-      "irregularity": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
-      "blur-radius": {"type": "int", "min": 0, "max": 120, "default": 0},
-      "focal-length": {"type": "int", "min": 14, "max": 200, "default": 50},
-      "aperture": {"type": "float", "min": 1.0, "max": 16.0, "default": 2.0}
+      "coverage": {"type": "float", "min": 0.1, "max": 0.4, "default": 0.20,
+        "description": "Edge framing coverage 0.1-0.4 (default 0.20)"},
+      "darken": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.55,
+        "description": "Darken factor (0=black, 1=no darkening; default 0.55)"},
+      "irregularity": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5,
+        "description": "Edge irregularity (0=straight, 1=very jagged)"},
+      "blur-radius": {"type": "int", "min": 0, "max": 120, "default": 0,
+        "description": "Override DOF blur radius px (0=auto from EXIF+depth)"},
+      "focal-length": {"type": "int", "min": 14, "max": 200, "default": 50,
+        "description": "Override focal length mm (default EXIF or 50mm)"},
+      "aperture": {"type": "float", "min": 1.0, "max": 16.0, "default": 2.0,
+        "description": "Override aperture f-number (default EXIF or f/2.0)"}
     },
     "flags": ["--auto-correct"],
+    "flag_descriptions": {
+      "--auto-correct": "Enable Gemini evaluation"
+    },
     "cost_estimate_usd": 0.04,
     "wall_time_estimate_sec": 60
   },
@@ -168,17 +245,28 @@
     "needs_style_ref": false,
     "presets": ["cool", "warm", "cold", "sepia"],
     "preset_flag": "--tones",
+    "presets_description": "Color palette: cool/warm/cold/sepia",
     "artifacts": null,
     "artifact_flag": null,
     "params": {
-      "num-tones": {"type": "int", "min": 2, "max": 4, "default": 2},
-      "light-angle": {"type": "float", "min": 0.0, "max": 360.0, "default": 90.0},
-      "highres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.45},
-      "paint-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.18},
-      "canvas-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.22},
-      "edge-roughness": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5}
+      "num-tones": {"type": "int", "min": 2, "max": 4, "default": 2,
+        "description": "Number of tone levels (2 = boldest/graphic)"},
+      "light-angle": {"type": "float", "min": 0.0, "max": 360.0, "default": 90.0,
+        "description": "Light direction deg (0=right, 90=up); default auto"},
+      "highres-denoise": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.45,
+        "description": "IC-Light highres denoise; lower = more faithful"},
+      "paint-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.18,
+        "description": "Img2img paint texture strength (0=skip)"},
+      "canvas-strength": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.22,
+        "description": "Canvas weave texture strength (0=skip)"},
+      "edge-roughness": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.5,
+        "description": "Edge displacement strength (0=skip)"}
     },
     "flags": ["--auto-correct", "--save-stack"],
+    "flag_descriptions": {
+      "--auto-correct": "Enable Gemini evaluation",
+      "--save-stack": "Export pipeline stages as a multi-page TIFF"
+    },
     "cost_estimate_usd": 0.10,
     "wall_time_estimate_sec": 120
   }

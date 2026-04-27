@@ -2423,6 +2423,21 @@ DECORATE_CACHE_DIR = SHARED_DIR / "decorate_cache"
 DECORATE_PREVIEWS_DIR = SHARED_DIR / "decorate_previews"
 
 
+def _decorate_resolve(filename):
+    """Locate a decoratable image by basename across the dirs the various
+    Auto/Run/Vote tools write to. Returns Path or None."""
+    if not filename:
+        return None
+    for d in (PIPELINE_OUT_DIR, FINALS_DIR,
+              SHARED_DIR / "motion-streak-finals",
+              SHARED_DIR / "become-image-finals",
+              SHARED_DIR / "style-transfer-finals"):
+        p = d / filename
+        if p.is_file():
+            return p
+    return None
+
+
 def _decorate_get_google_key():
     k = os.environ.get("GOOGLE_API_KEY")
     if k:
@@ -2452,8 +2467,8 @@ def api_decorate_text_suggestions():
     filename = request.args.get("filename", "")
     n = int(request.args.get("n", "5"))
     offset = int(request.args.get("offset", "0"))
-    src = PIPELINE_OUT_DIR / filename
-    if not filename or not src.is_file():
+    src = _decorate_resolve(filename)
+    if not src:
         return jsonify({"error": "file not found"}), 404
     DECORATE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = DECORATE_CACHE_DIR / f"{filename}.json"
@@ -2511,8 +2526,8 @@ def _decorate_render(payload, return_intermediates=False):
     from PIL import Image as _PI
     import numpy as _np
     filename = payload["filename"]
-    src = PIPELINE_OUT_DIR / filename
-    if not src.is_file():
+    src = _decorate_resolve(filename)
+    if not src:
         raise FileNotFoundError(filename)
     text = (payload.get("text") or "").strip()
     text_align = payload.get("text_align", "auto") or "auto"
@@ -2558,8 +2573,8 @@ def _decorate_render(payload, return_intermediates=False):
 def api_decorate_preview():
     payload = request.get_json(force=True, silent=True) or {}
     filename = payload.get("filename", "")
-    src = PIPELINE_OUT_DIR / filename
-    if not filename or not src.is_file():
+    src = _decorate_resolve(filename)
+    if not src:
         return jsonify({"error": "file not found"}), 404
     DECORATE_PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -2591,8 +2606,8 @@ def api_decorate_preview():
 def api_decorate_save():
     payload = request.get_json(force=True, silent=True) or {}
     filename = payload.get("filename", "")
-    src = PIPELINE_OUT_DIR / filename
-    if not filename or not src.is_file():
+    src = _decorate_resolve(filename)
+    if not src:
         return jsonify({"error": "file not found"}), 404
     save_tiff = bool(payload.get("save_tiff", False))
     FAVORITES_DIR.mkdir(parents=True, exist_ok=True)

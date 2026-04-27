@@ -259,9 +259,19 @@
   .auto-card .job-thumb img { object-fit: contain; }
   .auto-card .job-body { padding: 8px 10px; gap: 8px; }
   .auto-card .job-title { font-size: 12px; color: var(--dim); }
-  .auto-card .job-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .auto-card .job-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+    position: relative; }
   .auto-card .job-actions .btn { padding: 6px 4px; font-size: 12px; min-width: 0;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+  .auto-more-menu { position: absolute; right: 0; bottom: calc(100% + 4px);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 4px; display: none; flex-direction: column; gap: 2px; z-index: 5;
+    min-width: 200px; box-shadow: 0 6px 18px rgba(0,0,0,0.4); }
+  .auto-more-menu.show { display: flex; }
+  .auto-more-menu .mi { background: transparent; border: 0; color: var(--fg);
+    text-align: left; padding: 8px 10px; font-size: 13px; cursor: pointer;
+    border-radius: 6px; text-decoration: none; display: block; }
+  .auto-more-menu .mi:hover { background: rgba(255,255,255,0.06); }
   .job-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
   .job-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .job-status { font-size: 12px; color: var(--dim); }
@@ -2371,6 +2381,12 @@
     } catch { showToast("Toggle failed"); }
   });
 
+  document.addEventListener("click", (ev) => {
+    if (!ev.target.closest(".auto-more-menu, [data-act='more']")) {
+      document.querySelectorAll(".auto-more-menu.show").forEach(m => m.classList.remove("show"));
+    }
+  });
+
   function renderAutoFeed(items) {
     const feed = document.getElementById("auto-feed");
     if (!feed) return;
@@ -2394,8 +2410,14 @@
           <div class="job-actions">
             <button class="btn primary" data-act="decorate" title="Decorate">✨</button>
             <button class="btn" data-act="bad" title="Bad">👎</button>
-            <a class="btn" download href="${out ? imgUrl(out) : "#"}" title="Download">⬇️</a>
             <button class="btn" data-act="fav" title="Quick-fav">⭐</button>
+            <button class="btn" data-act="more" title="More…">▾</button>
+            <div class="auto-more-menu">
+              <button class="mi" data-act="more-same-photo">4× styles, same photo</button>
+              <button class="mi" data-act="more-same-style">4× photos, same style</button>
+              <button class="mi" data-act="more-similar">4× similar photos, same style</button>
+              <a class="mi" download href="${out ? imgUrl(out) : "#"}">⬇️ Download</a>
+            </div>
           </div>
         </div>`;
       card.addEventListener("click", async (ev) => {
@@ -2422,6 +2444,20 @@
             if (r.ok) { showToast("Favorited ⭐"); refreshAutoState(); }
             else showToast("Fav failed");
           } catch { showToast("Fav failed"); }
+        } else if (act === "more") {
+          ev.stopPropagation();
+          document.querySelectorAll(".auto-more-menu.show").forEach(m => {
+            if (m !== card.querySelector(".auto-more-menu")) m.classList.remove("show");
+          });
+          card.querySelector(".auto-more-menu").classList.toggle("show");
+        } else if (act === "more-same-style" || act === "more-same-photo" || act === "more-similar") {
+          const kind = act.replace("more-", "");
+          card.querySelector(".auto-more-menu").classList.remove("show");
+          try {
+            const r = await fetch(`/api/queue/${it.id}/more/${kind}`, {method:"POST"});
+            if (r.ok) { showToast("Queued 4×"); refreshAutoState(); }
+            else showToast("Queue failed");
+          } catch { showToast("Queue failed"); }
         }
       });
       feed.appendChild(card);

@@ -1556,6 +1556,45 @@ def api_more_similar(item_id):
 
 PIPELINE_CAND_DIR = SHARED_DIR / "candidates-for-motion-streak"
 PIPELINE_STYLE_DIR = SHARED_DIR / "0010x0010" / "cleaned"
+STYLE_REFS_ROOT = SHARED_DIR / "style-refs"
+DEFAULT_STYLE_FAMILY = "0010x0010"
+_STYLE_REF_EXTS = {".jpg", ".jpeg", ".png"}
+
+
+def _style_family_dir(family):
+    """Resolve a style-family name to its directory.
+
+    Falls back to legacy PIPELINE_STYLE_DIR when family is the default and the
+    new style-refs/<family> path is missing — keeps old layouts working.
+    """
+    if not family:
+        family = DEFAULT_STYLE_FAMILY
+    # Reject anything path-traversal-y
+    if "/" in family or ".." in family or family.startswith("_"):
+        return None
+    p = STYLE_REFS_ROOT / family
+    try:
+        if p.is_dir():
+            return p
+    except OSError:
+        pass
+    if family == DEFAULT_STYLE_FAMILY and PIPELINE_STYLE_DIR.is_dir():
+        return PIPELINE_STYLE_DIR
+    return None
+
+
+def _list_style_files(d):
+    out = []
+    try:
+        for f in sorted(d.iterdir()):
+            if f.suffix.lower() not in _STYLE_REF_EXTS:
+                continue
+            if f.stem.startswith("_"):
+                continue
+            out.append(f)
+    except OSError:
+        pass
+    return out
 PIPELINE_OUT_DIR = SHARED_DIR / "surreal-with-face"
 PIPELINE_BAD_DIR = SHARED_DIR / "surreal-with-face-bad"
 PIPELINE_STATE_PATH = SHARED_DIR / "pipeline_state.json"
@@ -1750,15 +1789,57 @@ def api_pipe_watermark(filename):
 
 @app.route("/api/pipeline/styles")
 def api_pipe_styles():
+    family = request.args.get("family") or DEFAULT_STYLE_FAMILY
+    d = _style_family_dir(family)
     items = []
-    if PIPELINE_STYLE_DIR.is_dir():
-        for f in sorted(PIPELINE_STYLE_DIR.iterdir()):
-            if f.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
-                continue
-            if f.stem.startswith("_"):
-                continue
+    if d is not None:
+        for f in _list_style_files(d):
             items.append({"name": f.stem, "filename": f.name, "path": str(f)})
-    return jsonify({"styles": items})
+    return jsonify({"styles": items, "family": family})
+
+
+@app.route("/api/style-families")
+def api_style_families():
+    """List subfolders under shared/style-refs/ that contain image files.
+
+    Folders with leading '_' are skipped. The legacy 0010x0010/cleaned/
+    location is included as a virtual entry if no style-refs/0010x0010 exists.
+    """
+    families = []
+    seen = set()
+    if STYLE_REFS_ROOT.is_dir():
+        try:
+            entries = sorted(STYLE_REFS_ROOT.iterdir(),
+                             key=lambda p: p.name.lower())
+        except OSError:
+            entries = []
+        for sub in entries:
+            try:
+                if not sub.is_dir():
+                    continue
+            except OSError:
+                continue
+            if sub.name.startswith("_"):
+                continue
+            files = _list_style_files(sub)
+            if not files:
+                continue
+            families.append({
+                "name": sub.name,
+                "count": len(files),
+                "preview": str(files[0]),
+            })
+            seen.add(sub.name)
+    # Legacy fallback for 0010x0010
+    if DEFAULT_STYLE_FAMILY not in seen and PIPELINE_STYLE_DIR.is_dir():
+        files = _list_style_files(PIPELINE_STYLE_DIR)
+        if files:
+            families.insert(0, {
+                "name": DEFAULT_STYLE_FAMILY,
+                "count": len(files),
+                "preview": str(files[0]),
+            })
+    return jsonify(families)
 
 
 def _pipe_run_one(job_id, candidate_path, style_path, no_face_overlay):
@@ -2772,12 +2853,16 @@ def api_run_tool_run(name):
     # (relighting + surreal_with_face orchestration is non-trivial).
     if name == "surreal_with_face":
         no_face = "--no-face-overlay" in flags
+        family = body.get("style_family") or DEFAULT_STYLE_FAMILY
+        family_dir = _style_family_dir(family)
+        if family_dir is None:
+            return jsonify({"error": f"unknown style family: {family}"}), 400
         for c in cands:
             cand_path = _resolve_candidate_path(c) or (PIPELINE_CAND_DIR / c)
             if not cand_path.is_file():
                 continue
             for sf in style_refs:
-                style_path = PIPELINE_STYLE_DIR / sf
+                style_path = family_dir / sf
                 if not style_path.is_file():
                     continue
                 jid = uuid.uuid4().hex[:8]
@@ -2785,6 +2870,7 @@ def api_run_tool_run(name):
                     PIPELINE_JOBS[jid] = {
                         "id": jid, "tool": name,
                         "candidate": c, "style": sf,
+                        "style_family": family,
                         "no_face_overlay": no_face,
                         "status": "queued", "phase": "queued",
                         "queued_at": now_str(),

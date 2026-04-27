@@ -1142,6 +1142,9 @@
   let runStyles = [];               // [{name, filename, path}]
   let runSelectedStyles = new Set(); // filenames
   let runStylesLoaded = false;
+  let runStyleFamilies = [];        // [{name, count, preview}]
+  let runStyleFamilyLoaded = false;
+  let runCurrentFamily = localStorage.getItem("styleFamily") || "";
   let jobsPollTimer = null;
 
   // Multi-tool registry & state
@@ -1231,6 +1234,22 @@
 
     // Style refs (surreal_with_face only)
     if (entry.needs_style_ref) {
+      // Style family dropdown (only when tool advertises style_families)
+      if (entry.style_families) {
+        const ft = document.createElement("div");
+        ft.className = "run-section-title";
+        ft.textContent = "Style family";
+        form.appendChild(ft);
+        const famRow = document.createElement("div");
+        famRow.style.cssText = "display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; font-size:13px;";
+        famRow.innerHTML = `
+          <select id="run-family-select" style="background:#1a1a1f; color:var(--fg); border:1px solid var(--border); padding:6px 8px; border-radius:4px;"></select>
+          <button id="run-family-random" type="button" style="background:#1a1a1f; color:var(--fg); border:1px solid var(--border); padding:6px 10px; border-radius:4px; cursor:pointer;">🎲 Random</button>
+          <input id="run-family-randomN" type="number" min="1" max="50" value="4" style="width:55px; background:#1a1a1f; color:var(--fg); border:1px solid var(--border); padding:6px; border-radius:4px;">
+          <button id="run-family-clear" type="button" style="background:#1a1a1f; color:var(--dim); border:1px solid var(--border); padding:6px 10px; border-radius:4px; cursor:pointer;">Clear</button>
+        `;
+        form.appendChild(famRow);
+      }
       const t = document.createElement("div");
       t.className = "run-section-title";
       t.textContent = "Style refs";
@@ -1239,8 +1258,12 @@
       grid.className = "style-grid";
       grid.id = "run-style-grid";
       form.appendChild(grid);
-      // Populated by loadRunStyles → renderStyleGrid
-      loadRunStyles();
+      // Populated by loadStyleFamilies → loadRunStyles → renderStyleGrid
+      if (entry.style_families) {
+        loadStyleFamilies(entry.default_style_family || "0010x0010");
+      } else {
+        loadRunStyles();
+      }
     }
 
     // Presets
@@ -1416,22 +1439,81 @@
     helper.textContent = `${C} cand × ${M} ${label||""} = ${total} jobs · ~$${cost}${warn}`;
   }
 
-  async function loadRunStyles() {
+  async function loadRunStyles(family, opts) {
+    opts = opts || {};
     try {
-      if (!runStylesLoaded) {
-        const r = await fetch("/api/pipeline/styles");
-        const j = await r.json();
-        runStyles = j.styles || j || [];
-        // Default-select 1, 6, 7, 8 (indices 0,5,6,7)
+      const url = family ? `/api/pipeline/styles?family=${encodeURIComponent(family)}`
+                         : "/api/pipeline/styles";
+      const r = await fetch(url);
+      const j = await r.json();
+      runStyles = j.styles || j || [];
+      runSelectedStyles.clear();
+      if (opts.defaultSelect !== false) {
+        // Default-select 1, 6, 7, 8 (indices 0,5,6,7) within bounds
         RUN_DEFAULT_STYLE_IDX.forEach(i => {
           if (runStyles[i]) runSelectedStyles.add(runStyles[i].filename);
         });
-        runStylesLoaded = true;
       }
+      runStylesLoaded = true;
       renderStyleGrid();
       updateRunButton();
     } catch (e) {
       console.error("loadRunStyles", e);
+    }
+  }
+
+  async function loadStyleFamilies(defaultFamily) {
+    try {
+      if (!runStyleFamilyLoaded) {
+        const r = await fetch("/api/style-families");
+        runStyleFamilies = await r.json();
+        runStyleFamilyLoaded = true;
+      }
+      const sel = document.getElementById("run-family-select");
+      if (!sel) return;
+      sel.innerHTML = "";
+      runStyleFamilies.forEach(f => {
+        const opt = document.createElement("option");
+        opt.value = f.name;
+        opt.textContent = `${f.name} (${f.count})`;
+        sel.appendChild(opt);
+      });
+      // Pick family: localStorage > default hint > first
+      let pick = runCurrentFamily;
+      const names = runStyleFamilies.map(f => f.name);
+      if (!pick || !names.includes(pick)) pick = defaultFamily;
+      if (!pick || !names.includes(pick)) pick = names[0] || "";
+      if (pick) sel.value = pick;
+      runCurrentFamily = pick;
+      if (pick) localStorage.setItem("styleFamily", pick);
+
+      sel.addEventListener("change", () => {
+        runCurrentFamily = sel.value;
+        localStorage.setItem("styleFamily", runCurrentFamily);
+        loadRunStyles(runCurrentFamily);
+      });
+      const randBtn = document.getElementById("run-family-random");
+      if (randBtn) randBtn.addEventListener("click", () => {
+        const n = Math.max(1, parseInt(document.getElementById("run-family-randomN").value, 10) || 4);
+        const pool = runStyles.slice();
+        runSelectedStyles.clear();
+        for (let i = pool.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [pool[i], pool[j]] = [pool[j], pool[i]];
+        }
+        pool.slice(0, Math.min(n, pool.length)).forEach(s => runSelectedStyles.add(s.filename));
+        renderStyleGrid();
+        updateRunButton();
+      });
+      const clrBtn = document.getElementById("run-family-clear");
+      if (clrBtn) clrBtn.addEventListener("click", () => {
+        runSelectedStyles.clear();
+        renderStyleGrid();
+        updateRunButton();
+      });
+      if (pick) loadRunStyles(pick);
+    } catch (e) {
+      console.error("loadStyleFamilies", e);
     }
   }
 
@@ -1458,6 +1540,7 @@
         body: JSON.stringify({
           candidates: cands,
           presets, artifacts, style_refs,
+          style_family: runCurrentFamily || undefined,
           params, flags,
         }),
       });

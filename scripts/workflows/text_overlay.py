@@ -238,9 +238,20 @@ def text_color_from_highlights(luma, top_pct=15):
 
 def wrap_text(text, font, max_width_px):
     """Wrap into 1-3 lines fitting max_width_px. Uses simple greedy word-wrap.
-    Adds soft breaks at commas/em-dashes when line is still too long."""
+    Adds soft breaks at commas/em-dashes when line is still too long.
+    Honors explicit linebreaks: "|" or literal "\\n" force a new line."""
     import textwrap
-    words = text.split()
+    # Normalize explicit breaks first so each segment wraps independently.
+    raw_segments = re.split(r"\s*\|\s*|\\n|\n", text or "")
+    raw_segments = [s for s in (seg.strip() for seg in raw_segments) if s]
+    if len(raw_segments) > 1:
+        out = []
+        for seg in raw_segments:
+            out.extend(wrap_text(seg, font, max_width_px))
+        if len(out) > 3:
+            out = out[:2] + [" ".join(out[2:])]
+        return out
+    words = (raw_segments[0] if raw_segments else text).split()
     if not words:
         return [text]
 
@@ -335,7 +346,8 @@ def overlay(rgb_arr, text, *, style="quote", orientation="horizontal",
              font_size_pct=3.0, manual_angle_deg=None,
              font_quote=DEFAULT_QUOTE_FONT, font_subtitle=DEFAULT_SUBTITLE_FONT,
              max_width_pct=42.0, blur_match_factor=0.5, debug=False,
-             force_bbox_idx=None, force_align=None):
+             force_bbox_idx=None, force_align=None,
+             force_xy_pct=None):
     """Apply text overlay. Always horizontal by default.
 
     - Wraps long text into up to 3 lines fitting `max_width_pct`% of image width.
@@ -392,6 +404,15 @@ def overlay(rgb_arr, text, *, style="quote", orientation="horizontal",
     score, bx, by = scored[0]
     if force_bbox_idx is not None and 0 <= int(force_bbox_idx) < len(cands):
         bx, by = cands[int(force_bbox_idx)]
+        score = bbox_score(luma, bx, by, block_w, block_h)
+    if force_xy_pct is not None:
+        # User clicked on the preview: place block CENTERED at that point,
+        # then clamp inside MIN_MARGIN.
+        xp, yp = force_xy_pct
+        cx = int(W * float(xp))
+        cy = int(H * float(yp))
+        bx = max(MIN_MARGIN, min(W - block_w - MIN_MARGIN, cx - block_w // 2))
+        by = max(MIN_MARGIN, min(H - block_h - MIN_MARGIN, cy - block_h // 2))
         score = bbox_score(luma, bx, by, block_w, block_h)
 
     # Decide alignment: flush to whichever edge is closer

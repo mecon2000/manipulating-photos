@@ -2471,9 +2471,25 @@ def api_decorate_text_suggestions():
     filename = request.args.get("filename", "")
     n = int(request.args.get("n", "5"))
     offset = int(request.args.get("offset", "0"))
+    mode = request.args.get("mode", "mood")  # "mood" (Gemini) or "random"
     src = _decorate_resolve(filename)
     if not src:
         return jsonify({"error": "file not found"}), 404
+    if mode == "random":
+        try:
+            import text_overlay  # type: ignore
+            quotes = json.loads(text_overlay.QUOTES_JSON.read_text())
+        except Exception as e:
+            return jsonify({"error": f"quotes load: {e}"}), 500
+        import random as _r
+        sl = _r.sample(quotes, min(n, len(quotes))) if quotes else []
+        return jsonify({
+            "suggestions": [{"text": q.get("text", ""),
+                             "author": q.get("author", ""),
+                             "title": q.get("title", "")} for q in sl],
+            "next_offset": 0,
+            "mood": "(random)",
+        })
     DECORATE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = DECORATE_CACHE_DIR / f"{filename}.json"
     cache = None
@@ -2519,7 +2535,7 @@ def api_decorate_text_suggestions():
 
 def _decorate_knob_hash(payload):
     import hashlib
-    keys = ("filename", "text", "text_align", "position_idx",
+    keys = ("filename", "text", "text_align", "position_idx", "xy_pct",
             "grade_mode", "grade_strength")
     s = json.dumps({k: payload.get(k) for k in keys}, sort_keys=True)
     return hashlib.md5(s.encode()).hexdigest()[:16]
@@ -2535,7 +2551,8 @@ def _decorate_render(payload, return_intermediates=False):
         raise FileNotFoundError(filename)
     text = (payload.get("text") or "").strip()
     text_align = payload.get("text_align", "auto") or "auto"
-    position_idx = int(payload.get("position_idx") or 0)
+    position_idx = payload.get("position_idx")
+    xy_pct = payload.get("xy_pct")  # [x_pct, y_pct] in 0..1 — overrides position_idx
     grade_mode = payload.get("grade_mode", "off") or "off"
     grade_strength = float(payload.get("grade_strength") or 0.3)
 
@@ -2550,11 +2567,12 @@ def _decorate_render(payload, return_intermediates=False):
         try:
             import text_overlay  # type: ignore
             force_align = None if text_align == "auto" else text_align
-            cur = text_overlay.overlay(
-                cur, text,
-                force_bbox_idx=position_idx,
-                force_align=force_align,
-            )
+            kwargs = {"force_align": force_align}
+            if xy_pct and len(xy_pct) == 2:
+                kwargs["force_xy_pct"] = (float(xy_pct[0]), float(xy_pct[1]))
+            elif position_idx is not None:
+                kwargs["force_bbox_idx"] = int(position_idx)
+            cur = text_overlay.overlay(cur, text, **kwargs)
         except Exception as e:
             print(f"[decorate] text overlay failed: {e}")
     with_text_pil = _PI.fromarray(cur)

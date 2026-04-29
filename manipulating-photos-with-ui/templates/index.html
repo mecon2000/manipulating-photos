@@ -554,16 +554,23 @@
           <div class="dec-row">
             <button class="btn" id="dec-text-refresh">↻ refresh</button>
             <button class="btn" id="dec-text-edit">✏ edit selected</button>
+            <label style="margin-left:auto; font-size:12px;">
+              <input type="checkbox" id="dec-text-random"> 🎲 random (instant)
+            </label>
           </div>
           <div class="dec-row">
             <label><input type="radio" name="dec-text" value="__own__"> my own:</label>
-            <input type="text" id="dec-text-own" placeholder="type your own line">
+            <input type="text" id="dec-text-own" placeholder="line 1 | line 2 (use | for newline)">
           </div>
         </section>
 
         <section class="dec">
           <h4>Position</h4>
-          <div id="dec-pos-thumbs" class="pos-thumbs"></div>
+          <div style="font-size:12px; color:var(--dim);">
+            Click anywhere on the preview → text centers there.
+            <button class="btn" id="dec-pos-auto" style="margin-left:8px; padding:4px 8px; font-size:11px;">use auto</button>
+            <span id="dec-pos-status" style="margin-left:8px;"></span>
+          </div>
         </section>
 
         <section class="dec">
@@ -1794,8 +1801,7 @@
     suggestions: [],
     nextOffset: 0,
     selectedTextValue: "__none__", // radio value: "__none__", "__own__", or index
-    positionIdx: 0,
-    numPositions: 6,
+    xyPct: null, // [x,y] in 0..1 — when set, overrides auto positioning
     debounceTimer: null,
   };
 
@@ -1804,12 +1810,12 @@
     decState.suggestions = [];
     decState.nextOffset = 0;
     decState.selectedTextValue = "__none__";
-    decState.positionIdx = 0;
+    decState.xyPct = null;
     document.getElementById("dec-title").textContent = "Decorate — " + (title || filename);
     document.getElementById("dec-text-own").value = "";
     document.getElementById("dec-mood").textContent = "";
     document.getElementById("dec-preview-img").src = "";
-    document.getElementById("dec-pos-thumbs").innerHTML = '<div style="color:var(--dim); font-size:12px;">(pick text first)</div>';
+    document.getElementById("dec-pos-status").textContent = "";
     document.querySelectorAll('input[name=dec-align]').forEach(r => r.checked = (r.value === "auto"));
     document.querySelectorAll('input[name=dec-grade]').forEach(r => r.checked = (r.value === "off"));
     document.getElementById("dec-grade-strength").value = "0.30";
@@ -1832,7 +1838,9 @@
     const cont = document.getElementById("dec-text-options");
     cont.innerHTML = '<div style="color:var(--dim); font-size:12px;">loading…</div>';
     try {
-      const r = await fetch(`/api/decorate/text-suggestions?filename=${encodeURIComponent(fn)}&n=5&offset=${offset}`);
+      const useRandom = document.getElementById("dec-text-random")?.checked;
+      const modeArg = useRandom ? "&mode=random" : "";
+      const r = await fetch(`/api/decorate/text-suggestions?filename=${encodeURIComponent(fn)}&n=5&offset=${offset}${modeArg}`);
       const j = await r.json();
       if (!r.ok) {
         cont.innerHTML = `<div style="color:var(--danger); font-size:12px;">${j.error||"failed"}</div>`;
@@ -1872,14 +1880,15 @@
   }
 
   function decGetPayload() {
-    return {
+    const p = {
       filename: decState.filename,
       text: decGetText(),
       text_align: document.querySelector('input[name=dec-align]:checked')?.value || "auto",
-      position_idx: decState.positionIdx,
       grade_mode: decGetGrade(),
       grade_strength: parseFloat(document.getElementById("dec-grade-strength").value),
     };
+    if (decState.xyPct) p.xy_pct = decState.xyPct;
+    return p;
   }
 
   function schedulePreview(delay = 500) {
@@ -1904,47 +1913,39 @@
     wrap.classList.remove("loading");
   }
 
-  async function loadPositionThumbs() {
-    const cont = document.getElementById("dec-pos-thumbs");
-    const text = decGetText();
-    if (!text) {
-      cont.innerHTML = '<div style="color:var(--dim); font-size:12px;">(pick text first to see position options)</div>';
-      return;
+  function decUpdatePosStatus() {
+    const el = document.getElementById("dec-pos-status");
+    if (!el) return;
+    if (decState.xyPct) {
+      const [x, y] = decState.xyPct;
+      el.textContent = `pinned at ${(x*100).toFixed(0)}%, ${(y*100).toFixed(0)}%`;
+      el.style.color = "var(--accent)";
+    } else {
+      el.textContent = "auto";
+      el.style.color = "var(--dim)";
     }
-    cont.innerHTML = "";
-    const N = decState.numPositions;
-    for (let i = 0; i < N; i++) {
-      const div = document.createElement("div");
-      div.className = "pos-thumb loading" + (i === decState.positionIdx ? " active" : "");
-      div.dataset.idx = i;
-      div.innerHTML = `<span class="idx">${i+1}</span>`;
-      div.addEventListener("click", () => {
-        decState.positionIdx = i;
-        cont.querySelectorAll(".pos-thumb").forEach(t => t.classList.toggle("active", parseInt(t.dataset.idx,10) === i));
-        schedulePreview(0);
-      });
-      cont.appendChild(div);
-    }
-    // Fire all in parallel
-    const base = decGetPayload();
-    Promise.all([...Array(N).keys()].map(async (i) => {
-      const payload = {...base, position_idx: i};
-      try {
-        const r = await fetch("/api/decorate/preview", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(payload),
-        });
-        const j = await r.json();
-        const div = cont.querySelector(`.pos-thumb[data-idx="${i}"]`);
-        if (div && j.preview_url) {
-          div.classList.remove("loading");
-          const img = document.createElement("img");
-          img.src = j.preview_url;
-          div.appendChild(img);
-        }
-      } catch (e) {}
-    }));
   }
+
+  // Click on the live preview → pin text to that point.
+  document.getElementById("dec-preview-img").addEventListener("click", (ev) => {
+    const img = ev.currentTarget;
+    const r = img.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    const x = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+    const y = Math.max(0, Math.min(1, (ev.clientY - r.top) / r.height));
+    decState.xyPct = [x, y];
+    decUpdatePosStatus();
+    schedulePreview(0);
+  });
+  document.getElementById("dec-preview-img").style.cursor = "crosshair";
+  document.getElementById("dec-pos-auto").addEventListener("click", () => {
+    decState.xyPct = null;
+    decUpdatePosStatus();
+    schedulePreview(0);
+  });
+  document.getElementById("dec-text-random").addEventListener("change", () => {
+    loadDecorateSuggestions(0);
+  });
 
   // Modal event wiring
   document.getElementById("dec-discard").addEventListener("click", closeDecorate);
@@ -1962,16 +1963,12 @@
   document.getElementById("dec-text-options").addEventListener("change", (e) => {
     if (e.target.name === "dec-text") {
       decState.selectedTextValue = e.target.value;
-      loadPositionThumbs();
       schedulePreview(0);
     }
   });
-  document.querySelector('input[name="dec-text"][value="__own__"]')?.addEventListener; // placeholder
-  // The "my own" radio is in a separate row — hook it
   document.querySelector('#decorate-modal').addEventListener("change", (e) => {
     if (e.target.name === "dec-text" && e.target.value === "__own__") {
       decState.selectedTextValue = "__own__";
-      loadPositionThumbs();
       schedulePreview(0);
     } else if (e.target.name === "dec-align" || e.target.name === "dec-grade") {
       schedulePreview();
@@ -1983,9 +1980,6 @@
     document.querySelector('input[name="dec-text"][value="__own__"]').checked = true;
     decState.selectedTextValue = "__own__";
     schedulePreview();
-  });
-  document.getElementById("dec-text-own").addEventListener("blur", () => {
-    if (decState.selectedTextValue === "__own__") loadPositionThumbs();
   });
 
   document.getElementById("dec-text-refresh").addEventListener("click", () => {

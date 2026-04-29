@@ -1093,7 +1093,8 @@ def api_image():
     if not path:
         abort(400)
     p = Path(path).expanduser().resolve()
-    allowed_roots = [SHARED_DIR.resolve(), PHOTOS_DIR.resolve()]
+    allowed_roots = [SHARED_DIR.resolve(), PHOTOS_DIR.resolve(),
+                     STYLE_REFS_ROOT.resolve()]
     if not any(str(p).startswith(str(root)) for root in allowed_roots):
         abort(403)
     if not p.is_file():
@@ -1291,9 +1292,12 @@ def api_like(item_id):
         abort(404)
     # Copy to favorites + append to favorites.json
     FAVORITES_DIR.mkdir(parents=True, exist_ok=True)
-    src = Path(it["output"])
+    out = it.get("output") or ""
+    src = Path(out)
+    if not out or not src.is_file():
+        return jsonify({"error": f"output file missing: {out}"}), 500
     model_tag = re.sub(r"[^\w]+", "_", it.get("model") or "").strip("_")
-    src_stem = Path(it["source"]).stem
+    src_stem = Path(it.get("source") or "").stem or "src"
     preset_tag = re.sub(r"[^\w]+", "_", (it.get("preset") or "")).strip("_")
     artifact_tag = re.sub(r"[^\w]+", "_", (it.get("artifact") or "")).strip("_")
     parts = [model_tag, src_stem, it["tool"], preset_tag, artifact_tag]
@@ -1319,14 +1323,14 @@ def api_like(item_id):
 
     entry = {
         "file": fav_name,
-        "source": it["source"],
+        "source": it.get("source"),
         "model": it.get("model"),
         "style": it.get("preset") or it.get("artifact"),
-        "tool": it["tool"],
+        "tool": it.get("tool"),
         "score": None,
         "git_commit": git_hash,
         "favorited_at": now_str(),
-        "command": it["command"],
+        "command": it.get("command"),
         "artifact": it.get("artifact"),
         "seed": it.get("seed"),
     }
@@ -1976,8 +1980,8 @@ def api_pipe_jobs_clear():
 
 @app.route("/api/pipeline/output/<filename>/fav", methods=["POST"])
 def api_pipe_fav(filename):
-    src = PIPELINE_OUT_DIR / filename
-    if not src.is_file():
+    src = _decorate_resolve(filename)
+    if not src:
         abort(404)
     FAVORITES_DIR.mkdir(parents=True, exist_ok=True)
     fav_name = f"surreal-with-face__{filename}"

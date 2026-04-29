@@ -1632,8 +1632,36 @@
       return `<span class="job-status running">🔄 ${j.phase || "running"}${elapsed}</span>`;
     }
     if (j.status === "done") return `<span class="job-status done">✅ done</span>`;
-    if (j.status === "fail") return `<span class="job-status fail" title="${(j.error||'').replace(/"/g,'&quot;')}">❌ failed</span>`;
+    if (j.status === "fail") {
+      const reason = classifyJobError(j.error || "");
+      const tip = (j.error || "").replace(/"/g, '&quot;');
+      return `<span class="job-status fail" title="${tip}">❌ ${reason}</span>`;
+    }
     return `<span class="job-status">${j.status||""}</span>`;
+  }
+
+  function classifyJobError(err) {
+    if (!err) return "failed";
+    const e = err.toLowerCase();
+    if (e.includes("unexpected output: <class 'nonetype'>") ||
+        e.includes("nsfw") || e.includes("safety")) return "🔞 SDXL safety filter blocked output";
+    if (e.includes("insufficient") || e.includes("balance") ||
+        e.includes("payment") || e.includes("billing") ||
+        e.includes("quota") || e.includes("exhausted")) return "💳 out of API credit / quota";
+    if (e.includes("rate limit") || e.includes("429") ||
+        e.includes("too many requests")) return "⏱ rate-limited (retry later)";
+    if (e.includes("timeout") || e.includes("timed out") ||
+        e.includes("connection") || e.includes("dns") ||
+        e.includes("network") || e.includes("eof") ||
+        e.includes("unreachable")) return "🌐 network error";
+    if (e.includes("prohibited_content") || e.includes("blockreason") ||
+        e.includes("blocked")) return "🔞 Gemini blocked image";
+    if (e.includes("file not found") || e.includes("no such file") ||
+        e.includes("filenotfound")) return "📁 missing file";
+    if (e.includes("permission") || e.includes("forbidden") ||
+        e.includes("403")) return "🚫 auth / permission";
+    if (e.includes("traceback") || e.includes("error:")) return "⚙️ script bug — hover for traceback";
+    return "❌ failed — hover for details";
   }
 
   function renderJobs() {

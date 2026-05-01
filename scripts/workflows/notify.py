@@ -14,6 +14,12 @@ import subprocess
 
 # Running counter for push notifications (resets at 99)
 _COUNTER_FILE = os.path.expanduser("~/.openclaw/workspace/shared/.push_counter")
+# File-based kill switch — touch this file to silence all pushes without env vars.
+_DISABLE_FLAG = os.path.expanduser("~/.openclaw/workspace/shared/.notify_disabled")
+
+
+def _is_disabled():
+    return os.environ.get("NOTIFY_DISABLE") or os.path.exists(_DISABLE_FLAG)
 
 def _next_push_number():
     """Get next push number (1-99, wraps around)."""
@@ -78,6 +84,8 @@ def _curl_json(url, headers=None, data=None, file_path=None, form_fields=None, t
 
 def push_text(title, body=""):
     """Send a text notification to phone."""
+    if _is_disabled():
+        return False
     token = _get_token()
     if not token:
         return False
@@ -101,7 +109,7 @@ def push_image(file_path, title="", body=""):
     Returns:
         True if sent successfully, False otherwise
     """
-    if os.environ.get("NOTIFY_DISABLE_IMAGE") or os.environ.get("NOTIFY_DISABLE"):
+    if os.environ.get("NOTIFY_DISABLE_IMAGE") or _is_disabled():
         return False
     token = _get_token()
     if not token:

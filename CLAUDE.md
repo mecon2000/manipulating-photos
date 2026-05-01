@@ -90,7 +90,7 @@ All tools share `scripts/workflows/masking.py` for mask building. Two masking en
 
 **All flags:** `--source`, `--lighting` (preset name), `--prompt` (custom, overrides preset), `--negative`, `--lowres-denoise` (default 0.85), `--highres-denoise` (default 0.5, lower = more faithful), `--guidance-scale` (default 2.5), `--steps` (default 28), `--seed`, `--no-hr`, `--bg-blend` (0.0-1.0, blend original BG back), `--bg-blend-blur` (mask blur px, 0=hard edge), `--auto-correct`, `--max-corrections`, `--output-to`, `--local-output-dir`, `--list-presets`
 
-**20 presets:** Dramatic Rim, Spotlight, Low Key, High Key, Neon Gels, Teal & Orange, Red Drama, Golden Hour, Window Light, Overcast Soft, Candlelight, Butterfly, Split Light, Beauty Dish, Underwater Caustics, Moonlight, Neon Signs, Firelight, Laser
+**27 presets:** Dramatic Rim, Spotlight, Low Key, High Key, Neon Gels, Teal & Orange, Red Drama, Golden Hour, Window Light, Overcast Soft, Candlelight, Butterfly, Split Light, Beauty Dish, Underwater Caustics, Moonlight, Neon Signs, Firelight, Laser, Hard Midday Sun, Stage Backlight, Blue Hour, Projector Patterns, Lightning Flash, TV Glow, Stained Glass, Practical Bulb. Each has a per-preset thumbnail under `~/.openclaw/workspace/shared/preset_thumbs/relighting/<slug>.jpg` (built by `build_relighting_thumbs.py` — pulls from existing relighting favorites where available, otherwise generates a fresh relight on Gali's `BLD_4863.jpg`). The Run-tab chips render as 0010x0010-style square cards with the preset name overlaid (opt-in via `"preset_thumbs": true` in `tool_registry.json`; served by `/api/preset-thumb/<tool>/<preset>`).
 
 ### `scripts/workflows/foreground-framing.py`
 **Foreground depth framing.** Adds blurry foreground elements to photo edges, simulating the "shoot-through" technique at shallow depth of field (f/1.4-2.8, 35-50mm). Uses fal.ai SDXL inpainting for contextual foreground generation, then blurs + darkens + color-matches to the original.
@@ -357,7 +357,10 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 ./scripts/workflows/clean_ig_screenshots.py --rect "0,80%,25%,20%"  # extra rect for things that move slightly
 ```
 
-**All flags:** `--in`, `--out`, `--threshold` (std cutoff, default 5), `--dilate` (iterations, default 3), `--save-mask` (debug), `--rect "x,y,w,h"` (px or %; pass multiple for multiple rects). Default in=`shared/0010x0010/`, out=`shared/0010x0010/cleaned/`.
+**All flags:** `--in`, `--out`, `--threshold` (std cutoff, default 5), `--dilate` (iterations, default 3), `--save-mask` (debug), `--rect "x,y,w,h"` (px or %; pass multiple for multiple rects). Default in=`shared/0010x0010/`, out=`shared/0010x0010/cleaned/`. Also used for the `pulpbrother` style family (`shared/pulpbrother/` → `style-refs/pulpbrother/` after a per-image content-bbox crop).
+
+### Style family auto-discovery
+Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families` and surface as a dropdown in **Run → Surreal with face**. Drop a folder of cleaned reference photos there and it shows up after a hard browser refresh — no code change. Folders prefixed with `_` are skipped. Current families: `0010x0010`, `pulpbrother`.
 
 ### `scripts/workflows/color_grade.py`
 **LAB color grading.** Three modes for unifying tone across an output. Pure local except the BiRefNet call in warm-cool mode (~$0.001).
@@ -528,7 +531,7 @@ All scripts output to `~/.openclaw/workspace/shared/` (visible from Windows):
 - **Final images always go to `shared/finals/`** regardless of `--local-output-dir` — this is pinned
 - `shared/favorites/` holds liked outputs + `favorites.json` with full reconstruction commands
 - `shared/bg_cache/` holds pre-generated baroque BGs for `--use-cached-bg`
-- Scripts push to phone via Pushbullet by default; set `NOTIFY_DISABLE=1` to silence
+- Scripts push to phone via Pushbullet by default. Two ways to silence: set `NOTIFY_DISABLE=1` (process env), or `touch ~/.openclaw/workspace/shared/.notify_disabled` (flag file, no restart needed). The header `📲 push` checkbox in the gallery UI toggles the flag file via `/api/notify-state`.
 
 ## Recommended Settings
 

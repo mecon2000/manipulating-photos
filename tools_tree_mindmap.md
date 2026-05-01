@@ -56,7 +56,7 @@ graph TD
     EFFECTS --> MOTIONSTREAK["🌀 motion-streak<br/>0010x0010 B&W aesthetic<br/>streak / slitscan / limb-streak<br/>😴 paused — pivoted to Replicate"]:::tired
     EFFECTS --> STYLEXFER["🎭 style-transfer-replicate<br/>fofr/style-transfer<br/>😴 superseded by become-image"]:::tired
     EFFECTS --> BECOMEIMG["🎭 become-image-replicate<br/>fofr/become-image<br/>InstantID + IPAdapter, face+style"]:::done
-    EFFECTS --> SURREALFACE["🎨 surreal-with-face<br/>relight→bw→become→mask→hist-match→4×<br/>⭐ identity-preserving 0010 imitation"]:::happy
+    EFFECTS --> SURREALFACE["🎨 style imitations<br/>relight→bw→become→mask→hist-match→4×<br/>⭐ identity-preserving style imitation (0010, pulpbrother…)"]:::happy
     EFFECTS --> TEXTOVR["✍️ text-overlay<br/>Literary quote on stylized image<br/>Gemini mood → embed → cosine-NN<br/>brightness-aware placement, glow<br/>🚧 wip — free, ~3s"]:::wip
     EFFECTS --> COLORGRADE["🎨 color-grade<br/>LAB grading: radial warm-cool /<br/>split-tone teal-orange / global wash<br/>🚧 wip — pure local, ~1s"]:::wip
     QUOTEDB --> TEXTOVR
@@ -84,5 +84,5 @@ graph TD
     RESEARCH --> I_NSFW["💭 NSFW-safe inpainting<br/>SDXL uncensored or ComfyUI"]:::idea
     RESEARCH --> I_SCOREBOARD["💭 style scoreboard<br/>Analyze favs for patterns"]:::idea
     SURREALFACE --> I_LAYERED["💭 layered TIFF export<br/>--save-stack flag<br/>each pipeline step as a layer"]:::idea
-    SURREALFACE --> I_PULP["💭 pulpbrother via surreal-with-face<br/>collect refs, run pipeline<br/>skip hand-coded noir-paint approach"]:::idea
+    SURREALFACE --> I_PULP["✅ pulpbrother via style-imitations<br/>27 cleaned IG refs as a style family<br/>auto-discovered, ready to run"]:::done
 ```

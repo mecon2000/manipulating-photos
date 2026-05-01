@@ -1,6 +1,6 @@
 {
   "surreal_with_face": {
-    "label": "Surreal with face (0010x0010)",
+    "label": "Style imitations (0010x0010)",
     "script": "scripts/workflows/surreal_with_face.py",
     "needs_style_ref": true,
     "style_families": true,

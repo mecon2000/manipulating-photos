@@ -360,7 +360,7 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 **All flags:** `--in`, `--out`, `--threshold` (std cutoff, default 5), `--dilate` (iterations, default 3), `--save-mask` (debug), `--rect "x,y,w,h"` (px or %; pass multiple for multiple rects). Default in=`shared/0010x0010/`, out=`shared/0010x0010/cleaned/`. Also used for the `pulpbrother` style family (`shared/pulpbrother/` → `style-refs/pulpbrother/` after a per-image content-bbox crop).
 
 ### Style family auto-discovery
-Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families` and surface as a dropdown in **Run → Surreal with face**. Drop a folder of cleaned reference photos there and it shows up after a hard browser refresh — no code change. Folders prefixed with `_` are skipped. Current families: `0010x0010`, `pulpbrother`.
+Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families` and surface as a dropdown in **Run → Style imitations**. Drop a folder of cleaned reference photos there and it shows up after a hard browser refresh — no code change. Folders prefixed with `_` are skipped. Current families: `0010x0010`, `pulpbrother`.
 
 ### `scripts/workflows/color_grade.py`
 **LAB color grading.** Three modes for unifying tone across an output. Pure local except the BiRefNet call in warm-cool mode (~$0.001).
@@ -379,8 +379,8 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 
 **All flags:** `--source`, `--mode` (warm-cool/split/wash:<color>), `--strength` (0-1, default 0.6), `--mask-inner` (warm-cool, fraction of short edge), `--mask-outer` (warm-cool, fraction of short edge), `--warm-vertical-bias` (warm-cool, fraction of height to shift ellipse down, default ~0.1), `--out`.
 
-### `scripts/workflows/surreal_with_face.py`
-**Flagship identity-preserving 0010x0010 pipeline.** Forces identity by overlaying the actual relit B&W face onto a become-image surreal output, with histogram matching so the seam is invisible. Optional text overlay and color grade are integrated as in-pipeline steps so the final composite is graded as one image.
+### `scripts/workflows/surreal_with_face.py` (UI label: **Style imitations**)
+**Flagship identity-preserving style-imitation pipeline** (formerly "Surreal with face"). Forces identity by overlaying the actual relit B&W face onto a become-image surreal output, with histogram matching so the seam is invisible. Optional text overlay and color grade are integrated as in-pipeline steps so the final composite is graded as one image. Script filename, output dir (`shared/surreal-with-face/`), API routes (`/api/surreal-with-face/*`), favorites prefix, and registry key (`surreal_with_face`) keep the old name for backwards compatibility with existing favorites.
 
 **Pipeline:**
 1. Relight (IC-Light, fal.ai) — gives the face a clean directional light it can dominate the surreal BG with

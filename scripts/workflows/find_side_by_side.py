@@ -55,6 +55,29 @@ def split_score(img, n_panels):
             max(pair_diffs))
 
 
+def detect_seam_panels(img):
+    """Find the panel count by locating the strongest vertical-gradient
+    column. Side-by-side composites have a sharp seam between panels. We
+    score the candidate seam positions for 2- and 3-panel layouts and
+    return the count whose expected seam columns match the actual peak.
+    """
+    g = np.array(img.convert("L"))
+    W = g.shape[1]
+    col_grad = np.abs(np.diff(g.astype(int), axis=1)).mean(axis=0)
+    peak_col = int(np.argmax(col_grad))
+    peak_strength = col_grad[peak_col] / (col_grad.mean() + 1e-6)
+    # Distance from peak to expected seams
+    d2 = abs(peak_col - W / 2) / W
+    d3a = abs(peak_col - W / 3) / W
+    d3b = abs(peak_col - 2 * W / 3) / W
+    # Within ~1% of expected seam = match
+    if d2 < 0.01 and peak_strength > 3:
+        return 2, peak_strength
+    if min(d3a, d3b) < 0.01 and peak_strength > 3:
+        return 3, peak_strength
+    return 1, peak_strength  # no clear seam
+
+
 def score(path):
     try:
         img = Image.open(path)
@@ -66,22 +89,18 @@ def score(path):
         return {"file": path.name, "aspect": round(aspect, 2),
                 "panels": 1, "score": 0.0,
                 "skip": "tall — single portrait"}
-    # Probe 2 panels and 3 panels; pick whichever gives a stronger signal
-    cand = []
-    for n in (2, 3):
-        if W < n * 64:
-            continue
-        edge_corr, color_diff = split_score(img, n)
-        cand.append((n, edge_corr, color_diff))
-    if not cand:
-        return None
-    # Score: structural similarity * color difference (need both)
-    cand.sort(key=lambda c: -(c[1] * c[2]))
-    n, ec, cd = cand[0]
+    # Authoritative panel count from the strongest vertical gradient seam
+    n_seam, seam_strength = detect_seam_panels(img)
+    if n_seam == 1:
+        return {"file": path.name, "aspect": round(aspect, 2),
+                "panels": 1, "score": 0.0,
+                "skip": f"no clear seam (peak={seam_strength:.1f}×)"}
+    edge_corr, color_diff = split_score(img, n_seam)
     return {"file": path.name, "aspect": round(aspect, 2),
-            "panels": n, "edge_corr": round(ec, 3),
-            "color_diff": round(cd, 1),
-            "score": round(ec * cd / 30.0, 2)}
+            "panels": n_seam, "edge_corr": round(edge_corr, 3),
+            "color_diff": round(color_diff, 1),
+            "seam": round(float(seam_strength), 1),
+            "score": round(edge_corr * color_diff / 30.0, 2)}
 
 
 def main():

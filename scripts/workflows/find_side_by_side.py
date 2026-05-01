@@ -96,6 +96,13 @@ def score(path):
                 "panels": 1, "score": 0.0,
                 "skip": f"no clear seam (peak={seam_strength:.1f}×)"}
     edge_corr, color_diff = split_score(img, n_seam)
+    # Real side-by-sides have HIGH structural similarity (same composition).
+    # Negative or near-zero corr means the seam is internal to a single
+    # photo (e.g., a strong body silhouette), not between two panels.
+    if edge_corr < 0.5:
+        return {"file": path.name, "aspect": round(aspect, 2),
+                "panels": 1, "score": 0.0,
+                "skip": f"low corr ({edge_corr:.2f}) — internal edge"}
     return {"file": path.name, "aspect": round(aspect, 2),
             "panels": n_seam, "edge_corr": round(edge_corr, 3),
             "color_diff": round(color_diff, 1),

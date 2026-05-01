@@ -247,15 +247,29 @@ def weighted_choice(items, weights=None, default_weight=5):
     return random.choices(items, weights=w, k=1)[0]
 
 def list_photos_for_model(model_dir):
-    """Return (processed_photos, unprocessed_photos) as lists of Paths."""
+    """Return (processed_photos, unprocessed_photos) as lists of Paths.
+
+    Walks the model dir recursively. A photo is classified as "processed"
+    if any path segment contains "processed" (case-insensitive) AND not
+    "unprocessed"; otherwise "unprocessed". This catches all the layouts
+    in use: Processed/, <session>/processed/, processed/<session>/,
+    "for strmr.com/", bts/, and root-level photos (default to unproc).
+    """
     proc, unproc = [], []
-    for sub, bucket in (("Processed", proc), ("processed", proc),
-                        ("Unprocessed", unproc), ("unprocessed", unproc)):
-        d = model_dir / sub
-        if d.is_dir():
-            for f in d.iterdir():
-                if f.suffix.lower() in PHOTO_EXTS and f.name.lower() not in SKIP_FILES:
-                    bucket.append(f)
+    try:
+        for f in model_dir.rglob("*"):
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in PHOTO_EXTS:
+                continue
+            if f.name.lower() in SKIP_FILES:
+                continue
+            segs = [s.lower() for s in f.relative_to(model_dir).parts[:-1]]
+            is_unproc = any("unprocessed" in s for s in segs)
+            is_proc = (not is_unproc) and any("processed" in s for s in segs)
+            (proc if is_proc else unproc).append(f)
+    except OSError:
+        pass
     return proc, unproc
 
 def all_models():

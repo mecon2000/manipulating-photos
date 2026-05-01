@@ -243,6 +243,26 @@
     "cost_estimate_usd": 0.04,
     "wall_time_estimate_sec": 60
   },
+  "stills_to_video": {
+    "label": "Stills to video",
+    "script": "scripts/workflows/stills_to_video.py",
+    "needs_style_ref": false,
+    "presets": ["subtle-breath", "hair-wind", "smoke-drift", "water-ripple",
+                "eye-blink", "full-cinemagraph"],
+    "preset_flag": "--preset",
+    "presets_description": "Motion preset (subtle-breath = cinemagraph default)",
+    "artifacts": null,
+    "artifact_flag": null,
+    "output_kind": "video",
+    "params": {
+      "engine": {"type": "choice", "options": ["wan", "kling"], "default": "wan",
+        "description": "Video model: wan (turbo, ~$0.30) or kling (~$0.50)"}
+    },
+    "flags": [],
+    "flag_descriptions": {},
+    "cost_estimate_usd": 0.30,
+    "wall_time_estimate_sec": 90
+  },
   "noir-paint": {
     "label": "Noir paint",
     "script": "scripts/workflows/noir-paint.py",

@@ -51,6 +51,7 @@ graph TD
     UPSCALE["⬆️ upscale-replicate<br/>Real-ESRGAN 2x/4x<br/>$0.005/run"]:::foundation
     WMCHK["🛂 watermark-check<br/>Gemini Vision pre-flight<br/>flag UNPROCESSED watermarks"]:::foundation
     IGGROUPS["📦 build-ig-groups<br/>group favs into IG-post sets<br/>by tool/preset/model themes"]:::foundation
+    STILLVID["🎬 stills-to-video<br/>fal wan/kling image-to-video<br/>6 motion presets, ~$0.30 (wan)<br/>🆕 2026-05-02"]:::wip
 
     %% FRAMING
     FGFRAME["🖼️ foreground-framing<br/>Shoot-through depth<br/>😴 SDXL ignores prompts"]:::tired

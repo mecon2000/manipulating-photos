@@ -444,6 +444,22 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 ./scripts/workflows/upscale_replicate.py --batch --in-dir DIR
 ```
 
+### `scripts/workflows/stills_to_video.py`
+**Animate a still as a short MP4** via fal image-to-video models. Default `wan` engine = `fal-ai/wan/v2.2-a14b/image-to-video/turbo` (~$0.30/5s clip). Alt `kling` = `fal-ai/kling-video/v2/master/image-to-video` (~$0.50). Uploads source via `fal_client.upload_file`, downloads MP4 to `shared/finals/`, also saves first frame as PNG sidecar (registry UI shows the PNG since the gallery is image-first). Pushes first frame to phone via `notify.push_image`. Cost tracked via `_pipeline_accrue`.
+
+**Presets:** `subtle-breath`, `hair-wind`, `smoke-drift`, `water-ripple`, `eye-blink`, `full-cinemagraph`. Each preset is just a prompt string fed to the model — `--prompt` overrides.
+
+**Usage:**
+```bash
+./scripts/workflows/stills_to_video.py --source photo.jpg --preset subtle-breath
+./scripts/workflows/stills_to_video.py --source photo.jpg --preset hair-wind --engine kling
+./scripts/workflows/stills_to_video.py --list-presets
+```
+
+**All flags:** `--source`, `--preset`, `--prompt` (custom override), `--engine` (wan|kling), `--seed`, `--output-to`, `--local-output-dir`, `--list-presets`. Cost: ~$0.30 (wan) / ~$0.50 (kling) per clip.
+
+> Note: `stills_to_video` produces video output. The gallery UI is image-first — the registry exposes it with `output_kind: video`, but the visible thumbnail is the first-frame PNG sidecar. Open the MP4 directly from `shared/finals/`.
+
 ### `scripts/workflows/style_transfer_replicate.py`
 **Replicate `fofr/style-transfer` wrapper.** IPAdapter Plus + DreamShaperXL Lightning + depth ControlNet on Replicate (NSFW-friendly community SDXL, no Flux filter). ~$0.0063/run, ~7s. Single or batch. Less identity-preserving than `become-image`; mostly superseded by `surreal_with_face.py` for portrait work.
 

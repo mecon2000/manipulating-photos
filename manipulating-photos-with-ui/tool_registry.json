@@ -263,6 +263,31 @@
     "cost_estimate_usd": 0.30,
     "wall_time_estimate_sec": 90
   },
+  "parallax_3d": {
+    "label": "Parallax 3D",
+    "script": "scripts/workflows/parallax_3d.py",
+    "needs_style_ref": false,
+    "presets": ["dolly-left", "dolly-right", "zoom-in", "dutch"],
+    "preset_flag": "--motion",
+    "presets_description": "Camera motion: dolly L/R, zoom-in, subtle dutch rotate",
+    "artifacts": null,
+    "artifact_flag": null,
+    "output_kind": "video",
+    "params": {
+      "strength": {"type": "float", "min": 0.3, "max": 1.0, "default": 0.6,
+        "description": "Parallax strength; scales pixel offsets"},
+      "duration": {"type": "float", "min": 1.0, "max": 8.0, "default": 3.0,
+        "description": "Clip duration seconds"},
+      "fps": {"type": "int", "min": 12, "max": 60, "default": 24,
+        "description": "Frames per second"}
+    },
+    "flags": ["--inpaint"],
+    "flag_descriptions": {
+      "--inpaint": "Try Replicate 3d-photo-inpainting; falls back to DIY"
+    },
+    "cost_estimate_usd": 0.005,
+    "wall_time_estimate_sec": 90
+  },
   "noir-paint": {
     "label": "Noir paint",
     "script": "scripts/workflows/noir-paint.py",

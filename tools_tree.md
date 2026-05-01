@@ -52,6 +52,7 @@ graph TD
     WMCHK["🛂 watermark-check<br/>Gemini Vision pre-flight<br/>flag UNPROCESSED watermarks"]:::foundation
     IGGROUPS["📦 build-ig-groups<br/>group favs into IG-post sets<br/>by tool/preset/model themes"]:::foundation
     STILLVID["🎬 stills-to-video<br/>fal wan/kling image-to-video<br/>6 motion presets, ~$0.30 (wan)<br/>🆕 2026-05-02"]:::wip
+    PARALLAX["🌐 parallax-3d<br/>depth-anything → 3-tier parallax<br/>cv2 MP4, ~$0.005 DIY<br/>🆕 2026-05-02"]:::wip
 
     %% FRAMING
     FGFRAME["🖼️ foreground-framing<br/>Shoot-through depth<br/>😴 SDXL ignores prompts"]:::tired

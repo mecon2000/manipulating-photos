@@ -458,7 +458,21 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 
 **All flags:** `--source`, `--preset`, `--prompt` (custom override), `--engine` (wan|kling), `--seed`, `--output-to`, `--local-output-dir`, `--list-presets`. Cost: ~$0.30 (wan) / ~$0.50 (kling) per clip.
 
-> Note: `stills_to_video` produces video output. The gallery UI is image-first — the registry exposes it with `output_kind: video`, but the visible thumbnail is the first-frame PNG sidecar. Open the MP4 directly from `shared/finals/`.
+### `scripts/workflows/parallax_3d.py`
+**3D-parallax animated MP4 from a still.** Default DIY pipeline: depth via fal `fal-ai/imageutils/depth` (~$0.005), quantize into FG/MID/BG tiers, translate each per frame, composite + write MP4 with cv2. Background gaps inpainted with `cv2.inpaint`. Optional `--inpaint` flag tries Replicate `pollinations/3d-photo-inpainting` and falls back to DIY on failure. First frame saved as PNG sidecar and pushed to phone.
+
+**Motion presets:** `dolly-left` (default), `dolly-right`, `zoom-in`, `dutch` (subtle rotate).
+
+**Usage:**
+```bash
+./scripts/workflows/parallax_3d.py --source photo.jpg --motion dolly-left
+./scripts/workflows/parallax_3d.py --source photo.jpg --motion zoom-in --strength 0.7 --duration 4
+./scripts/workflows/parallax_3d.py --source photo.jpg --motion dutch --inpaint
+```
+
+**All flags:** `--source`, `--motion`, `--strength` (0.3-1.0, default 0.6, scales pixel offsets), `--duration` (sec, default 3), `--fps` (default 24), `--inpaint`, `--seed`, `--output-to`, `--local-output-dir`. Cost: ~$0.005 per clip (DIY mode, depth call only).
+
+> Note: both `stills_to_video` and `parallax_3d` produce video output. The gallery UI is image-first — the registry exposes them with `output_kind: video`, but the visible thumbnail is the first-frame PNG sidecar. Open the MP4 directly from `shared/finals/`.
 
 ### `scripts/workflows/style_transfer_replicate.py`
 **Replicate `fofr/style-transfer` wrapper.** IPAdapter Plus + DreamShaperXL Lightning + depth ControlNet on Replicate (NSFW-friendly community SDXL, no Flux filter). ~$0.0063/run, ~7s. Single or batch. Less identity-preserving than `become-image`; mostly superseded by `surreal_with_face.py` for portrait work.

@@ -60,6 +60,7 @@ graph TD
     EFFECTS --> TEXTOVR["✍️ text-overlay<br/>Literary quote on stylized image<br/>Gemini mood → embed → cosine-NN<br/>brightness-aware placement, glow<br/>🚧 wip — free, ~3s"]:::wip
     EFFECTS --> COLORGRADE["🎨 color-grade<br/>LAB grading: radial warm-cool /<br/>split-tone teal-orange / global wash<br/>🚧 wip — pure local, ~1s"]:::wip
     EFFECTS --> STILLVID["🎬 stills-to-video<br/>fal wan/kling image-to-video<br/>6 motion presets<br/>🆕 ~$0.30 (wan turbo)"]:::wip
+    EFFECTS --> PARALLAX["🌐 parallax-3d<br/>depth → 3-tier parallax + cv2 MP4<br/>4 motion presets, ~$0.005<br/>🆕 DIY default, --inpaint optional"]:::wip
     QUOTEDB --> TEXTOVR
     FOUNDATION --> IGCLEAN["🧹 clean-ig-screenshots<br/>Cross-stack variance + cv2.inpaint<br/>strip IG chrome from style refs"]:::foundation
     FOUNDATION --> UPSCALE["⬆️ upscale-replicate<br/>Real-ESRGAN 2x/4x"]:::foundation

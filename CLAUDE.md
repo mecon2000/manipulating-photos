@@ -347,6 +347,18 @@ Output goes to `shared/candidates/` with a `candidates.json` manifest.
 
 **Note for any future agent:** PoetryDB's API requires a browser `User-Agent` header — Python's default UA returns 403. The script sets one already; don't strip it.
 
+### `scripts/workflows/build_ig_groups.py`
+**Group favorites into IG-post folders by theme.** Reads `favorites/favorites.json`, applies a set of theme rules (tool / preset / model based), writes one subfolder per theme to `~/.openclaw/workspace/shared/ig-groups/<NN-slug>/` with a `manifest.json` (theme blurb + per-photo metadata). Files are *copied*, not moved — favorites untouched. Idempotent: each run wipes and rebuilds.
+
+**Usage:**
+```bash
+./scripts/workflows/build_ig_groups.py            # default groups → shared/ig-groups/
+./scripts/workflows/build_ig_groups.py --dry-run  # preview counts only
+./scripts/workflows/build_ig_groups.py --out /tmp/test
+```
+
+**Picking** is greedy round-robin across models with diversity caps (default: max 2 per model, max 3 per style). Spotlight groups (single model) relax the model cap. Adjust the rule list in `build_groups()` to add/tweak themes — each theme is a `(name, picker, blurb)` triple. Current themes: ink-dissolved, baroque-dark, baroque-flow, red-fever, soft-window, colored-gels, time-broken, material-world, spotlight-noie, spotlight-roni, color-bath, style-imitations.
+
 ### `scripts/workflows/clean_ig_screenshots.py`
 **Remove persistent UI overlays from a stack of Instagram screenshots.** Useful when several IG-post screenshots share the same chrome (status bar, username text, like/comment bar) and you want clean photos for use as style references. Computes pixel-wise std across the stack — pixels identical across all images = overlay → mask + `cv2.inpaint` per image. Used to clean 0010x0010 reference screenshots before feeding into IPAdapter.
 

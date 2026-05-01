@@ -63,6 +63,7 @@ graph TD
     FOUNDATION --> IGCLEAN["🧹 clean-ig-screenshots<br/>Cross-stack variance + cv2.inpaint<br/>strip IG chrome from style refs"]:::foundation
     FOUNDATION --> UPSCALE["⬆️ upscale-replicate<br/>Real-ESRGAN 2x/4x"]:::foundation
     FOUNDATION --> WMCHK["🛂 watermark-check<br/>Gemini Vision pre-flight"]:::foundation
+    FOUNDATION --> IGGROUPS["📦 build-ig-groups<br/>group favs into IG-post sets<br/>by tool/preset/model"]:::foundation
     MATSWAP --> I_CHAIN["💭 tool chaining<br/>matswap→baroque→crop one cmd"]:::idea
     INKDISS --> I_MONO["🔮 mono+accent<br/>B&W + single rose / lily<br/>Like refs #8, #16"]:::idea
 

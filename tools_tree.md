@@ -50,6 +50,7 @@ graph TD
     SURREALFACE["🎨 style imitations<br/>relight→bw→become→ellipse-mask→hist-match<br/>→4× Real-ESRGAN<br/>⭐ identity-preserving style imitation (0010, pulpbrother…)"]:::happy
     UPSCALE["⬆️ upscale-replicate<br/>Real-ESRGAN 2x/4x<br/>$0.005/run"]:::foundation
     WMCHK["🛂 watermark-check<br/>Gemini Vision pre-flight<br/>flag UNPROCESSED watermarks"]:::foundation
+    IGGROUPS["📦 build-ig-groups<br/>group favs into IG-post sets<br/>by tool/preset/model themes"]:::foundation
 
     %% FRAMING
     FGFRAME["🖼️ foreground-framing<br/>Shoot-through depth<br/>😴 SDXL ignores prompts"]:::tired

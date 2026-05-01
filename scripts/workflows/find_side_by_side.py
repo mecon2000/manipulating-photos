@@ -89,25 +89,35 @@ def score(path):
         return {"file": path.name, "aspect": round(aspect, 2),
                 "panels": 1, "score": 0.0,
                 "skip": "tall — single portrait"}
-    # Authoritative panel count from the strongest vertical gradient seam
+    # Primary signal: half-correlation. Real side-by-sides mirror the
+    # composition across the seam, so the two halves' edge maps are
+    # strongly correlated (typically corr > 0.7) regardless of where the
+    # strongest gradient column lands. Internal vertical edges (frames,
+    # body silhouettes) can outscore the seam itself, so seam-position
+    # alone is unreliable.
+    corr_2, diff_2 = split_score(img, 2)
+    corr_3, diff_3 = split_score(img, 3) if W >= 192 else (0.0, 0.0)
     n_seam, seam_strength = detect_seam_panels(img)
-    if n_seam == 1:
+    # Choose 3 only if both: 3-panel corr is ≥ 2-panel corr, AND seam
+    # detector found a 1/3 or 2/3 boundary.
+    if corr_3 >= corr_2 and n_seam == 3:
+        n, ec, cd = 3, corr_3, diff_3
+    else:
+        n, ec, cd = 2, corr_2, diff_2
+    if ec < 0.6:
         return {"file": path.name, "aspect": round(aspect, 2),
                 "panels": 1, "score": 0.0,
-                "skip": f"no clear seam (peak={seam_strength:.1f}×)"}
-    edge_corr, color_diff = split_score(img, n_seam)
-    # Real side-by-sides have HIGH structural similarity (same composition).
-    # Negative or near-zero corr means the seam is internal to a single
-    # photo (e.g., a strong body silhouette), not between two panels.
-    if edge_corr < 0.5:
+                "skip": f"halves not similar (corr={ec:.2f})"}
+    # Color diff threshold filters out e.g. unprocessed-paired-with-itself.
+    if cd < 1.5:
         return {"file": path.name, "aspect": round(aspect, 2),
                 "panels": 1, "score": 0.0,
-                "skip": f"low corr ({edge_corr:.2f}) — internal edge"}
+                "skip": f"halves identical color (cdiff={cd:.1f})"}
     return {"file": path.name, "aspect": round(aspect, 2),
-            "panels": n_seam, "edge_corr": round(edge_corr, 3),
-            "color_diff": round(color_diff, 1),
+            "panels": n, "edge_corr": round(ec, 3),
+            "color_diff": round(cd, 1),
             "seam": round(float(seam_strength), 1),
-            "score": round(edge_corr * color_diff / 30.0, 2)}
+            "score": round(ec * cd / 30.0, 2)}
 
 
 def main():

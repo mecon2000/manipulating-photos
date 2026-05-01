@@ -597,14 +597,6 @@ def run_pipeline(args):
     result.save(finals_path, quality=95)
     log("INFO", f"Finals: {finals_path}")
 
-    # Also save side-by-side comparison
-    comparison = Image.new("RGB", (w * 2, h))
-    comparison.paste(img, (0, 0))
-    comparison.paste(result, (w, 0))
-    comp_path = os.path.join(finals_dir, f"{src_name}_ink-dissolution_{args.medium}_comparison.jpg")
-    comparison.save(comp_path, quality=92)
-    log("INFO", f"Comparison: {comp_path}")
-
     # --save-stack: write multi-page TIFF
     if getattr(args, "save_stack", False):
         try:

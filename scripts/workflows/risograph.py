@@ -571,14 +571,6 @@ def main():
     result.save(finals_path, quality=95)
     log(output_dir, f"Final: {finals_path}")
 
-    # Save side-by-side comparison
-    comparison = Image.new("RGB", (w * 2, h))
-    comparison.paste(img, (0, 0))
-    comparison.paste(result, (w, 0))
-    comp_path = os.path.join(finals_dir, f"{run_name}_comparison.jpg")
-    comparison.save(comp_path, quality=92)
-    log(output_dir, f"Comparison: {comp_path}")
-
     # Push to phone
     try:
         from notify import push_image
@@ -631,7 +623,6 @@ def main():
   Seed:            {seed}
   Total time:      {total_time:.1f}s
   Final:           {finals_path}
-  Comparison:      {comp_path}
 ============================================================
 """)
 

@@ -752,15 +752,6 @@ def run_pipeline(args):
     result.save(finals_dest, quality=95)
     log(output_dir, f"Finals: {finals_dest}")
 
-    # Side-by-side comparison
-    comparison = Image.new("RGB", (w * 2, h))
-    comparison.paste(img, (0, 0))
-    comparison.paste(result, (w, 0))
-    comp_name = f"{src_name}_hatching_{args.style}_{ts}_comparison.jpg"
-    comp_path = os.path.join(finals_dir, comp_name)
-    comparison.save(comp_path, quality=92)
-    log(output_dir, f"Comparison: {comp_path}")
-
     # Push to phone
     try:
         from notify import push_image

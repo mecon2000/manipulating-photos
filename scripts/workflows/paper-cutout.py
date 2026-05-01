@@ -698,14 +698,6 @@ def main():
             f_out.write(f_in.read())
     log(output_dir, f"Final copied to: {finals_dest}")
 
-    # Side-by-side comparison
-    comparison = Image.new("RGB", (w * 2, h))
-    comparison.paste(img, (0, 0))
-    comparison.paste(result, (w, 0))
-    comp_path = os.path.join(finals_dir, f"{source_basename}_paper-cutout_{args.palette}_comparison.jpg")
-    comparison.save(comp_path, quality=92)
-    log(output_dir, f"Comparison: {comp_path}")
-
     # Push to phone
     try:
         from notify import push_image
@@ -752,7 +744,6 @@ def main():
   Output:
     Working dir:   {output_dir}
     Finals:        {finals_dest}
-    Comparison:    {comp_path}
 ============================================================""")
 
 

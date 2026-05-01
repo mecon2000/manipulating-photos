@@ -976,12 +976,6 @@ def main():
     result.save(finals_path, quality=95)
     log(output_dir, f"Final saved to: {finals_path}")
 
-    # Save comparison to finals
-    comparison_name = os.path.basename(output_dir) + "_comparison.jpg"
-    comparison_path = os.path.join(finals_dir, comparison_name)
-    comparison.save(comparison_path, quality=90)
-    log(output_dir, f"Comparison saved to: {comparison_path}")
-
     # Save metadata
     metadata = {
         "tool": "torn-reveal",

@@ -1685,19 +1685,58 @@
     return done.length ? done[0] : null; // jobs are sorted newest-first by server
   }
 
+  let jobStats = {};  // {tool: {key: median_secs, _any: median_secs}}
+  async function refreshJobStats() {
+    try {
+      const r = await fetch("/api/job-stats");
+      jobStats = await r.json();
+    } catch {}
+  }
+  function fmtSecs(s) {
+    if (s == null || isNaN(s)) return "";
+    if (s < 90) return `${Math.round(s)}s`;
+    const m = Math.floor(s / 60), r = Math.round(s % 60);
+    return r ? `${m}m${r}s` : `${m}m`;
+  }
+  function jobEtaSecs(j) {
+    const tool = j.tool || "surreal_with_face";
+    const t = jobStats[tool] || {};
+    const key = tool === "surreal_with_face" ? (j.style || "") : (j.preset || "");
+    return t[key] ?? t._any ?? null;
+  }
+
   function jobStatusChip(j) {
-    if (j.status === "queued" || j.phase === "queued") return `<span class="job-status">⏳ queued</span>`;
+    if (j.status === "queued" || j.phase === "queued") {
+      const eta = jobEtaSecs(j);
+      const tail = eta ? ` · ~${fmtSecs(eta)}` : "";
+      return `<span class="job-status">⏳ queued${tail}</span>`;
+    }
     if (j.status === "running") {
-      let elapsed = "";
-      if (j.started_at) {
+      let elapsed = 0;
+      if (j.started_at_ts) {
+        elapsed = Math.max(0, Date.now()/1000 - j.started_at_ts);
+      } else if (j.started_at) {
         try {
-          const d = (Date.now() - new Date(j.started_at.replace(" ", "T")).getTime()) / 1000;
-          if (!isNaN(d) && d > 0) elapsed = ` (${Math.round(d)}s)`;
+          elapsed = Math.max(0, (Date.now() - new Date(j.started_at.replace(" ", "T")).getTime()) / 1000);
         } catch {}
       }
-      return `<span class="job-status running">🔄 ${j.phase || "running"}${elapsed}</span>`;
+      const eta = jobEtaSecs(j);
+      const tail = eta
+        ? ` (${fmtSecs(elapsed)} / ~${fmtSecs(eta)})`
+        : (elapsed ? ` (${fmtSecs(elapsed)})` : "");
+      return `<span class="job-status running">🔄 ${j.phase || "running"}${tail}</span>`;
     }
-    if (j.status === "done") return `<span class="job-status done">✅ done</span>`;
+    if (j.status === "done") {
+      let took = "";
+      if (j.started_at_ts && j.ended_at) {
+        try {
+          const e = (new Date(j.ended_at.replace(" ", "T")).getTime())/1000;
+          const d = e - j.started_at_ts;
+          if (d > 0) took = ` · ${fmtSecs(d)}`;
+        } catch {}
+      }
+      return `<span class="job-status done">✅ done${took}</span>`;
+    }
     if (j.status === "fail") {
       const reason = classifyJobError(j.error || "");
       const tip = (j.error || "").replace(/"/g, '&quot;');
@@ -1828,7 +1867,10 @@
 
   async function refreshJobs() {
     try {
-      const r = await fetch("/api/pipeline/jobs");
+      const [r, _] = await Promise.all([
+        fetch("/api/pipeline/jobs"),
+        refreshJobStats(),
+      ]);
       const j = await r.json();
       jobsCache = j.jobs || [];
       renderJobs();

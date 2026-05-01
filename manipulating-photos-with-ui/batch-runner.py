@@ -1602,6 +1602,66 @@ def _list_style_files(d):
     except OSError:
         pass
     return out
+JOB_DURATIONS_PATH = SHARED_DIR / "job_durations.json"
+JOB_DURATIONS_LOCK = threading.RLock()
+_MAX_DURATION_LOG = 800
+
+
+def _log_job_duration(tool, key, secs):
+    """Append a successful-run duration to the rolling log."""
+    if secs is None or secs <= 0:
+        return
+    entry = {"tool": str(tool), "key": str(key or ""), "secs": float(secs),
+             "ts": time.time()}
+    with JOB_DURATIONS_LOCK:
+        data = []
+        if JOB_DURATIONS_PATH.is_file():
+            try:
+                data = json.loads(JOB_DURATIONS_PATH.read_text())
+                if not isinstance(data, list): data = []
+            except Exception:
+                data = []
+        data.append(entry)
+        if len(data) > _MAX_DURATION_LOG:
+            data = data[-_MAX_DURATION_LOG:]
+        try:
+            JOB_DURATIONS_PATH.write_text(json.dumps(data))
+        except Exception:
+            pass
+
+
+def _job_duration_medians():
+    """Return {tool: {key: median_secs, _any: median_secs}} from the log."""
+    out = {}
+    with JOB_DURATIONS_LOCK:
+        if not JOB_DURATIONS_PATH.is_file():
+            return out
+        try:
+            data = json.loads(JOB_DURATIONS_PATH.read_text())
+        except Exception:
+            return out
+    by_tk = {}
+    by_t = {}
+    for e in data:
+        t = e.get("tool"); k = e.get("key", ""); s = e.get("secs")
+        if not t or s is None: continue
+        by_tk.setdefault((t, k), []).append(s)
+        by_t.setdefault(t, []).append(s)
+    def median(xs):
+        xs = sorted(xs); n = len(xs)
+        return xs[n//2] if n % 2 else (xs[n//2-1] + xs[n//2]) / 2.0
+    for (t, k), xs in by_tk.items():
+        out.setdefault(t, {})[k] = round(median(xs[-15:]), 1)
+    for t, xs in by_t.items():
+        out.setdefault(t, {})["_any"] = round(median(xs[-30:]), 1)
+    return out
+
+
+@app.route("/api/job-stats")
+def api_job_stats():
+    return jsonify(_job_duration_medians())
+
+
 PIPELINE_OUT_DIR = SHARED_DIR / "surreal-with-face"
 PIPELINE_BAD_DIR = SHARED_DIR / "surreal-with-face-bad"
 PIPELINE_STATE_PATH = SHARED_DIR / "pipeline_state.json"
@@ -1855,7 +1915,9 @@ def _pipe_run_one(job_id, candidate_path, style_path, no_face_overlay):
         with PIPELINE_JOBS_LOCK:
             PIPELINE_JOBS[job_id].update(kw)
 
-    setj(status="running", phase="relighting", started_at=now_str())
+    job_start_wall = time.time()
+    setj(status="running", phase="relighting", started_at=now_str(),
+         started_at_ts=job_start_wall)
     intermediates = SHARED_DIR / "tool-outputs-intermediates"
     relight_cmd = [PYTHON, str(WORKFLOWS_DIR / "relighting.py"),
                    "--source", str(candidate_path),
@@ -1928,6 +1990,8 @@ def _pipe_run_one(job_id, candidate_path, style_path, no_face_overlay):
         return
     setj(status="done", phase="done", output=str(out_path),
          ended_at=now_str())
+    _log_job_duration("surreal_with_face", Path(style_path).name,
+                      time.time() - job_start_wall)
     # Accrue today's pipeline cost: relight $0.06 + become-image $0.01 + upscale $0.005
     _pipeline_accrue(0.075)
 
@@ -2851,7 +2915,9 @@ def _run_generic_tool_job(job_id, tool_name, entry, candidate_path,
         with PIPELINE_JOBS_LOCK:
             PIPELINE_JOBS[job_id].update(kw)
 
-    setj(status="running", phase=tool_name, started_at=now_str())
+    job_start_wall = time.time()
+    setj(status="running", phase=tool_name, started_at=now_str(),
+         started_at_ts=job_start_wall)
     script_abs = (REPO_ROOT / entry["script"]).resolve()
     cmd = [PYTHON, str(script_abs), "--source", str(candidate_path)]
     if preset and entry.get("preset_flag"):
@@ -2887,6 +2953,8 @@ def _run_generic_tool_job(job_id, tool_name, entry, candidate_path,
         return
     setj(status="done", phase="done", output=str(out_path),
          ended_at=now_str())
+    _log_job_duration(tool_name, str(preset or ""),
+                      time.time() - job_start_wall)
     _pipeline_accrue(float(cost or 0.0))
 
 

@@ -120,20 +120,24 @@ def face_ellipse_mask(img_size, source_arr, inner_mult=1.0, outer_mult=3.5):
 
 # ---- Mode A: radial warm-cool --------------------------------------------
 
-def grade_warm_cool(rgb_arr, mask, strength=0.4):
-    """Inside mask: warm (orange-skin).  Outside: cold-blue (not teal).
+def grade_warm_cool(rgb_arr, mask, strength=0.4, subject_mask=None):
+    """Inside mask: warm.  Outside (still on subject): cold-blue.
 
-    Mask is expected to extend well past the face — covers face + upper torso —
-    so warmth lands on skin and the cold-blue takes the lower body and BG.
+    If `subject_mask` is given (0-1, H×W), the entire warm-cool delta is gated
+    by it — BG is left UNTOUCHED, which is what we want: the body gets a
+    warm-to-cool gradient, surroundings stay as the surreal stylization made them.
+
+    Warm and cool are kept closer in LAB space (smaller deltas) so the gradient
+    is subtle, not a hard hot/cold split.
     """
     lab = to_lab(rgb_arr)
-    # warm = orange shift on skin: +a (slight red), +b (yellow)
-    warm = np.array([0, +14, +14], dtype=np.float32) * (strength * 5)
-    # cold-BLUE (not teal), less saturated than v3: slight magenta lean,
-    # moderate blue. Tweaked 2026-04-26 per Ronnie: too saturated before.
-    cool = np.array([0, +2, -12], dtype=np.float32) * (strength * 5)
+    # Closer pair: less orange warm, less blue cool. Per-channel tweaked 2026-04-26.
+    warm = np.array([0, +9, +9],  dtype=np.float32) * (strength * 5)
+    cool = np.array([0, +2, -7],  dtype=np.float32) * (strength * 5)
     m3 = mask[..., None]
     delta = warm * m3 + cool * (1.0 - m3)
+    if subject_mask is not None:
+        delta = delta * subject_mask[..., None]
     return from_lab(lab + delta)
 
 
@@ -197,7 +201,19 @@ def grade(rgb_arr, mode, strength=0.4, mask_inner=0.2, mask_outer=6.0,
             (rgb_arr.shape[1], rgb_arr.shape[0]), rgb_arr,
             inner_mult=mask_inner, outer_mult=mask_outer,
             vertical_bias=warm_vertical_bias)
-        return grade_warm_cool(rgb_arr, mask, strength)
+        # subject mask via BiRefNet — keeps BG untouched
+        try:
+            from masking import build_mask
+            from PIL import Image as _PI
+            pil = _PI.fromarray(rgb_arr)
+            sm_pil, _ = build_mask(pil, affect="subject", output_dir=None, feather=2.0)
+            subject_mask = (np.asarray(sm_pil).astype(np.float32) / 255.0)
+            if subject_mask.ndim == 3: subject_mask = subject_mask[..., 0]
+            print(f"  [grade] subject mask coverage {subject_mask.mean()*100:.1f}%")
+        except Exception as e:
+            print(f"  [grade] subject mask failed ({e}) — falling back to ellipse-only")
+            subject_mask = None
+        return grade_warm_cool(rgb_arr, mask, strength, subject_mask=subject_mask)
     if mode == "split":
         return grade_split_tone(rgb_arr, strength)
     if mode.startswith("wash:"):

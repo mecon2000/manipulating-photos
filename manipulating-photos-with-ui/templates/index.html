@@ -1381,7 +1381,17 @@
     if (Object.keys(params).length) {
       const t = document.createElement("div");
       t.className = "run-section-title";
-      t.textContent = "Params";
+      t.style.cssText = "display:flex; align-items:center; justify-content:space-between; gap:8px;";
+      t.innerHTML = `<span>Params</span>
+        <button type="button" id="run-params-reset"
+                style="background:#1a1a1f; color:var(--dim); border:1px solid var(--border);
+                       padding:3px 10px; border-radius:4px; cursor:pointer; font-size:11px;">↺ reset</button>`;
+      t.querySelector("#run-params-reset").addEventListener("click", () => {
+        delete runParamValues[currentTool];
+        runParamValues[currentTool] = {};
+        renderToolForm();
+        updateRunButton();
+      });
       form.appendChild(t);
       const wrap = document.createElement("div");
       wrap.style.marginBottom = "12px";

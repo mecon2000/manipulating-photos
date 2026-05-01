@@ -143,6 +143,40 @@ LIGHTING_PRESETS = {
         "prompt": "thin laser beam lines of red and green light cutting through haze, concert laser lighting, sharp light rays through fog, futuristic portrait",
         "negative": "natural light, soft diffused, daylight",
     },
+
+    # New additions
+    "Hard Midday Sun": {
+        "prompt": "harsh overhead midday sunlight, hard direct sun, sharp short shadows under brow and nose, high contrast outdoor portrait, bright daylight, clear sky",
+        "negative": "soft diffused light, overcast, golden hour, indoor",
+    },
+    "Stage Backlight": {
+        "prompt": "powerful stage backlight from behind, strong rim glow outlining hair and shoulders, silhouette edge light, dark front, smoky concert stage atmosphere",
+        "negative": "front light, flat lighting, daylight, even illumination",
+    },
+    "Blue Hour": {
+        "prompt": "cool blue hour twilight, soft cobalt-blue ambient light just after sunset, gentle gradient sky illumination, calm cinematic dusk portrait",
+        "negative": "warm tones, golden hour, harsh sun, daytime",
+    },
+    "Projector Patterns": {
+        "prompt": "patterned shadows from a window blind or leaf gobo cast across the subject, slatted light stripes, dappled shadow patterns on skin, cinematic noir lighting",
+        "negative": "flat even lighting, no patterns, soft diffused",
+    },
+    "Lightning Flash": {
+        "prompt": "sudden lightning flash illumination, brief intense cool blue-white burst light from one side, deep dark surroundings, dramatic stormy atmosphere portrait",
+        "negative": "warm tones, soft, daylight, even illumination",
+    },
+    "TV Glow": {
+        "prompt": "flickering TV glow lighting the face, cool blue cathode-ray tint, dim dark room, late-night ambient screen light, intimate nocturnal portrait",
+        "negative": "daylight, warm tones, bright, studio lighting",
+    },
+    "Stained Glass": {
+        "prompt": "colored light streaming through stained glass window, multicolored projected patches of red blue and gold light on the subject and surroundings, cathedral atmosphere",
+        "negative": "monochromatic light, flat lighting, harsh shadows, modern",
+    },
+    "Practical Bulb": {
+        "prompt": "single warm tungsten practical bulb light source visible in scene, intimate lamp-lit interior, warm fall-off shadows, cozy domestic portrait, hard small light source",
+        "negative": "studio strobe, daylight, soft wraparound, cool tones",
+    },
 }
 
 _log_lock = threading.Lock()

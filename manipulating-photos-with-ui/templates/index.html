@@ -347,12 +347,39 @@
     <button class="tabbtn" data-tab="favs" role="tab">⭐<span class="label">Favs</span></button>
     <button class="tabbtn" data-tab="tree" role="tab">🌳<span class="label">Tree</span></button>
     <span style="flex:1"></span>
+    <label id="notify-toggle"
+           style="color:var(--dim); font-size:12px; padding:4px 8px; border:1px solid #333;
+                  border-radius:6px; align-self:center; cursor:pointer; user-select:none;
+                  display:inline-flex; align-items:center; gap:5px;"
+           title="Send Pushbullet notifications to phone">
+      <input type="checkbox" id="notify-toggle-cb" style="margin:0; cursor:pointer;">
+      📲 push
+    </label>
     <span id="cost-today" title="Today's accrued cost (gallery + candidates + pipeline)"
           style="color:var(--dim); font-variant-numeric:tabular-nums; padding:4px 10px;
                  font-size:13px; border:1px solid #333; border-radius:6px; align-self:center;">
       $0.00
     </span>
   </nav>
+  <script>
+  (async function initNotifyToggle() {
+    const cb = document.getElementById("notify-toggle-cb");
+    if (!cb) return;
+    try {
+      const r = await fetch("/api/notify-state");
+      const j = await r.json();
+      cb.checked = j.enabled;
+    } catch {}
+    cb.addEventListener("change", async () => {
+      try {
+        await fetch("/api/notify-state", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({enabled: cb.checked}),
+        });
+      } catch {}
+    });
+  })();
+  </script>
   <script>
   async function refreshCostToday() {
     try {
@@ -1219,10 +1246,36 @@
     });
   }
 
-  function makeChipGrid(items, selectedSet, onChange, idPrefix) {
+  function makeChipGrid(items, selectedSet, onChange, idPrefix, opts) {
+    opts = opts || {};
     const grid = document.createElement("div");
+    if (opts.thumbBase) {
+      grid.className = "style-grid";
+      grid.style.marginBottom = "12px";
+      items.forEach((name) => {
+        const card = document.createElement("div");
+        card.className = "style-card" + (selectedSet.has(name) ? " active" : "");
+        const img = document.createElement("img");
+        img.src = `${opts.thumbBase}/${encodeURIComponent(name)}`;
+        img.alt = "";
+        img.loading = "lazy";
+        img.onerror = () => { img.style.display = "none"; card.style.background = "#1a1a1f"; };
+        const lbl = document.createElement("div");
+        lbl.className = "style-name";
+        lbl.textContent = name;
+        card.appendChild(img);
+        card.appendChild(lbl);
+        card.addEventListener("click", () => {
+          if (selectedSet.has(name)) selectedSet.delete(name);
+          else selectedSet.add(name);
+          onChange();
+        });
+        grid.appendChild(card);
+      });
+      return grid;
+    }
     grid.style.display = "grid";
-    grid.style.gridTemplateColumns = "repeat(auto-fill, minmax(110px, 1fr))";
+    grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(110px, 1fr))`;
     grid.style.gap = "6px";
     grid.style.marginBottom = "12px";
     items.forEach((name) => {
@@ -1300,9 +1353,12 @@
         t.textContent = "Presets — " + entry.presets_description;
       }
       form.appendChild(t);
+      const presetOpts = entry.preset_thumbs
+        ? { thumbBase: `/api/preset-thumb/${encodeURIComponent(currentTool)}` }
+        : {};
       form.appendChild(makeChipGrid(
         entry.presets, runSelectedPresets[currentTool],
-        () => { renderToolForm(); updateRunButton(); }, "preset"));
+        () => { renderToolForm(); updateRunButton(); }, "preset", presetOpts));
     }
 
     // Artifacts
@@ -1700,11 +1756,11 @@
         if (!t) return;
         const act = t.dataset.act;
         if (act === "decorate") {
-          if (outFn) openDecorate(outFn, title);
+          if (outFn) openDecorate(outFn, title, card);
         } else if (act === "bad" && outFn) {
           jobAction(outFn, "bad", card);
         } else if (act === "fav" && outFn) {
-          jobAction(outFn, "fav", null);
+          jobAction(outFn, "fav", card);
         } else if (act === "open" && j.output) {
           openJobLightbox(j);
         }
@@ -1718,7 +1774,7 @@
       const r = await fetch(`/api/pipeline/output/${encodeURIComponent(filename)}/${kind}`, {method: "POST"});
       if (!r.ok) { showToast(kind + " failed"); return; }
       showToast(kind === "fav" ? "Favorited ⭐" : "Marked bad");
-      if (kind === "bad" && card) card.remove();
+      if ((kind === "bad" || kind === "fav") && card) card.remove();
     } catch { showToast(kind + " failed"); }
   }
 
@@ -1833,8 +1889,9 @@
     debounceTimer: null,
   };
 
-  function openDecorate(filename, title) {
+  function openDecorate(filename, title, sourceCard) {
     decState.filename = filename;
+    decState.sourceCard = sourceCard || null;
     decState.suggestions = [];
     decState.nextOffset = 0;
     decState.selectedTextValue = "__none__";
@@ -1857,6 +1914,7 @@
   function closeDecorate() {
     document.getElementById("decorate-backdrop").classList.remove("show");
     decState.filename = null;
+    decState.sourceCard = null;
     if (decState.debounceTimer) clearTimeout(decState.debounceTimer);
   }
 
@@ -2042,6 +2100,7 @@
         showToast("Save failed: " + (j.error || ""));
       } else {
         showToast("Saved & favorited ⭐" + (j.tiff_path ? " (+TIFF)" : ""));
+        if (decState.sourceCard) { try { decState.sourceCard.remove(); } catch {} }
         closeDecorate();
         if (currentTab() === "auto") refreshAutoState();
       }
@@ -2453,7 +2512,7 @@
           lb.dataset.mode = "auto";
           lb.classList.add("show");
         } else if (act === "decorate" && outFn) {
-          openDecorate(outFn, title);
+          openDecorate(outFn, title, card);
         } else if (act === "bad") {
           try {
             const r = await fetch(`/api/queue/${it.id}/dislike`, {method:"POST"});
@@ -2463,7 +2522,7 @@
         } else if (act === "fav") {
           try {
             const r = await fetch(`/api/queue/${it.id}/like`, {method:"POST"});
-            if (r.ok) { showToast("Favorited ⭐"); refreshAutoState(); }
+            if (r.ok) { showToast("Favorited ⭐"); card.remove(); refreshAutoState(); }
             else showToast("Fav failed");
           } catch { showToast("Fav failed"); }
         } else if (act === "more") {

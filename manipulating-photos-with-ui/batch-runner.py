@@ -200,7 +200,10 @@ TOOLS = {
                     "Teal & Orange", "Red Drama", "Golden Hour", "Window Light",
                     "Overcast Soft", "Candlelight", "Butterfly", "Split Light",
                     "Beauty Dish", "Underwater Caustics", "Moonlight", "Neon Signs",
-                    "Firelight", "Laser"],
+                    "Firelight", "Laser",
+                    "Hard Midday Sun", "Stage Backlight", "Blue Hour",
+                    "Projector Patterns", "Lightning Flash", "TV Glow",
+                    "Stained Glass", "Practical Bulb"],
         "extra_args": ["--auto-correct"],
     },
     "material-swap": {
@@ -1868,7 +1871,7 @@ def _pipe_run_one(job_id, candidate_path, style_path, no_face_overlay):
         setj(status="fail", error="relight timeout", ended_at=now_str())
         return
     if res.returncode != 0:
-        setj(status="fail", error=(res.stderr or "")[-400:],
+        setj(status="fail", error=(res.stderr or res.stdout or "")[-400:],
              ended_at=now_str())
         return
     relit = find_output_after(start_ts, hint_source=Path(candidate_path).stem,
@@ -1892,7 +1895,7 @@ def _pipe_run_one(job_id, candidate_path, style_path, no_face_overlay):
         setj(status="fail", error="surreal timeout", ended_at=now_str())
         return
     if res.returncode != 0:
-        setj(status="fail", error=(res.stderr or "")[-400:],
+        setj(status="fail", error=(res.stderr or res.stdout or "")[-400:],
              ended_at=now_str())
         return
     out_path = None
@@ -2791,12 +2794,41 @@ def load_tool_registry():
     return data
 
 
+_NOTIFY_DISABLE_FLAG = SHARED_DIR / ".notify_disabled"
+
+
+@app.route("/api/notify-state", methods=["GET", "POST"])
+def api_notify_state():
+    if request.method == "POST":
+        body = request.get_json(force=True, silent=True) or {}
+        enabled = bool(body.get("enabled"))
+        if enabled:
+            try: _NOTIFY_DISABLE_FLAG.unlink()
+            except FileNotFoundError: pass
+        else:
+            _NOTIFY_DISABLE_FLAG.touch()
+    return jsonify({"enabled": not _NOTIFY_DISABLE_FLAG.exists()})
+
+
 @app.route("/api/run/tools")
 def api_run_tools():
     try:
         return jsonify(load_tool_registry())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+_PRESET_THUMBS_DIR = SHARED_DIR / "preset_thumbs"
+
+
+@app.route("/api/preset-thumb/<tool>/<preset>")
+def api_preset_thumb(tool, preset):
+    slug = re.sub(r"[^a-z0-9]+", "_", preset.lower()).strip("_")
+    safe_tool = re.sub(r"[^a-zA-Z0-9_-]", "", tool)
+    p = _PRESET_THUMBS_DIR / safe_tool / f"{slug}.jpg"
+    if not p.is_file():
+        abort(404)
+    return send_file(str(p))
 
 
 def _resolve_candidate_path(filename):

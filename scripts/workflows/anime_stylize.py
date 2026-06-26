@@ -278,12 +278,15 @@ def process_one(src, args):
     except OSError:
         pass
 
-    # Always copy final to shared/finals/
+    # Always copy final to shared/finals/ (pinned) and shared/anime/ (this tool's gallery)
     finals_dir = os.path.expanduser("~/.openclaw/workspace/shared/finals")
+    anime_dir = os.path.expanduser("~/.openclaw/workspace/shared/anime")
     os.makedirs(finals_dir, exist_ok=True)
+    os.makedirs(anime_dir, exist_ok=True)
     finals_dest = os.path.join(finals_dir, f"{tag}.jpg")
     shutil.copyfile(final_path, finals_dest)
-    log(output_dir, f"Final copied to: {finals_dest}")
+    shutil.copyfile(final_path, os.path.join(anime_dir, f"{tag}.jpg"))
+    log(output_dir, f"Final copied to: {finals_dest} (+ shared/anime/)")
 
     # Push to phone
     try:

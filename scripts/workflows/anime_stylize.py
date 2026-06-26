@@ -281,6 +281,8 @@ def process_one(src, args):
     # Always copy final to shared/finals/ (pinned) and shared/anime/ (this tool's gallery)
     finals_dir = os.path.expanduser("~/.openclaw/workspace/shared/finals")
     anime_dir = os.path.expanduser("~/.openclaw/workspace/shared/anime")
+    if getattr(args, "anime_subdir", None):
+        anime_dir = os.path.join(anime_dir, args.anime_subdir)
     os.makedirs(finals_dir, exist_ok=True)
     os.makedirs(anime_dir, exist_ok=True)
     finals_dest = os.path.join(finals_dir, f"{tag}.jpg")
@@ -316,6 +318,7 @@ def main():
                         help=f"Tensor Art model ID (default uncensored Z-Image: {MODEL_DEFAULT})")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     parser.add_argument("--local-output-dir", default=None, help="Base output dir (default ~/.openclaw/workspace/shared)")
+    parser.add_argument("--anime-subdir", default=None, help="Subfolder under shared/anime/ to collect these results (e.g. 'inbal alafi')")
     args = parser.parse_args()
 
     finals = []

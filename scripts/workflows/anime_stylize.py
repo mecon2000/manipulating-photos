@@ -308,6 +308,7 @@ def main():
     )
     parser.add_argument("--source", nargs="+", required=True, help="Input photo path(s)")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT, help="Override the anime prompt")
+    parser.add_argument("--prompt-extra", default=None, help="Text appended to the prompt (e.g. clothing for an SFW variant)")
     parser.add_argument("--negative", default=DEFAULT_NEGATIVE, help="Override the negative prompt")
     parser.add_argument("--strength", type=float, default=0.5,
                         help="Denoising strength (default 0.5: preserves pose/composition while reading as anime). "
@@ -320,6 +321,9 @@ def main():
     parser.add_argument("--local-output-dir", default=None, help="Base output dir (default ~/.openclaw/workspace/shared)")
     parser.add_argument("--anime-subdir", default=None, help="Subfolder under shared/anime/ to collect these results (e.g. 'inbal alafi')")
     args = parser.parse_args()
+
+    if args.prompt_extra:
+        args.prompt = f"{args.prompt} {args.prompt_extra}"
 
     finals = []
     for src in args.source:

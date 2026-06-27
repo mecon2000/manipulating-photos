@@ -2,6 +2,8 @@
 
 Photo transformation pipeline for portrait/boudoir photography. Fourteen active tools with unified `--affect`/`--exclude` masking. See `tools_tree.md` (at repo root) for the full map with status (active/paused/dropped).
 
+**Archived / parked / superseded tools live in `ARCHIVED.md`. Read that file before answering questions about, or recommending, any of these:** `silhouette-backdrop`, `style_transfer_replicate`, `tensor_photo_workflow`, `pro_photo_workflow*`, `anya_pro_workflow`, `michaela_pro_workflow`, removed presets `glacial-veil` / `frozen-breath`, or shadow-casting in `noir-paint`.
+
 ## Bootstrap (fresh machine)
 
 Run `./scripts/setup.sh` from the repo root. The script is idempotent and:
@@ -191,7 +193,7 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 
 **4 palettes:** cool (blue-grey, classic), warm (skin tones), cold (steel-blue), sepia (vintage)
 
-**Pipeline:** 1. Extract subject (BiRefNet) + scene context (Gemini) → 2. Body axis detection (MediaPipe pose) → perpendicular light direction → 3. Relight (IC-Light, harsh directional) → 4. [Shadow casting — parked] → 5. Bilateral presmooth + Otsu posterize → 6. Vectorize tones (Douglas-Peucker + slight bezier curves) → 7. Edge roughening → 8. Paint texture (optional Tensor Art img2img) → 9. Coarse canvas texture overlay
+**Pipeline:** 1. Extract subject (BiRefNet) + scene context (Gemini) → 2. Body axis detection (MediaPipe pose) → perpendicular light direction → 3. Relight (IC-Light, harsh directional) → 4. Bilateral presmooth + Otsu posterize → 5. Vectorize tones (Douglas-Peucker + slight bezier curves) → 6. Edge roughening → 7. Paint texture (optional Tensor Art img2img) → 8. Coarse canvas texture overlay
 
 **Light direction convention (XZ/XY clock):**
 - XZ clock (floor plane, bird's eye): 12=behind model, 6=camera, 3=model's left, 9=model's right
@@ -208,7 +210,6 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 **Tips:**
 - `--num-tones 2` gives the boldest, most graphic result (like pulpbrother)
 - `--paint-strength 0` skips Tensor Art pass — faster, slightly less painterly
-- Shadow casting is implemented but parked — procedural approach doesn't generalize well across poses
 - IC-Light prompt direction can be unintuitive — describe what's illuminated, not light position
 
 ### `scripts/workflows/ink-dissolution.py`
@@ -253,7 +254,7 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 5. LAB edge color match — 40% shift on inner edge band
 6. Full-image LAB 60% wash — unifies color temperature across entire image
 
-**20 presets:** baroque, renaissance, dark-romantic, ethereal, smoke, underwater, ink-water, aurora, silk, embers, curtains, whipped-cream, bubbles, velvet-fog, coral-smoke, neon-smoke-rings, burning-silk, torn-cloud, spun-sugar, powdered-pigment. (glacial-veil and frozen-breath removed — too tame.)
+**20 presets:** baroque, renaissance, dark-romantic, ethereal, smoke, underwater, ink-water, aurora, silk, embers, curtains, whipped-cream, bubbles, velvet-fog, coral-smoke, neon-smoke-rings, burning-silk, torn-cloud, spun-sugar, powdered-pigment.
 
 **Foreground wisp (`--foreground-wisp 0.0-1.0`):** Optional 3rd layer — generates a 2nd BG variant (seed+1, same prompt → same substance, different pattern), heavily blurs it, masks with radial face/shoulders protection + N random feathered holes (`--fg-holes`, default 5) for BG show-through, composites on top. Mimics shallow-DoF foreground wisps. Good range: 0.3-0.5. Adds one Flux call (~$0.003 schnell).
 
@@ -308,9 +309,6 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 
 ### `scripts/workflows/cache-baroque-bgs.py`
 **Pre-generate a pool of baroque BGs** for reuse by `baroque-surround.py --use-cached-bg`. Generates Flux Schnell BGs across preset+artifact combos at multiple aspects, saves to `~/.openclaw/workspace/shared/bg_cache/` with `index.json`. Amortizes Flux cost across many composites (run once for ~$0.65, then baroque BG calls become free).
-
-### `scripts/workflows/silhouette-backdrop.py` (⏸ paused)
-**Silhouette on simple backdrop with graphic element** (moon, pedestal, sunset, etc.). Works, but the suitability filter (pose extension + clothing coverage) segfaults under parallel MediaPipe+BiRefNet load — currently not in batch-runner rotation. Usable as a single-run tool with `--force`.
 
 ### `scripts/workflows/find-candidates.py`
 **Candidate photo picker.** Scans `_photos/` directory, picks random processed photos from different models, copies them to a candidates folder with metadata manifest.
@@ -444,6 +442,28 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 ./scripts/workflows/upscale_replicate.py --batch --in-dir DIR
 ```
 
+### `scripts/workflows/anime_stylize.py`
+**Cinematic semi-realistic anime version of a photo.** Full-image img2img via Tensor Art on the **uncensored** `Z-Image-Uncensored` checkpoint (model `965126062386242266`) — so NSFW input is accepted, unlike ChatGPT / Flux Kontext / Qwen-Image-Edit / nano-banana, which all hard-block NSFW *input*. No ControlNet, so `--strength` is the pose-fidelity dial.
+
+**Key behavior (from testing):**
+- `--strength 0.5` (default) preserves pose/outfit/composition while reading fully anime. Drop to **0.4** for dark/ambiguous/silhouette frames or complex foreshortened poses (hands, reclining) — at 0.5 the model invents a different scene or mangles hands.
+- The model tends to read **dark hand-held gear (floggers, straps, gloves) as a camera** and sometimes flips the subject's sex — add `camera, photographer, holding a camera, male, man` to `--negative` on those frames. There's also a stock anatomy negative worth adding for hands/hips: `extra ear, fused fingers, mutated hands, deformed buttocks`.
+- Hand/anatomy quality is **seed-sensitive** — a re-roll with a different `--seed` often fixes a bad hand.
+- `--prompt-extra "wearing an elegant satin slip dress, modest coverage; no nudity"` turns an implied-nude frame into an IG-postable SFW variant (illustration medium handles clothing cleanly).
+- Outputs go to `shared/finals/` **and** `shared/anime/` (or `shared/anime/<--anime-subdir>/`). Unique filenames (`{name}_s{strength}_{stamp}_{uuid}`) so parallel/batch runs never collide and re-rolls land beside originals for comparison. ~$0.02/image, pushes to phone.
+
+**Folder mode (`--folder DIR --pick N`):** auto-curates with a LOCAL heuristic only — dHash near-duplicate clustering + Laplacian-variance/exposure quality. Reliably dedupes and rejects blurry/blown-out frames and works on NSFW (no vision-model call), but it does **not** understand scene/pose semantics, so it's a mechanical first pass, not true narrative curation. For a hand-picked story set, pass explicit `--source`. `--dup-dist` (default 14) raises toward 20 for a wider spread across a shoot. `--dry-run` shows picks without rendering.
+
+**Usage:**
+```bash
+./scripts/workflows/anime_stylize.py --source photo.jpg
+./scripts/workflows/anime_stylize.py --source a.jpg b.jpg --strength 0.4 --negative "...,camera,male"
+./scripts/workflows/anime_stylize.py --source photo.jpg --prompt-extra "wearing a slip dress, no nudity"  # SFW variant
+./scripts/workflows/anime_stylize.py --folder "/path/to/Processed" --pick 8 --anime-subdir "model name"
+```
+
+**All flags:** `--source` (paths), `--folder`, `--pick` (default 8), `--dup-dist` (default 14), `--dry-run`, `--prompt`, `--prompt-extra`, `--negative`, `--strength` (default 0.5), `--cfg-scale` (default 5), `--steps` (default 30), `--tensor-model`, `--seed`, `--anime-subdir`, `--local-output-dir`.
+
 ### `scripts/workflows/stills_to_video.py`
 **Animate a still as a short MP4** via fal image-to-video models. Default `wan` engine = `fal-ai/wan/v2.2-a14b/image-to-video/turbo` (~$0.30/5s clip). Alt `kling` = `fal-ai/kling-video/v2/master/image-to-video` (~$0.50). Uploads source via `fal_client.upload_file`, downloads MP4 to `shared/finals/`, also saves first frame as PNG sidecar (registry UI shows the PNG since the gallery is image-first). Pushes first frame to phone via `notify.push_image`. Cost tracked via `_pipeline_accrue`.
 
@@ -473,17 +493,6 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 **All flags:** `--source`, `--motion`, `--strength` (0.3-1.0, default 0.6, scales pixel offsets), `--duration` (sec, default 3), `--fps` (default 24), `--inpaint`, `--seed`, `--output-to`, `--local-output-dir`. Cost: ~$0.005 per clip (DIY mode, depth call only).
 
 > Note: both `stills_to_video` and `parallax_3d` produce video output. The gallery UI is image-first — the registry exposes them with `output_kind: video`, but the visible thumbnail is the first-frame PNG sidecar. Open the MP4 directly from `shared/finals/`.
-
-### `scripts/workflows/style_transfer_replicate.py`
-**Replicate `fofr/style-transfer` wrapper.** IPAdapter Plus + DreamShaperXL Lightning + depth ControlNet on Replicate (NSFW-friendly community SDXL, no Flux filter). ~$0.0063/run, ~7s. Single or batch. Less identity-preserving than `become-image`; mostly superseded by `surreal_with_face.py` for portrait work.
-
-**Usage:**
-```bash
-./scripts/workflows/style_transfer_replicate.py --source PHOTO --style STYLE_REF
-./scripts/workflows/style_transfer_replicate.py --batch  # every source × every style
-```
-
-**Flags:** `--source`, `--style`, `--batch`, `--source-dir`, `--style-dir`, `--prompt`, `--denoising-strength` (0-1, default 0.65), `--depth-strength` (0-1, default 1.0), `--seed`, `--out-dir`. Reads `REPLICATE_API_TOKEN` from env or `~/sol/.env`. Outputs to `shared/style-transfer-finals/` with sidecar JSON per file.
 
 ### `scripts/workflows/watermark_check.py`
 **Detect "UNPROCESSED"/"DO NOT PUBLISH"-type watermarks via Gemini Vision.** Pre-flight check before running a batch — flags photos with burned-in watermarks (corner signature, half-transparent text, etc.) so Ronnie can re-export clean from Lightroom before they leak into outputs. Filename heuristics are unreliable; uses Gemini 2.5 Flash for visual detection (essentially free). Warn-only — no inpaint attempt.
@@ -517,17 +526,14 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 - **Combining tools** — e.g., ghost dissolve → relight with window light. Layer effects for unique results.
 
 ### What went wrong repeatedly — avoid these pitfalls
-- **Pixel values not scaled to image size.** Absolute pixel offsets (5px, 15px) are invisible on 2048px images. ALWAYS scale effects to percentage of image dimensions (1-5% of short edge). This was fixed 3+ times.
-- **Gemini JSON parsing.** maxOutputTokens too low → truncated JSON → lost scores. responseMimeType=application/json is mandatory. Set maxOutputTokens to 4096. Check finishReason for MAX_TOKENS.
 - **SDXL inpainting ignores prompts.** Asked for "doorframe" → got foliage. The model preserves surrounding context more than following the text prompt. Strength=0.95 helps but doesn't fully solve it.
 - **Effects that blur-in-place are invisible.** Motion trails and melt applied within a body mask just blur the body in the same location — no visible change. Effects need to SPREAD BEYOND the mask boundary to be visible.
 - **Relighting removes the original BG entirely.** IC-Light generates a new scene. Hair edges look cut. Fix: --bg-blend 0.4-0.5 with soft mask blur (~2% of image). But even then, hair can look pasted.
 - **Flux inpainting/img2img on dark-BG photos → black.** Tried BG lifting, noise, blur, multiple strengths (0.5-0.93). Flux always gravitates back to black on dark inputs. Not usable for photos with dark backgrounds.
 - **Binary mask compositing always looks like a cutout.** Even with feathering, bleed spots, light wrap, LAB color transfer — two separately-created elements don't feel like one image. The reference artist likely uses gradient masks + generative fill (Photoshop Firefly) for unified lighting/color.
 - **LAB color transfer needs 70%+ strength.** Below 70% the shift is invisible. Apply to entire subject (stronger at edges, 40% minimum at center). RGB shift needs 50%+ to be visible.
-- **Complementary color wash must be on entire composite, not just subject.** Washing only the subject is invisible. Full-image wash creates overall tonal unity.
-- **Auto blur radius on large images.** 2048+ px images get blur radius 120+ which makes everything look like abstract blobs. Cap blur at 60px max.
-- **Color matching too aggressive.** 60% color shift toward scene edges washes out intended tones (e.g., brown doorframe becomes generic grey). Reduced to 30%.
+
+(Lessons that are now baked into code — pixel-scaling, Gemini JSON setup, blur cap, color-match strength, full-composite LAB wash — are recorded in `ARCHIVED.md` so they aren't re-discovered as new findings.)
 
 ### Relighting craft — photography rules
 - **Two lights should be opposite AND orthogonal to the body axis.** If body stretches 4→10 o'clock, lights go at ~1-2 and ~7 o'clock. Maximizes shadow definition on contours.
@@ -552,13 +558,6 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 ## Autonomous Gallery (batch-runner)
 
 Launch via `manipulating-photos-with-ui/start-gallery.sh` (no args needed). Starts Flask on :5555, opens a cloudflared tunnel, pushes the public URL to Ronnie's phone via Pushbullet. Background thread continuously generates random tool+preset+photo combos; phone UI for fav / delete / "more like this". Pass-through flags: `--no-tunnel`, `--port`, `--tools baroque-surround,ink-dissolution`, etc.
-
-## Legacy Scripts (from Echo, V9-V18 iterations)
-
-- `tensor_photo_workflow.py` — The V18 predecessor. Single style, no parallelism, no quality gates, no auto-correct.
-- `pro_photo_workflow_v3.py` — Fal.ai-only pipeline (no Tensor Art). Simpler: rembg → inpaint BG → color grade → composite.
-- `pro_photo_workflow_v2.py` / `pro_photo_workflow.py` — Earlier iterations with multi-model BG generation.
-- `anya_pro_workflow.py` / `michaela_pro_workflow.py` — Model-specific variants (archived).
 
 ## Git Conventions
 

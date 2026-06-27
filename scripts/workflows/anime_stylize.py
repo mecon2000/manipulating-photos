@@ -16,6 +16,14 @@ Usage:
     python anime_stylize.py --source a.jpg b.jpg c.jpg          # batch
     python anime_stylize.py --source photo.jpg --strength 0.7   # more anime
     python anime_stylize.py --source photo.jpg --tensor-model <ID>  # try an anime checkpoint
+    python anime_stylize.py --folder DIR --pick 8               # auto-curate then stylize
+    python anime_stylize.py --folder DIR --pick 8 --dry-run     # just show the picks
+
+Folder mode (--folder) auto-curates with a LOCAL heuristic only: dHash near-duplicate
+clustering + Laplacian-variance/exposure quality. It reliably dedupes and rejects
+blurry/blown-out frames (and works on NSFW, unlike a vision model), but it does NOT
+understand scene/pose semantics — so it is a mechanical first pass, not true narrative
+curation. For a hand-picked story set, pass explicit --source paths.
 """
 
 import os
@@ -46,6 +54,7 @@ try:
 except ImportError:
     ISRAEL_TZ = timezone(timedelta(hours=3))
 
+import numpy as np
 import requests
 from PIL import Image, ImageOps
 
@@ -237,6 +246,73 @@ def anime_stylize(image_pil, prompt, negative, strength, cfg_scale, steps,
 # ---------------------------------------------------------------------------
 # Per-image driver
 # ---------------------------------------------------------------------------
+def _dhash(pil, size=8):
+    """64-bit difference hash for near-duplicate detection."""
+    g = pil.convert("L").resize((size + 1, size), Image.LANCZOS)
+    a = np.asarray(g, dtype=np.int16)
+    diff = a[:, 1:] > a[:, :-1]
+    bits = 0
+    for v in diff.flatten():
+        bits = (bits << 1) | int(v)
+    return bits
+
+
+def _hamming(a, b):
+    return bin(a ^ b).count("1")
+
+
+def _quality(pil):
+    """Crude aesthetic proxy: Laplacian-variance sharpness gated by exposure sanity."""
+    g = np.asarray(pil.convert("L").resize((512, 512), Image.LANCZOS), dtype=np.float32)
+    lap = (g[1:-1, 1:-1] * 4 - g[:-2, 1:-1] - g[2:, 1:-1] - g[1:-1, :-2] - g[1:-1, 2:])
+    sharp = float(lap.var())
+    mean = g.mean()
+    expo = 1.0 - (abs(mean - 128) / 128.0)  # 1.0 at mid-grey, →0 at pure black/white
+    return sharp * max(0.2, expo)
+
+
+def curate_folder(folder, pick, dup_dist=12):
+    """Pick up to `pick` best-looking, visually-distinct frames from a folder.
+
+    Greedy: rank all frames by quality, then keep adding the next-best frame
+    that is not a near-duplicate (dHash hamming > dup_dist) of any already chosen.
+    Returns paths sorted by filename so the shoot's chronology reads as a story.
+    """
+    exts = (".jpg", ".jpeg", ".png", ".webp")
+    files = [os.path.join(folder, f) for f in sorted(os.listdir(folder))
+             if f.lower().endswith(exts) and not f.startswith(".")]
+    items = []
+    for f in files:
+        try:
+            im = Image.open(f)
+            im = ImageOps.exif_transpose(im).convert("RGB")
+        except Exception:
+            continue
+        items.append((f, _dhash(im), _quality(im)))
+    pool = sorted(items, key=lambda x: -x[2])  # best quality first
+
+    chosen = []
+    for f, h, q in pool:
+        if len(chosen) >= pick:
+            break
+        if all(_hamming(h, ch[1]) > dup_dist for ch in chosen):
+            chosen.append((f, h, q))
+    # Relax dedup if we couldn't fill the quota (folder full of similar frames)
+    if len(chosen) < pick:
+        have = {c[0] for c in chosen}
+        for f, h, q in pool:
+            if len(chosen) >= pick:
+                break
+            if f not in have:
+                chosen.append((f, h, q))
+                have.add(f)
+
+    print(f"[curate] scanned {len(items)} frames in {folder} → picked {len(chosen)}:")
+    for f, h, q in sorted(chosen, key=lambda x: x[0]):
+        print(f"  {os.path.basename(f)}  (quality={q:.0f})")
+    return [c[0] for c in sorted(chosen, key=lambda x: x[0])]
+
+
 def process_one(src, args):
     src = os.path.abspath(os.path.expanduser(src))
     if not os.path.isfile(src):
@@ -306,7 +382,15 @@ def main():
         description="Cinematic semi-realistic anime version of a photo (uncensored Tensor Art img2img).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--source", nargs="+", required=True, help="Input photo path(s)")
+    parser.add_argument("--source", nargs="+", default=None, help="Input photo path(s)")
+    parser.add_argument("--folder", default=None,
+                        help="Curate from a folder instead of --source: auto-picks the best, "
+                             "visually-distinct frames (see --pick).")
+    parser.add_argument("--pick", type=int, default=8, help="With --folder: how many frames to pick (default 8)")
+    parser.add_argument("--dup-dist", type=int, default=14,
+                        help="With --folder: dHash hamming distance below which two frames count as near-duplicates "
+                             "(default 14; raise toward 20 for a wider spread across the shoot, at the cost of admitting weaker frames)")
+    parser.add_argument("--dry-run", action="store_true", help="With --folder: just print the picks, don't stylize")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT, help="Override the anime prompt")
     parser.add_argument("--prompt-extra", default=None, help="Text appended to the prompt (e.g. clothing for an SFW variant)")
     parser.add_argument("--negative", default=DEFAULT_NEGATIVE, help="Override the negative prompt")
@@ -325,14 +409,30 @@ def main():
     if args.prompt_extra:
         args.prompt = f"{args.prompt} {args.prompt_extra}"
 
+    # Resolve the work list: either explicit --source paths, or curated from --folder.
+    if args.folder:
+        folder = os.path.abspath(os.path.expanduser(args.folder))
+        if not os.path.isdir(folder):
+            parser.error(f"--folder not a directory: {folder}")
+        sources = curate_folder(folder, args.pick, args.dup_dist)
+        if args.anime_subdir is None:
+            args.anime_subdir = os.path.basename(folder.rstrip("/")) or "folder"
+        if args.dry_run:
+            print("\n[dry-run] would stylize the above picks into shared/anime/" + args.anime_subdir)
+            return
+    elif args.source:
+        sources = args.source
+    else:
+        parser.error("provide either --source <paths> or --folder <dir>")
+
     finals = []
-    for src in args.source:
+    for src in sources:
         print(f"\n=== {src} ===")
         dest = process_one(src, args)
         if dest:
             finals.append(dest)
 
-    print(f"\nDone. {len(finals)}/{len(args.source)} succeeded.")
+    print(f"\nDone. {len(finals)}/{len(sources)} succeeded.")
     for f in finals:
         print(f"  {f}")
     if PIPELINE_COST["cost_today"]:

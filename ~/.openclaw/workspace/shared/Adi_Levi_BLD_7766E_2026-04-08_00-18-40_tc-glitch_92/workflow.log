@@ -1,0 +1,73 @@
+[2026-04-08 00:18:40] [INFO] ============================================================
+[2026-04-08 00:18:40] [INFO] TIME CORRUPTION — Start
+[2026-04-08 00:18:40] [INFO] Source:         /home/rong/.openclaw/workspace/_photos/Adi Levi/41 Mili Tipal, Morikai/Processed - not anonymous/BLD_7766E.jpg
+[2026-04-08 00:18:40] [INFO] Effect:         glitch
+[2026-04-08 00:18:40] [INFO] Affect:         skin
+[2026-04-08 00:18:40] [INFO] Exclude:        hands
+[2026-04-08 00:18:40] [INFO] Intensity:      0.9
+[2026-04-08 00:18:40] [INFO] Direction:      90.0 deg
+[2026-04-08 00:18:40] [INFO] Seed:           1864208212
+[2026-04-08 00:18:40] [INFO] Auto-correct:   False
+[2026-04-08 00:18:40] [INFO] Output to:      local
+[2026-04-08 00:18:40] [INFO] Output dir:     ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-glitch_92
+[2026-04-08 00:18:40] [INFO] ============================================================
+[2026-04-08 00:18:40] [INFO] Loaded source: 2048x1365
+[2026-04-08 00:18:40] [INFO] --- Step 1/4: Build affect mask ---
+[2026-04-08 00:18:40] [INFO] Building mask for affect='skin' (exclude='hands')
+[2026-04-08 00:18:40] [INFO] Affect=body-skin,face-skin: using MediaPipe body segmentation
+[2026-04-08 00:18:47] [INFO] Body-segment mask coverage: 15.6%
+[2026-04-08 00:18:48] [INFO] Mask engine: mediapipe-bodyseg
+[2026-04-08 00:18:48] [INFO] Mask coverage: 15.6%
+[2026-04-08 00:18:48] [INFO] Step 1 done (7.3s)
+[2026-04-08 00:18:48] [INFO] --- Step 2/4: Apply time-corruption effects ---
+[2026-04-08 00:18:48] [INFO] Applying channel shift (intensity=1.00, direction=90.0 deg)
+[2026-04-08 00:18:48] [INFO] Step 2 done (0.3s)
+[2026-04-08 00:18:48] [INFO] --- Step 3/4: Quality evaluation (Gemini) ---
+[2026-04-08 00:18:48] [INFO] Quality OK [time_corrupted]: brightness=43.9 contrast=50.2 entropy=6.75
+[2026-04-08 00:18:56] [INFO] Gemini raw response (790 chars): {
+  "score": 8,
+  "critique": "The temporal effects, particularly the strong chromatic aberration and diffusion, create a powerful sense of distortion and temporal corruption that aligns well with the subject matter. While the intensity is quite high, it successfully transforms the image into a compelling, almost unsettling visual statement. The subject remains clearly recognizable despite the heavy processing.",
+  "issues": [
+    "too_extreme"
+  ],
+  "adjustments": {
+    "intensity": 0.7,
+    "
+[2026-04-08 00:18:56] [INFO] Gemini score: 8/10 — The temporal effects, particularly the strong chromatic aberration and diffusion, create a powerful sense of distortion and temporal corruption that aligns well with the subject matter. While the intensity is quite high, it successfully transforms the image into a compelling, almost unsettling visual statement. The subject remains clearly recognizable despite the heavy processing.
+[2026-04-08 00:18:56] [INFO] Gemini issues: too_extreme
+[2026-04-08 00:18:56] [INFO] Gemini suggests: A slight reduction in the overall intensity could create a more nuanced effect, allowing some original detail to be more apparent while retaining the strong temporal distortion.
+[2026-04-08 00:18:56] [INFO] Step 3 done (8.4s)
+[2026-04-08 00:18:56] [INFO] Final image saved: ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-glitch_92/final.jpg
+[2026-04-08 00:18:56] [INFO] --- Step 4/4: Output / upload ---
+[2026-04-08 00:18:56] [INFO] Output already in local dir: ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-glitch_92
+[2026-04-08 00:18:56] [INFO] Final copied to: ~/.openclaw/workspace/shared/finals/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-glitch_92.jpg
+[2026-04-08 00:18:56] [INFO] Step 4 done (0.0s)
+
+============================================================
+  TIME CORRUPTION — Summary
+============================================================
+
+  Config:
+    Source:         /home/rong/.openclaw/workspace/_photos/Adi Levi/41 Mili Tipal, Morikai/Processed - not anonymous/BLD_7766E.jpg
+    Effect:         glitch
+    Affect:         skin
+    Intensity:      0.9
+    Direction:      90.0 deg
+    Seed:           1864208212
+
+  Timings:
+    Step 1 (Build affect mask): 7.3s
+    Step 2 (Apply time-corruption effects): 0.3s
+    Step 3 (Quality evaluation (Gemini)): 8.4s
+    Step 4 (Output / upload): 0.0s
+    Total: 16.0s
+
+  Quality:
+    Final image:   brightness=43.9  contrast=50.2  entropy=6.75  OK
+    Aesthetic:     8/10 — The temporal effects, particularly the strong chromatic aberration and diffusion, create a powerful sense of distortion and temporal corruption that aligns well with the subject matter. While the intensity is quite high, it successfully transforms the image into a compelling, almost unsettling visual statement. The subject remains clearly recognizable despite the heavy processing.
+    Issues:        too_extreme
+
+  Output:
+    Working dir:   ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-glitch_92
+    Local:         ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-glitch_92
+============================================================

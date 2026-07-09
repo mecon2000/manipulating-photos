@@ -1,0 +1,75 @@
+[2026-04-05 15:25:27] [INFO] ============================================================
+[2026-04-05 15:25:27] [INFO] WORKFLOW START — Mode: separate
+[2026-04-05 15:25:27] [INFO] Source:         /home/rong/.openclaw/workspace/_photos/Michaela/Processed/BLD_1509.jpg
+[2026-04-05 15:25:27] [INFO] BG Style:       Baroque Chiaroscuro
+[2026-04-05 15:25:27] [INFO] Model Style:    Baroque Chiaroscuro
+[2026-04-05 15:25:27] [INFO] BG Strength:    0.6
+[2026-04-05 15:25:27] [INFO] Model Strength: 0.4
+[2026-04-05 15:25:27] [INFO] CFG Scale:      6.5
+[2026-04-05 15:25:27] [INFO] Tensor Model:   965126062386242266
+[2026-04-05 15:25:27] [INFO] Seed:           3511700479
+[2026-04-05 15:25:27] [INFO] Max retries:    2
+[2026-04-05 15:25:27] [INFO] Face swap:      True
+[2026-04-05 15:25:27] [INFO] Output to:      local
+[2026-04-05 15:25:27] [INFO] Output dir:     outputs/stylize_BLD_1509_20260405_152527
+[2026-04-05 15:25:27] [INFO] ============================================================
+[2026-04-05 15:25:27] [INFO] --- Step 1/7: Extract mask ---
+[2026-04-05 15:25:27] [INFO] Extracting mask using Fal.ai rembg...
+[2026-04-05 15:26:32] [INFO] Step 1 done (64.6s)
+[2026-04-05 15:26:32] [INFO] --- Step 2/7: Clean background (LaMa) ---
+[2026-04-05 15:26:32] [INFO] Cleaning background using LaMa inpainting...
+[2026-04-05 15:26:43] [INFO] Quality OK [cleaned BG]: brightness=61.3 contrast=54.8 entropy=6.97
+[2026-04-05 15:26:43] [INFO] Step 2 done (11.0s)
+[2026-04-05 15:26:43] [INFO] --- Step 3/7: Stylize (parallel BG + Model) ---
+[2026-04-05 15:26:43] [INFO] Stylizing: BG (attempt 1/3, seed=3511700479)
+[2026-04-05 15:26:43] [INFO] Stylizing: Model (attempt 1/3, seed=3511700479)
+[2026-04-05 15:27:56] [WARN] QUALITY FAIL [Model (attempt 1/3, seed=3511700479)]: nearly black (brightness=1.8); flat/uniform (contrast=3.5)
+[2026-04-05 15:27:56] [INFO] Stylizing: Model (attempt 2/3, seed=3511700480)
+[2026-04-05 15:28:09] [INFO] Quality OK [BG (attempt 1/3, seed=3511700479)]: brightness=59.6 contrast=50.0 entropy=7.20
+[2026-04-05 15:29:01] [WARN] QUALITY FAIL [Model (attempt 2/3, seed=3511700480)]: nearly black (brightness=1.8); flat/uniform (contrast=3.4)
+[2026-04-05 15:29:01] [INFO] Stylizing: Model (attempt 3/3, seed=3511700481)
+[2026-04-05 15:30:30] [WARN] QUALITY FAIL [Model (attempt 3/3, seed=3511700481)]: nearly black (brightness=1.6); flat/uniform (contrast=3.6)
+[2026-04-05 15:30:30] [WARN] All retries exhausted for [Model] — returning best available result
+[2026-04-05 15:30:30] [INFO] BG SSIM=0.803 — within acceptable range
+[2026-04-05 15:30:30] [INFO] Step 3 done (226.8s)
+[2026-04-05 15:30:30] [INFO] --- Step 4/7: Composite ---
+[2026-04-05 15:30:30] [INFO] Quality OK [composite]: brightness=58.7 contrast=49.2 entropy=7.18
+[2026-04-05 15:30:30] [INFO] Step 4 done (0.0s)
+[2026-04-05 15:30:30] [INFO] --- Step 5/7: Face swap ---
+[2026-04-05 15:30:30] [INFO] Running face swap...
+[2026-04-05 15:30:34] [ERROR] Face swap failed (422): {"detail":[{"loc":["body","swap_image_url"],"msg":"No face found in the image","type":"value_error"}]}
+[2026-04-05 15:30:34] [WARN] Face swap failed — keeping pre-swap version
+[2026-04-05 15:30:34] [INFO] Step 5 done (4.2s)
+[2026-04-05 15:30:34] [INFO] --- Step 6/7: Quality evaluation ---
+[2026-04-05 15:30:34] [INFO] Quality OK [FINAL]: brightness=58.7 contrast=49.2 entropy=7.18
+[2026-04-05 15:30:35] [WARN] Claude Vision evaluation failed: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CZkdL6AzJtJFZwNn4V7Cg'}
+[2026-04-05 15:30:35] [INFO] Step 6 done (0.7s)
+
+============================================================
+  WORKFLOW SUMMARY
+============================================================
+  Source:          /home/rong/.openclaw/workspace/_photos/Michaela/Processed/BLD_1509.jpg
+  Mode:            separate
+  BG Style:        Baroque Chiaroscuro
+  Model Style:     Baroque Chiaroscuro
+  BG Strength:     0.6
+  Model Strength:  0.4
+  Seed:            3511700479
+  Tensor Model:    965126062386242266
+
+  Step Timings:
+    1. Extract mask                          64.6s
+    2. Clean background (LaMa)               11.0s
+    3. Stylize (parallel BG + Model)        226.8s
+    4. Composite                              0.0s
+    5. Face swap                              4.2s
+    6. Quality evaluation                     0.7s
+    TOTAL                                   307.4s
+
+  Quality Report:
+    Final image:   brightness=58.7  contrast=49.2  entropy=7.18  OK
+    BG SSIM:       0.803
+
+  Output:
+    Working dir:   outputs/stylize_BLD_1509_20260405_152527
+============================================================

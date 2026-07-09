@@ -1,0 +1,76 @@
+[2026-04-08 00:18:40] [INFO] ============================================================
+[2026-04-08 00:18:40] [INFO] TIME CORRUPTION — Start
+[2026-04-08 00:18:40] [INFO] Source:         /home/rong/.openclaw/workspace/_photos/Adi Levi/41 Mili Tipal, Morikai/Processed - not anonymous/BLD_7766E.jpg
+[2026-04-08 00:18:40] [INFO] Effect:         trails
+[2026-04-08 00:18:40] [INFO] Affect:         skin
+[2026-04-08 00:18:40] [INFO] Exclude:        hands
+[2026-04-08 00:18:40] [INFO] Intensity:      0.9
+[2026-04-08 00:18:40] [INFO] Direction:      90.0 deg
+[2026-04-08 00:18:40] [INFO] Seed:           2678441984
+[2026-04-08 00:18:40] [INFO] Auto-correct:   False
+[2026-04-08 00:18:40] [INFO] Output to:      local
+[2026-04-08 00:18:40] [INFO] Output dir:     ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-trails_44
+[2026-04-08 00:18:40] [INFO] ============================================================
+[2026-04-08 00:18:40] [INFO] Loaded source: 2048x1365
+[2026-04-08 00:18:40] [INFO] --- Step 1/4: Build affect mask ---
+[2026-04-08 00:18:40] [INFO] Building mask for affect='skin' (exclude='hands')
+[2026-04-08 00:18:40] [INFO] Affect=body-skin,face-skin: using MediaPipe body segmentation
+[2026-04-08 00:18:48] [INFO] Body-segment mask coverage: 15.6%
+[2026-04-08 00:18:48] [INFO] Mask engine: mediapipe-bodyseg
+[2026-04-08 00:18:48] [INFO] Mask coverage: 15.6%
+[2026-04-08 00:18:48] [INFO] Step 1 done (7.5s)
+[2026-04-08 00:18:48] [INFO] --- Step 2/4: Apply time-corruption effects ---
+[2026-04-08 00:18:48] [INFO] Applying motion trails (intensity=1.00, direction=90.0 deg)
+[2026-04-08 00:18:58] [INFO] Step 2 done (9.9s)
+[2026-04-08 00:18:58] [INFO] --- Step 3/4: Quality evaluation (Gemini) ---
+[2026-04-08 00:18:58] [INFO] Quality OK [time_corrupted]: brightness=44.2 contrast=50.5 entropy=6.76
+[2026-04-08 00:19:00] [INFO] Gemini raw response (637 chars): {
+  "score": 1,
+  "critique": "The processed image appears identical to the original; no temporal effects such as ghosting, motion trails, chromatic aberration, or diffusion melting are visible. Consequently, there is no artistic impact from the intended effects, and the image lacks the desired temporal expression.",
+  "issues": [
+    "too_subtle"
+  ],
+  "adjustments": {
+    "intensity": 0.8,
+    "try_different_direction": false,
+    "reduce_ghosting": false,
+    "reduce_melt": false,
+    "sugge
+[2026-04-08 00:19:00] [INFO] Gemini score: 1/10 — The processed image appears identical to the original; no temporal effects such as ghosting, motion trails, chromatic aberration, or diffusion melting are visible. Consequently, there is no artistic impact from the intended effects, and the image lacks the desired temporal expression.
+[2026-04-08 00:19:00] [INFO] Gemini issues: too_subtle
+[2026-04-08 00:19:00] [INFO] Gemini suggests: Increase the intensity of the temporal effects significantly to make them noticeable and contribute to the artistic goal.
+[2026-04-08 00:19:00] [INFO] Step 3 done (2.7s)
+[2026-04-08 00:19:00] [INFO] Final image saved: ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-trails_44/final.jpg
+[2026-04-08 00:19:00] [INFO] --- Step 4/4: Output / upload ---
+[2026-04-08 00:19:00] [INFO] Output already in local dir: ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-trails_44
+[2026-04-08 00:19:00] [INFO] Final copied to: ~/.openclaw/workspace/shared/finals/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-trails_44.jpg
+[2026-04-08 00:19:00] [INFO] Step 4 done (0.0s)
+
+============================================================
+  TIME CORRUPTION — Summary
+============================================================
+
+  Config:
+    Source:         /home/rong/.openclaw/workspace/_photos/Adi Levi/41 Mili Tipal, Morikai/Processed - not anonymous/BLD_7766E.jpg
+    Effect:         trails
+    Affect:         skin
+    Intensity:      0.9
+    Direction:      90.0 deg
+    Seed:           2678441984
+
+  Timings:
+    Step 1 (Build affect mask): 7.5s
+    Step 2 (Apply time-corruption effects): 9.9s
+    Step 3 (Quality evaluation (Gemini)): 2.7s
+    Step 4 (Output / upload): 0.0s
+    Total: 20.1s
+
+  Quality:
+    Final image:   brightness=44.2  contrast=50.5  entropy=6.76  OK
+    Aesthetic:     1/10 — The processed image appears identical to the original; no temporal effects such as ghosting, motion trails, chromatic aberration, or diffusion melting are visible. Consequently, there is no artistic impact from the intended effects, and the image lacks the desired temporal expression.
+    Issues:        too_subtle
+
+  Output:
+    Working dir:   ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-trails_44
+    Local:         ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-trails_44
+============================================================

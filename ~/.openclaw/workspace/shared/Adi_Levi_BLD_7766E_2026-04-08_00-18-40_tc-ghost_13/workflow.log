@@ -1,0 +1,74 @@
+[2026-04-08 00:18:40] [INFO] ============================================================
+[2026-04-08 00:18:40] [INFO] TIME CORRUPTION — Start
+[2026-04-08 00:18:40] [INFO] Source:         /home/rong/.openclaw/workspace/_photos/Adi Levi/41 Mili Tipal, Morikai/Processed - not anonymous/BLD_7766E.jpg
+[2026-04-08 00:18:40] [INFO] Effect:         ghost
+[2026-04-08 00:18:40] [INFO] Affect:         skin
+[2026-04-08 00:18:40] [INFO] Exclude:        hands
+[2026-04-08 00:18:40] [INFO] Intensity:      0.9
+[2026-04-08 00:18:40] [INFO] Direction:      90.0 deg
+[2026-04-08 00:18:40] [INFO] Seed:           2257050995
+[2026-04-08 00:18:40] [INFO] Auto-correct:   False
+[2026-04-08 00:18:40] [INFO] Output to:      local
+[2026-04-08 00:18:40] [INFO] Output dir:     ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-ghost_13
+[2026-04-08 00:18:40] [INFO] ============================================================
+[2026-04-08 00:18:40] [INFO] Loaded source: 2048x1365
+[2026-04-08 00:18:40] [INFO] --- Step 1/4: Build affect mask ---
+[2026-04-08 00:18:40] [INFO] Building mask for affect='skin' (exclude='hands')
+[2026-04-08 00:18:40] [INFO] Affect=body-skin,face-skin: using MediaPipe body segmentation
+[2026-04-08 00:18:48] [INFO] Body-segment mask coverage: 15.6%
+[2026-04-08 00:18:48] [INFO] Mask engine: mediapipe-bodyseg
+[2026-04-08 00:18:48] [INFO] Mask coverage: 15.6%
+[2026-04-08 00:18:48] [INFO] Step 1 done (7.4s)
+[2026-04-08 00:18:48] [INFO] --- Step 2/4: Apply time-corruption effects ---
+[2026-04-08 00:18:48] [INFO] Using arc ghosting for skin target (arc_angle=30)
+[2026-04-08 00:18:48] [INFO] Applying arc ghosting (intensity=1.00, dir=90.0°, arc=30°)
+[2026-04-08 00:18:48] [INFO] Arc offsets (base=13px): [13, 26, 52, 104, 208]
+[2026-04-08 00:18:49] [INFO] Step 2 done (1.0s)
+[2026-04-08 00:18:49] [INFO] --- Step 3/4: Quality evaluation (Gemini) ---
+[2026-04-08 00:18:49] [INFO] Quality OK [time_corrupted]: brightness=53.7 contrast=61.4 entropy=6.99
+[2026-04-08 00:18:57] [INFO] Gemini raw response (564 chars): {
+  "score": 8,
+  "critique": "The temporal effects, particularly the ghosting and subtle chromatic shifts, effectively convey a sense of dynamic struggle and temporal corruption. The intensity of the effect enhances the narrative without compromising the subject's readability.",
+  "issues": [],
+  "adjustments": {
+    "intensity": null,
+    "try_different_direction": false,
+    "reduce_ghosting": false,
+    "reduce_melt": false,
+    "suggestion": "The current balance of effects strongly supports
+[2026-04-08 00:18:57] [INFO] Gemini score: 8/10 — The temporal effects, particularly the ghosting and subtle chromatic shifts, effectively convey a sense of dynamic struggle and temporal corruption. The intensity of the effect enhances the narrative without compromising the subject's readability.
+[2026-04-08 00:18:57] [INFO] Gemini suggests: The current balance of effects strongly supports the artistic intent of temporal decay and frozen motion.
+[2026-04-08 00:18:57] [INFO] Step 3 done (8.2s)
+[2026-04-08 00:18:57] [INFO] Final image saved: ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-ghost_13/final.jpg
+[2026-04-08 00:18:57] [INFO] --- Step 4/4: Output / upload ---
+[2026-04-08 00:18:57] [INFO] Output already in local dir: ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-ghost_13
+[2026-04-08 00:18:57] [INFO] Final copied to: ~/.openclaw/workspace/shared/finals/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-ghost_13.jpg
+[2026-04-08 00:18:57] [INFO] Step 4 done (0.0s)
+
+============================================================
+  TIME CORRUPTION — Summary
+============================================================
+
+  Config:
+    Source:         /home/rong/.openclaw/workspace/_photos/Adi Levi/41 Mili Tipal, Morikai/Processed - not anonymous/BLD_7766E.jpg
+    Effect:         ghost
+    Affect:         skin
+    Intensity:      0.9
+    Direction:      90.0 deg
+    Seed:           2257050995
+
+  Timings:
+    Step 1 (Build affect mask): 7.4s
+    Step 2 (Apply time-corruption effects): 1.0s
+    Step 3 (Quality evaluation (Gemini)): 8.2s
+    Step 4 (Output / upload): 0.0s
+    Total: 16.6s
+
+  Quality:
+    Final image:   brightness=53.7  contrast=61.4  entropy=6.99  OK
+    Aesthetic:     8/10 — The temporal effects, particularly the ghosting and subtle chromatic shifts, effectively convey a sense of dynamic struggle and temporal corruption. The intensity of the effect enhances the narrative without compromising the subject's readability.
+
+  Output:
+    Working dir:   ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-ghost_13
+    Local:         ~/.openclaw/workspace/shared/Adi_Levi_BLD_7766E_2026-04-08_00-18-40_tc-ghost_13
+============================================================

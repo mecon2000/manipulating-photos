@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "airbnb": {
+      "command": "node",
+      "args": ["/home/rong/.nvm/versions/node/v22.22.2/lib/node_modules/@openbnb/mcp-server-airbnb/dist/index.js"],
+      "env": {
+        "IGNORE_ROBOTS_TXT": "true"
+      }
+    }
+  }
+}

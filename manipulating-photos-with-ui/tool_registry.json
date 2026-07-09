@@ -660,5 +660,54 @@
     },
     "cost_estimate_usd": 0.1,
     "wall_time_estimate_sec": 120
+  },
+  "anime_stylize": {
+    "label": "Anime stylize",
+    "script": "scripts/workflows/anime_stylize.py",
+    "needs_style_ref": false,
+    "presets": null,
+    "preset_flag": null,
+    "artifacts": null,
+    "artifact_flag": null,
+    "output_kind": "image",
+    "params": {
+      "strength": {
+        "type": "float",
+        "min": 0.3,
+        "max": 0.8,
+        "default": 0.5,
+        "description": "img2img denoise: 0.5 keeps identity, higher = more anime"
+      },
+      "cfg-scale": {
+        "type": "float",
+        "min": 3.0,
+        "max": 9.0,
+        "default": 5.0,
+        "description": "CFG scale"
+      },
+      "steps": {
+        "type": "int",
+        "min": 10,
+        "max": 60,
+        "default": 30,
+        "description": "Diffusion steps"
+      },
+      "prompt-extra": {
+        "type": "str",
+        "description": "Appended to prompt (e.g. clothing for SFW variant)"
+      },
+      "anime-subdir": {
+        "type": "str",
+        "description": "Subfolder under shared/anime/ (e.g. model name)"
+      },
+      "seed": {
+        "type": "int",
+        "description": "Seed for reproducibility (empty = random)"
+      }
+    },
+    "flags": [],
+    "flag_descriptions": {},
+    "cost_estimate_usd": 0.0,
+    "wall_time_estimate_sec": 60
   }
 }

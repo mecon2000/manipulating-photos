@@ -1,0 +1,33 @@
+name: photo-tools
+label: "Photo tools"
+content:
+  root: ~/.openclaw/workspace/shared/photo-tools
+  areas:
+    finals:
+      dir: ~/.openclaw/workspace/shared/finals
+      media: [photo, video]
+    favorites:
+      dir: ~/.openclaw/workspace/shared/favorites
+      media: [photo]
+    anime:
+      dir: ~/.openclaw/workspace/shared/anime
+      media: [photo]
+    edit-later:
+      dir: ~/.openclaw/workspace/shared/edit-later
+      media: [photo]
+    candidates:
+      dir: ~/.openclaw/workspace/shared/candidates
+      media: [photo]
+    surreal:
+      dir: ~/.openclaw/workspace/shared/surreal-with-face
+      media: [photo]
+      hidden_by_default: true
+    intermediates:
+      dir: ~/.openclaw/workspace/shared/tool-outputs-intermediates
+      media: [photo, video]
+      hidden_by_default: true
+actions_from_registry: ~/gitrep/manipulating-photos/manipulating-photos-with-ui/tool_registry.json
+script_base: ~/gitrep/manipulating-photos
+registry_output_area: intermediates   # finals are pinned to shared/finals by the tools themselves
+notify:
+  topic: hub-jobs

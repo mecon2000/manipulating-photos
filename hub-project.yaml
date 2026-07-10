@@ -29,5 +29,17 @@ content:
 actions_from_registry: ~/gitrep/manipulating-photos/manipulating-photos-with-ui/tool_registry.json
 script_base: ~/gitrep/manipulating-photos
 registry_output_area: intermediates   # finals are pinned to shared/finals by the tools themselves
+actions:
+  auto-gen-tick:
+    label: "Auto-generate (weighted by favorites; replaces the old auto loop)"
+    script: ~/gitrep/manipulating-photos/scripts/workflows/auto_gen_tick.py
+    output_dir_arg: "--local-output-dir"
+    output_area: intermediates
+    serialize: true
+    params:
+      count: {type: int, min: 1, max: 5, default: 1, flag: "--count"}
+      daily-cap-usd: {type: float, min: 0.1, max: 10.0, default: 1.0, flag: "--daily-cap-usd"}
+      tools: {type: str, flag: "--tools", description: "optional csv filter, e.g. ink-dissolution,color-bath", advanced: true}
+    wall_time_estimate_sec: 180
 notify:
   topic: hub-jobs

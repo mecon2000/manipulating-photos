@@ -31,6 +31,7 @@ script_base: ~/gitrep/manipulating-photos
 registry_output_area: intermediates   # finals are pinned to shared/finals by the tools themselves
 actions:
   refresh-candidates:
+    quiet: true
     label: "Refresh candidates pool (random picks from _photos)"
     script: ~/gitrep/manipulating-photos/scripts/workflows/find-candidates.py
     params:

@@ -30,6 +30,14 @@ actions_from_registry: ~/gitrep/manipulating-photos/manipulating-photos-with-ui/
 script_base: ~/gitrep/manipulating-photos
 registry_output_area: intermediates   # finals are pinned to shared/finals by the tools themselves
 actions:
+  refresh-candidates:
+    label: "Refresh candidates pool (random picks from _photos)"
+    script: ~/gitrep/manipulating-photos/scripts/workflows/find-candidates.py
+    params:
+      count: {type: int, min: 3, max: 15, default: 5, flag: "--count"}
+    flags:
+      "--prefer-full-body": "Prefer full-body shots"
+    wall_time_estimate_sec: 60
   auto-gen-tick:
     label: "Auto-generate (weighted by favorites; replaces the old auto loop)"
     script: ~/gitrep/manipulating-photos/scripts/workflows/auto_gen_tick.py

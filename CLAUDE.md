@@ -555,9 +555,13 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 - **When user is on phone,** provide fal.ai CDN URLs for remote viewing. Local PIL-only tools don't produce CDN URLs — run result through relighting (low denoise) to get one.
 - **Scale ALL pixel-based parameters to image size.** Never use fixed pixel values for effects that should be proportional.
 
-## Autonomous Gallery (batch-runner)
+## Autonomous Gallery (batch-runner) — RETIRED 2026-07-11
 
-Launch via `manipulating-photos-with-ui/start-gallery.sh` (no args needed). Starts Flask on :5555, opens a cloudflared tunnel, pushes the public URL to Ronnie's phone via Pushbullet. Background thread continuously generates random tool+preset+photo combos; phone UI for fav / delete / "more like this". Pass-through flags: `--no-tunnel`, `--port`, `--tools baroque-surround,ink-dissolution`, etc.
+**Superseded by project-hub** (`~/gitrep/project-hub`, https://desktop-ddrctuq.tail4fbebb.ts.net):
+galleries, tool runs, curation votes, auto-gen (scheduled tick), notifications — all live there.
+batch-runner.py + start-gallery.sh + the cloudflared quick-tunnel are kept in-tree for reference
+only; do NOT launch or extend them. Notifications now go through ntfy (`notify.py` — Pushbullet
+is fallback-only). The registry (`tool_registry.json`) remains LIVE — the hub reads it.
 
 ## Git Conventions
 
@@ -572,7 +576,7 @@ All scripts output to `~/.openclaw/workspace/shared/` (visible from Windows):
 - **Final images always go to `shared/finals/`** regardless of `--local-output-dir` — this is pinned
 - `shared/favorites/` holds liked outputs + `favorites.json` with full reconstruction commands
 - `shared/bg_cache/` holds pre-generated baroque BGs for `--use-cached-bg`
-- Scripts push to phone via Pushbullet by default. Two ways to silence: set `NOTIFY_DISABLE=1` (process env), or `touch ~/.openclaw/workspace/shared/.notify_disabled` (flag file, no restart needed). The header `📲 push` checkbox in the gallery UI toggles the flag file via `/api/notify-state`.
+- Scripts push to phone via **ntfy** by default (`notify.py`; Pushbullet is fallback-only). Two ways to silence: set `NOTIFY_DISABLE=1` (process env — the hub's job runner does this, since the hub sends its own notifications), or `touch ~/.openclaw/workspace/shared/.notify_disabled` (flag file, no restart needed).
 
 ## Recommended Settings
 

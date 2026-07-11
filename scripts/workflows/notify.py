@@ -1,5 +1,6 @@
 """
-Pushbullet notification helper — sends preview images to phone.
+Phone notification helper — ntfy first (self-hosted, project-hub infra),
+Pushbullet as silent fallback (legacy, rate-limited).
 
 Usage:
     from notify import push_image, push_text
@@ -82,10 +83,37 @@ def _curl_json(url, headers=None, data=None, file_path=None, form_fields=None, t
     return None
 
 
+_NTFY = "http://127.0.0.1:8093/hub-jobs"
+_HUB = "https://desktop-ddrctuq.tail4fbebb.ts.net"
+
+
+def _ntfy_text(title, body):
+    r = subprocess.run(
+        ["curl", "-sf", "--max-time", "10", "-H", f"Title: {title}",
+         "-H", f"Click: {_HUB}", "-d", body or title, _NTFY],
+        capture_output=True, timeout=15)
+    return r.returncode == 0
+
+
+def _ntfy_image(file_path, title, body):
+    r = subprocess.run(
+        ["curl", "-sf", "--max-time", "60", "-T", file_path,
+         "-H", f"Title: {title}", "-H", f"Message: {body}"[:900],
+         "-H", f"Filename: {os.path.basename(file_path)}",
+         "-H", f"Click: {_HUB}", _NTFY],
+        capture_output=True, timeout=70)
+    return r.returncode == 0
+
+
 def push_text(title, body=""):
-    """Send a text notification to phone."""
+    """Send a text notification to phone (ntfy; Pushbullet fallback)."""
     if _is_disabled():
         return False
+    try:
+        if _ntfy_text(title, body):
+            return True
+    except Exception:
+        pass
     token = _get_token()
     if not token:
         return False
@@ -111,6 +139,11 @@ def push_image(file_path, title="", body=""):
     """
     if os.environ.get("NOTIFY_DISABLE_IMAGE") or _is_disabled():
         return False
+    try:
+        if _ntfy_image(file_path, title, body):
+            return True
+    except Exception:
+        pass
     token = _get_token()
     if not token:
         return False

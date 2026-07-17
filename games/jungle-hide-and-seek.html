@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מחבואים בג'ונגל</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { height: 100%; overflow: hidden; font-family: system-ui, "Segoe UI", Arial, sans-serif; }
+
+  body {
+    background: linear-gradient(180deg, #7ec8e3 0%, #a8dcc8 45%, #6ab04c 46%, #3d7a2e 100%);
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* ---------- top bar ---------- */
+  #hud {
+    position: fixed; top: 0; right: 0; left: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 10px 16px;
+    background: rgba(20, 60, 25, 0.75);
+    color: #fff; backdrop-filter: blur(4px);
+  }
+  #hud h1 { font-size: clamp(16px, 3vw, 24px); }
+  #found-strip { display: flex; gap: 6px; font-size: clamp(18px, 3.5vw, 28px); }
+  #found-strip .slot {
+    width: 1.5em; height: 1.5em; display: grid; place-items: center;
+    background: rgba(255,255,255,0.15); border-radius: 50%;
+    filter: grayscale(1) brightness(0.5);
+    transition: filter .4s, transform .4s;
+  }
+  #found-strip .slot.found { filter: none; transform: scale(1.15); background: rgba(255,255,255,0.4); }
+  #reset {
+    font-size: clamp(13px, 2.2vw, 16px); padding: 6px 14px; border: 0; border-radius: 20px;
+    background: #f6b93b; color: #4a2c00; font-weight: 700; cursor: pointer;
+  }
+  #reset:active { transform: scale(0.95); }
+
+  /* ---------- scene ---------- */
+  #scene { position: fixed; inset: 0; }
+
+  .sun {
+    position: absolute; top: 8%; left: 10%; width: 11vmin; height: 11vmin; border-radius: 50%;
+    background: radial-gradient(circle, #fff7ae 0%, #ffd93b 60%, rgba(255,217,59,0) 100%);
+    box-shadow: 0 0 60px 25px rgba(255, 230, 120, 0.5);
+  }
+
+  .far-tree { position: absolute; bottom: 40%; font-size: 14vmin; opacity: 0.85; filter: brightness(0.85); }
+
+  .ground-deco { position: absolute; font-size: 5vmin; opacity: 0.9; pointer-events: none; }
+
+  /* ---------- bushes ---------- */
+  .bush {
+    position: absolute; width: 22vmin; height: 16vmin;
+    cursor: pointer; transform: translate(-50%, 0);
+  }
+
+  .animal {
+    position: absolute; bottom: 18%; left: 50%; transform: translate(-50%, 0) scale(0);
+    font-size: 9vmin; z-index: 1;
+    transition: transform .45s cubic-bezier(.34,1.56,.64,1);
+    text-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  }
+  .bush.open .animal { transform: translate(-50%, -35%) scale(1); }
+
+  .leaves { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; overflow: visible; }
+  .leaves ellipse { transition: none; }
+  .half, .mid {
+    transform-box: fill-box; transform-origin: center bottom;
+    transition: transform .5s cubic-bezier(.4,0,.2,1);
+  }
+  .bush.open .half.l { transform: translate(-26%, 6%) rotate(-28deg); }
+  .bush.open .half.r { transform: translate(26%, 6%) rotate(28deg); }
+  .bush.open .mid    { transform: translate(0, 34%) scale(0.75, 0.55); }
+
+  .bush.rustle { animation: rustle .45s ease; }
+  @keyframes rustle {
+    0%, 100% { transform: translate(-50%, 0) rotate(0); }
+    25% { transform: translate(-50%, 0) rotate(3deg) scale(1.03, 0.97); }
+    50% { transform: translate(-50%, 0) rotate(-3deg); }
+    75% { transform: translate(-50%, 0) rotate(2deg) scale(0.98, 1.02); }
+  }
+
+  /* sparkle burst on find */
+  .spark {
+    position: absolute; font-size: 3.5vmin; pointer-events: none; z-index: 5;
+    animation: fly .9s ease-out forwards;
+  }
+  @keyframes fly {
+    from { transform: translate(0, 0) scale(1); opacity: 1; }
+    to   { transform: translate(var(--dx), var(--dy)) scale(0.3); opacity: 0; }
+  }
+
+  /* ---------- win overlay ---------- */
+  #win {
+    position: fixed; inset: 0; z-index: 100; display: none;
+    place-items: center; background: rgba(10, 40, 15, 0.75);
+  }
+  #win.show { display: grid; }
+  #win .card {
+    background: #fffbe6; padding: 5vmin 8vmin; border-radius: 24px; text-align: center;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.4); animation: pop .5s cubic-bezier(.34,1.56,.64,1);
+  }
+  @keyframes pop { from { transform: scale(0.3); } to { transform: scale(1); } }
+  #win h2 { font-size: clamp(22px, 5vw, 40px); color: #2d6a1e; margin-bottom: 8px; }
+  #win p { font-size: clamp(30px, 7vw, 56px); margin: 10px 0 18px; }
+  #win button {
+    font-size: clamp(16px, 3vw, 22px); padding: 10px 28px; border: 0; border-radius: 30px;
+    background: #6ab04c; color: #fff; font-weight: 700; cursor: pointer;
+  }
+
+  #hint {
+    position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; z-index: 40;
+    color: rgba(255,255,255,0.95); font-size: clamp(13px, 2.5vw, 18px);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6); pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <h1>🌴 מחבואים בג'ונגל</h1>
+  <div id="found-strip"></div>
+  <button id="reset">משחק חדש</button>
+</div>
+
+<div id="scene"></div>
+
+<div id="hint">לחצו על השיחים — בחלק מהם מסתתרות חיות! 🔍</div>
+
+<div id="win">
+  <div class="card">
+    <h2>כל הכבוד! מצאתם את כל החיות! 🎉</h2>
+    <p id="win-animals"></p>
+    <button id="play-again">עוד פעם!</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const ANIMAL_POOL = ['🐒', '🦜', '🐸', '🦎', '🐯', '🦉', '🐍', '🦋', '🐘', '🦥'];
+  const ANIMALS_PER_ROUND = 5;
+  const REVEAL_MS = 2600;
+
+  // bush positions: [left%, bottom%, scale]
+  const BUSH_SPOTS = [
+    [12, 4,  1.15], [30, 2,  1.0], [50, 5,  1.25], [70, 2,  1.05], [88, 4,  1.1],
+    [21, 22, 0.85], [45, 24, 0.9], [65, 21, 0.8],  [84, 24, 0.85],
+  ];
+
+  const scene = document.getElementById('scene');
+  const strip = document.getElementById('found-strip');
+  const winEl = document.getElementById('win');
+
+  let roundAnimals = [];   // animals hiding this round
+  let bushAnimal = [];     // per-bush: emoji or null
+  let found = new Set();
+
+  function bushSVG() {
+    // three leaf clusters: left half, right half, middle — halves swing apart on reveal
+    const g = (cls, ellipses) =>
+      `<g class="${cls}">` + ellipses.map(([cx, cy, rx, ry, fill]) =>
+        `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${fill}"/>`).join('') + '</g>';
+    return `<svg class="leaves" viewBox="0 0 200 140" preserveAspectRatio="none">` +
+      g('half l', [
+        [50, 95, 48, 42, '#2d7a2e'], [35, 75, 32, 30, '#3a9440'], [62, 62, 26, 24, '#4caf50'],
+      ]) +
+      g('half r', [
+        [150, 95, 48, 42, '#2b7030'], [165, 75, 32, 30, '#3a9440'], [138, 62, 26, 24, '#43a047'],
+      ]) +
+      g('mid', [
+        [100, 100, 52, 40, '#256d28'], [100, 70, 36, 32, '#37953d'], [100, 50, 24, 22, '#52b455'],
+      ]) +
+      `</svg>`;
+  }
+
+  function decorateScene() {
+    scene.insertAdjacentHTML('beforeend', `<div class="sun"></div>`);
+    [['5%', '🌴'], ['24%', '🌳'], ['58%', '🌴'], ['78%', '🌳'], ['92%', '🌴']].forEach(([l, t]) =>
+      scene.insertAdjacentHTML('beforeend', `<div class="far-tree" style="left:${l}">${t}</div>`));
+    [['8%', '10%', '🌺'], ['40%', '14%', '🍄'], ['60%', '11%', '🌺'], ['93%', '13%', '🌼'], ['26%', '9%', '🪨']]
+      .forEach(([l, b, e]) =>
+        scene.insertAdjacentHTML('beforeend', `<div class="ground-deco" style="left:${l};bottom:${b}">${e}</div>`));
+  }
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function newRound() {
+    document.querySelectorAll('.bush').forEach(b => b.remove());
+    winEl.classList.remove('show');
+    found = new Set();
+
+    roundAnimals = shuffle([...ANIMAL_POOL]).slice(0, ANIMALS_PER_ROUND);
+    const spots = shuffle(BUSH_SPOTS.map((_, i) => i));
+    bushAnimal = BUSH_SPOTS.map(() => null);
+    roundAnimals.forEach((a, i) => bushAnimal[spots[i]] = a);
+
+    strip.innerHTML = roundAnimals.map(a =>
+      `<div class="slot" data-animal="${a}">${a}</div>`).join('');
+
+    BUSH_SPOTS.forEach(([left, bottom, s], i) => {
+      const bush = document.createElement('div');
+      bush.className = 'bush';
+      bush.style.cssText =
+        `left:${left}%; bottom:${bottom}%; width:${22 * s}vmin; height:${16 * s}vmin; z-index:${10 + Math.round((30 - bottom))}`;
+      bush.innerHTML = `<div class="animal">${bushAnimal[i] || ''}</div>` + bushSVG();
+      bush.addEventListener('click', () => onBushClick(bush, i));
+      scene.appendChild(bush);
+    });
+  }
+
+  function onBushClick(bush, i) {
+    if (bush.classList.contains('open')) return;
+    const animal = bushAnimal[i];
+
+    if (!animal) {
+      bush.classList.remove('rustle');
+      void bush.offsetWidth;           // restart animation
+      bush.classList.add('rustle');
+      chirp(160, 0.08);
+      return;
+    }
+
+    bush.classList.add('open');
+    chirp(520, 0.12); setTimeout(() => chirp(760, 0.12), 110);
+    sparks(bush);
+
+    if (!found.has(animal)) {
+      found.add(animal);
+      const slot = strip.querySelector(`.slot[data-animal="${animal}"]`);
+      if (slot) slot.classList.add('found');
+    }
+
+    setTimeout(() => {
+      bush.classList.remove('open');
+      if (found.size === roundAnimals.length) setTimeout(showWin, 600);
+    }, REVEAL_MS);
+  }
+
+  function sparks(bush) {
+    for (let k = 0; k < 6; k++) {
+      const s = document.createElement('div');
+      s.className = 'spark';
+      s.textContent = '✨';
+      const ang = (k / 6) * Math.PI * 2;
+      s.style.cssText = `left:50%;top:30%;--dx:${Math.cos(ang) * 60}px;--dy:${Math.sin(ang) * 60 - 30}px`;
+      bush.appendChild(s);
+      setTimeout(() => s.remove(), 900);
+    }
+  }
+
+  function showWin() {
+    document.getElementById('win-animals').textContent = roundAnimals.join(' ');
+    winEl.classList.add('show');
+    [660, 830, 990, 1320].forEach((f, i) => setTimeout(() => chirp(f, 0.15), i * 130));
+  }
+
+  // tiny WebAudio blip — no assets needed
+  let audioCtx = null;
+  function chirp(freq, dur) {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + dur);
+    } catch (e) { /* audio blocked — game works silently */ }
+  }
+
+  document.getElementById('reset').addEventListener('click', newRound);
+  document.getElementById('play-again').addEventListener('click', newRound);
+
+  decorateScene();
+  newRound();
+})();
+</script>
+</body>
+</html>

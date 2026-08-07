@@ -261,6 +261,46 @@ def _make_server(session_id: str, events: asyncio.Queue):
             return {"content": [{"type": "text", "text": f"lock failed: {e}"}],
                     "is_error": True}
 
+    @tool("save_recipe", "Save the current chain as a reusable recipe. Give it a short "
+          "evocative name. All steps default to 'general'; Ronnie can flip specifics "
+          "in the save dialog later.", {"name": str})
+    async def save_recipe(args):
+        try:
+            def _work():
+                from . import recipes as rmod
+                s = Session.load(session_id)
+                draft = rmod.suggest_from_session(s)
+                if args.get("name"):
+                    draft["name"] = str(args["name"])[:80]
+                thumb = runner.evaluate(s)[-1]["output"] if s.data["head"] else None
+                return rmod.save(draft, thumbnail_ref=thumb)
+            r = await asyncio.to_thread(_work)
+            return {"content": [{"type": "text", "text":
+                    f"saved recipe {r['name']!r} (slug {r['slug']}) with "
+                    f"{len(r['steps'])} steps — it's in the Recipes view."}]}
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"save_recipe failed: {e}"}],
+                    "is_error": True}
+
+    @tool("update_recipe", "Fold a recurring delta into a recipe's base: merge params "
+          "into one step. Use when the same tweak keeps recurring across a batch "
+          "(propose it to Ronnie first).",
+          {"slug": str, "step_index": int, "params": dict})
+    async def update_recipe(args):
+        try:
+            def _work():
+                from . import recipes as rmod
+                return rmod.update_step_params(args["slug"],
+                                               int(args["step_index"]),
+                                               args.get("params") or {})
+            r = await asyncio.to_thread(_work)
+            return {"content": [{"type": "text", "text":
+                    f"folded into {r['slug']} step {args['step_index']}: "
+                    f"{json.dumps(r['steps'][int(args['step_index'])]['params'])}"}]}
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"update_recipe failed: {e}"}],
+                    "is_error": True}
+
     @tool("get_graph", "Current step graph: chain of steps root→head with params.", {})
     async def get_graph(args):
         s = Session.load(session_id)
@@ -278,7 +318,8 @@ def _make_server(session_id: str, events: asyncio.Queue):
 
     return create_sdk_mcp_server("studio",
                                  tools=[run_step, run_variants, build_mask, look,
-                                        propose_params, lock_tool, get_graph, undo])
+                                        propose_params, lock_tool, save_recipe,
+                                        update_recipe, get_graph, undo])
 
 
 def _scrubbed_env() -> dict:
@@ -318,6 +359,12 @@ async def chat(session_id: str, message: str, context: dict | None = None):
     graph_block = "\n\nSteps currently applied (root→head): " + (
         " → ".join(f"{n['tool']}({json.dumps(n['params'])}, seed={n['seed']})"
                    for n in chain) if chain else "none yet — pristine photo")
+    if s.data.get("recipe"):
+        graph_block += (
+            f"\n\nThis session was seeded from recipe '{s.data['recipe']}' (part of a "
+            "batch). Ronnie's tweaks here are DELTAS on the recipe. If you notice the "
+            "same delta recurring across photos of this batch (check chat history), "
+            "propose folding it into the base recipe — on his yes, use update_recipe.")
 
     options = ClaudeAgentOptions(
         model=MODEL,
@@ -328,6 +375,7 @@ async def chat(session_id: str, message: str, context: dict | None = None):
         allowed_tools=["mcp__studio__run_step", "mcp__studio__run_variants",
                        "mcp__studio__build_mask", "mcp__studio__look",
                        "mcp__studio__propose_params", "mcp__studio__lock",
+                       "mcp__studio__save_recipe", "mcp__studio__update_recipe",
                        "mcp__studio__get_graph", "mcp__studio__undo"],
         disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep",
                           "WebFetch", "WebSearch", "Task", "NotebookEdit"],

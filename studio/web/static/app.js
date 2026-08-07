@@ -4,6 +4,7 @@ import { renderToolGrid, renderParamForm } from "./params.js";
 import { init as initChat } from "./chat.js";
 import { initVariantNav, updateVariantNav } from "./variants.js";
 import { initLock } from "./lock.js";
+import { initRecipeSave } from "./recipe_save.js";
 
 const BASE = window.STUDIO.base || "";
 const SESSION_ID = window.STUDIO.sessionId;
@@ -71,6 +72,7 @@ const els = {
   stepsBody: document.getElementById("steps-body"),
   stepsStrip: document.getElementById("steps-strip"),
   lockBtn: document.getElementById("lock-btn"),
+  recipeSaveBtn: document.getElementById("recipe-save-btn"),
   paramsToggle: document.getElementById("params-toggle"),
   paramsBody: document.getElementById("params-body"),
   paramsContent: document.getElementById("params-content"),
@@ -97,6 +99,7 @@ async function main() {
     onFlip: onVariantPick,
   });
   initLock({ apiBase: API, sessionId: SESSION_ID, buttonEl: els.lockBtn, toast, onLocked: refreshSession });
+  initRecipeSave({ apiBase: API, base: BASE, sessionId: SESSION_ID, buttonEl: els.recipeSaveBtn, toast });
 
   wireTopbar();
   wireModeBar();

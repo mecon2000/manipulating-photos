@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Studio — Recipes</title>
+<link rel="stylesheet" href="{{ base }}/static/app.css">
+</head>
+<body>
+<div class="topbar">
+  <a class="back-link" href="{{ base }}/">‹ Studio</a>
+  <div class="title">Recipes</div>
+  <a class="nav-link" href="{{ base }}/batches">Batches</a>
+</div>
+
+<main class="home">
+  <h2 class="section-h">Saved recipes</h2>
+  <div id="recipe-grid" class="recipe-grid">
+    <div class="empty-hint">Loading…</div>
+  </div>
+
+  <h2 class="section-h">Import from favorites</h2>
+  <div id="fav-list" class="fav-list">
+    <div class="empty-hint">Loading…</div>
+  </div>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+  window.STUDIO = { base: "{{ base }}" };
+</script>
+<script type="module" src="{{ base }}/static/recipes.js"></script>
+</body>
+</html>

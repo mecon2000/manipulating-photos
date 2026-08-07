@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Studio — Batches</title>
+<link rel="stylesheet" href="{{ base }}/static/app.css">
+</head>
+<body>
+<div class="topbar">
+  <a class="back-link" href="{{ base }}/">‹ Studio</a>
+  <div class="title">Batches</div>
+  <a class="nav-link" href="{{ base }}/recipes">Recipes</a>
+</div>
+
+<main class="home batches-main">
+  <div id="batch-list">
+    <div class="empty-hint">Loading…</div>
+  </div>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+  window.STUDIO = { base: "{{ base }}" };
+</script>
+<script type="module" src="{{ base }}/static/batches.js"></script>
+</body>
+</html>

@@ -37,6 +37,15 @@ actions_from_registry: ~/gitrep/manipulating-photos/manipulating-photos-with-ui/
 script_base: ~/gitrep/manipulating-photos
 registry_output_area: intermediates   # finals are pinned to shared/finals by the tools themselves
 actions:
+  studio-apply-recipe:
+    label: "Studio: apply recipe to selected photos"
+    script: ~/gitrep/manipulating-photos/studio/apply_recipe.py
+    source_arg: "--source"
+    output_dir_arg: "--local-output-dir"
+    output_area: intermediates
+    params:
+      recipe: {type: str, flag: "--recipe", description: "recipe slug (see /studio/recipes)"}
+    wall_time_estimate_sec: 300
   refresh-candidates:
     quiet: true
     label: "Refresh candidates pool (random picks from _photos)"

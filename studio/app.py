@@ -20,9 +20,10 @@ from fastapi.responses import (FileResponse, HTMLResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import agent, cache, costs, lock, params_usage, registry, runner
+from . import (agent, cache, costs, lock, params_usage, recipes, registry,
+               runner)
 from .graph import Session
-from .paths import RUNS_DIR, SESSIONS_DIR, ensure_dirs, safe_source
+from .paths import RUNS_DIR, SESSIONS_DIR, SHARED, ensure_dirs, safe_source
 
 WEB = Path(__file__).parent / "web"
 app = FastAPI(title="studio")
@@ -95,7 +96,7 @@ def home(request: Request):
 
 
 @app.get("/new")
-def new_session(request: Request, src: str):
+def new_session(request: Request, src: str, recipe: str = ""):
     try:
         p = safe_source(src)
     except PermissionError as e:
@@ -103,6 +104,11 @@ def new_session(request: Request, src: str):
     if not p.is_file():
         raise HTTPException(404, f"no such file: {p}")
     s = Session.create(str(p), cache.put_file(p))
+    if recipe:
+        r = recipes.get(recipe)
+        if r is None:
+            raise HTTPException(404, f"no recipe {recipe}")
+        recipes.apply_to_session(s, r)
     return RedirectResponse(f"{_base(request)}/s/{s.data['id']}", status_code=303)
 
 
@@ -119,6 +125,151 @@ def studio_page(request: Request, session_id: str):
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/recipes", response_class=HTMLResponse)
+def recipes_page(request: Request):
+    return templates.TemplateResponse(request, "recipes.html",
+                                      {"base": _base(request)})
+
+
+@app.get("/batches", response_class=HTMLResponse)
+def batches_page(request: Request):
+    return templates.TemplateResponse(request, "batches.html",
+                                      {"base": _base(request)})
+
+
+# -- recipes API -------------------------------------------------------------
+
+HUB_URL = "http://127.0.0.1:8700"
+CANDIDATES_DIR = SHARED / "candidates"
+
+
+@app.get("/api/recipes")
+def api_recipes():
+    return {"recipes": recipes.list_all()}
+
+
+@app.get("/api/recipes/suggest")
+def api_recipe_suggest(session_id: str):
+    s = _load_session(session_id)
+    return recipes.suggest_from_session(s)
+
+
+@app.post("/api/recipes")
+def api_recipe_save(body: dict = Body(...)):
+    s = _load_session(body["session_id"])
+    draft = recipes.suggest_from_session(s)
+    if body.get("name"):
+        draft["name"] = str(body["name"])[:80]
+    marks = body.get("general_marks")  # list of bools aligned with steps
+    if isinstance(marks, list):
+        for step, mark in zip(draft["steps"], marks):
+            step["general"] = bool(mark)
+    thumb = api_session(body["session_id"])["canvas_ref"]
+    return recipes.save(draft, thumbnail_ref=thumb)
+
+
+@app.post("/api/recipes/import-favorite")
+def api_recipe_import(body: dict = Body(...)):
+    try:
+        favs = json.loads((SHARED / "favorites" / "favorites.json").read_text()
+                          )["favorites"]
+    except (OSError, ValueError, KeyError):
+        raise HTTPException(500, "cannot read favorites.json")
+    wanted = body.get("file")
+    entry = next((f for f in reversed(favs) if f.get("file") == wanted), None)
+    if entry is None:
+        raise HTTPException(404, f"no favorite {wanted!r}")
+    return recipes.save(recipes.from_favorite(entry))
+
+
+@app.get("/api/favorites")
+def api_favorites(limit: int = 30):
+    try:
+        favs = json.loads((SHARED / "favorites" / "favorites.json").read_text()
+                          )["favorites"]
+    except (OSError, ValueError, KeyError):
+        favs = []
+    return {"favorites": [{"file": f.get("file"), "tool": f.get("tool")}
+                          for f in reversed(favs[-limit:])]}
+
+
+@app.patch("/api/recipes/{slug}")
+def api_recipe_rename(slug: str, body: dict = Body(...)):
+    try:
+        return recipes.rename(slug, str(body["name"])[:80])
+    except KeyError:
+        raise HTTPException(404, f"no recipe {slug}")
+
+
+@app.delete("/api/recipes/{slug}")
+def api_recipe_delete(slug: str):
+    try:
+        recipes.delete(slug)
+    except KeyError:
+        raise HTTPException(404, f"no recipe {slug}")
+    return {"ok": True}
+
+
+@app.get("/api/recipes/{slug}/thumb")
+def api_recipe_thumb(slug: str):
+    r = recipes.get(slug)
+    if r is None or not r.get("thumbnail"):
+        raise HTTPException(404, "no thumbnail")
+    return FileResponse(recipes.RECIPES_DIR / r["thumbnail"])
+
+
+@app.post("/api/recipes/{slug}/apply")
+def api_recipe_apply(slug: str, body: dict = Body(default={})):
+    """Kick a batch through the hub's job runner (Jobs tab + ntfy)."""
+    import random
+
+    import requests as _rq
+    if recipes.get(slug) is None:
+        raise HTTPException(404, f"no recipe {slug}")
+    n = max(1, min(int(body.get("n", 4)), 12))
+    sources = body.get("sources") or []
+    if not sources:
+        pool = sorted(str(p) for p in CANDIDATES_DIR.glob("*.jp*g"))
+        model = (body.get("model") or "").lower()
+        if model:
+            pool = [p for p in pool if model in Path(p).name.lower()]
+        if not pool:
+            raise HTTPException(404, "no matching candidate photos")
+        sources = random.sample(pool, min(n, len(pool)))
+    try:
+        r = _rq.post(f"{HUB_URL}/api/p/photo-tools/action/studio-apply-recipe",
+                     json={"sources": sources, "params": {"recipe": slug}},
+                     timeout=30)
+        r.raise_for_status()
+        return {"job": r.json().get("job"), "sources": sources,
+                "jobs_url": "/#p=photo-tools&tab=jobs"}
+    except _rq.RequestException as e:
+        raise HTTPException(502, f"hub job runner unreachable: {e}")
+
+
+@app.get("/api/batches")
+def api_batches():
+    out = []
+    bdir = SHARED / "studio" / "batches"
+    if bdir.exists():
+        for p in sorted(bdir.glob("*/batch.json"), reverse=True):
+            try:
+                out.append(json.loads(p.read_text()))
+            except ValueError:
+                continue
+    return {"batches": out[:20]}
+
+
+@app.get("/api/batches/{batch_id}/{filename}")
+def api_batch_file(batch_id: str, filename: str):
+    if "/" in batch_id or "/" in filename or ".." in batch_id or ".." in filename:
+        raise HTTPException(400, "bad path")
+    p = SHARED / "studio" / "batches" / batch_id / filename
+    if not p.is_file():
+        raise HTTPException(404, "no such file")
+    return FileResponse(p)
 
 
 # -- API ---------------------------------------------------------------------

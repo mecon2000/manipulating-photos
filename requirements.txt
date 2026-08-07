@@ -27,3 +27,6 @@ transformers>=4.40
 
 # Vision / pose
 mediapipe>=0.10
+fastapi
+uvicorn[standard]
+httpx

@@ -1,2 +1,5 @@
 scripts/workflows/literary_quotes.npy
 *.mp4
+
+# Studio runtime state (ext4, regenerable)
+studio/state/

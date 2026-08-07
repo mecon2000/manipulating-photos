@@ -46,6 +46,11 @@ actions:
     params:
       recipe: {type: str, flag: "--recipe", description: "recipe slug (see /studio/recipes)"}
     wall_time_estimate_sec: 300
+  studio-mine-taste:
+    quiet: true
+    label: "Studio: regenerate taste profile from favorites + journal"
+    script: ~/gitrep/manipulating-photos/studio/mine_taste.py
+    wall_time_estimate_sec: 120
   refresh-candidates:
     quiet: true
     label: "Refresh candidates pool (random picks from _photos)"

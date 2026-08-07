@@ -20,8 +20,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import (agent, cache, costs, lock, params_usage, recipes, registry,
-               runner)
+from . import (activity, agent, cache, costs, lock, params_usage, recipes,
+               registry, runner)
 from .graph import Session
 from .paths import RUNS_DIR, SESSIONS_DIR, SHARED, ensure_dirs, safe_source
 
@@ -351,10 +351,55 @@ def api_step(session_id: str, body: dict = Body(...)):
 @app.post("/api/session/{session_id}/eval")
 def api_eval(session_id: str, body: dict = Body(default={})):
     s = _load_session(session_id)
+    label = " → ".join(n["tool"] for n in s.chain()[-2:]) or "eval"
+    name = Path(s.data["source_path"]).name
+
+    if body.get("background"):
+        import threading
+
+        def _bg():
+            try:
+                runner.evaluate(s, body.get("node_id"))
+                activity.finish(session_id, True, name)
+            except Exception:
+                activity.finish(session_id, False, name)
+
+        activity.start(session_id, label)
+        threading.Thread(target=_bg, daemon=True).start()
+        return {"background": True}
+
+    activity.start(session_id, label)
     try:
-        return {"results": runner.evaluate(s, body.get("node_id"))}
+        results = runner.evaluate(s, body.get("node_id"))
+        activity.finish(session_id, True, name)
+        activity.mark_seen(session_id)  # the requesting client sees it directly
+        return {"results": results}
     except (RuntimeError, KeyError, ValueError, FileNotFoundError) as e:
+        activity.finish(session_id, False, name)
         raise HTTPException(500, str(e))
+
+
+@app.get("/api/sessions-status")
+def api_sessions_status():
+    """Tab strip data: recent sessions + activity (spinner/ready badges)."""
+    act = activity.status()
+    sessions = []
+    for sid in reversed(Session.list_ids()[-12:]):
+        try:
+            s = Session.load(sid)
+        except (OSError, ValueError):
+            continue
+        sessions.append({"id": sid,
+                         "source_name": Path(s.data["source_path"]).name,
+                         "steps": len(s.chain()),
+                         **act.get(sid, {"running": False, "ready": False})})
+    return {"sessions": sessions}
+
+
+@app.post("/api/session/{session_id}/seen")
+def api_seen(session_id: str):
+    activity.mark_seen(session_id)
+    return {"ok": True}
 
 
 @app.post("/api/session/{session_id}/edit")

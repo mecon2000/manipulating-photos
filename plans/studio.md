@@ -144,6 +144,10 @@ System prompt assembled from: the distilled "Lessons Learned" + shibari rules + 
 
 **Phase 6 — Parallelism + polish.** Multi-session tab strip, background-job badges + ntfy, taste-profile miner job, agent-knowledge doc, transcript persistence/resume, mobile polish pass (thumb-reach, gesture conflicts between pan/brush — use an explicit mode toggle).
 
+> **STATUS: DONE (2026-08-08).** `studio/activity.py` (per-session running/ready tracking; ntfy ping for steps >20s via notify.py), `/api/sessions-status` + `/seen`, eval `{background: true}` mode (auto-selected client-side for tools estimated >30s); session tab strip under the topbar (spinner while running, teal ● when ready, auto-refresh + seen on the current tab, 5s polling paused when hidden); `studio/agent-knowledge.md` (distilled craft brain — append new lessons there), `journal` agent tool + cross-session journal tail + taste profile all injected into every session's system prompt (§3.6 shared brain); `studio/mine_taste.py` (manifest action `studio-mine-taste`, schedulable in hub) — verified: 193 favorites mined → 7 LLM-distilled taste statements via the SDK on the subscription; transcript persistence = per-session chat.jsonl replay (from Phase 2; SDK-level resume still not possible with per-request clients — revisit only if the SDK session store gains disk persistence); mobile polish (100dvh layout lock, 38vh canvas, ≥40px targets, safe-area chat input, touch-action manipulation, overscroll containment). Gesture conflicts were already avoided by the explicit Pan/Brush/Markers/Select mode toggle.
+>
+> **All six phases implemented.** Remaining for Ronnie: install the systemd units (`cp studio/systemd/*.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now studio studio-tools studio-sam`), `systemctl --user restart project-hub` (for the links/link_template frontend), and the Phase 2 phone walkthrough.
+
 ## 5. Non-goals (now)
 - Replacing the random-candidates/auto-gen flow (stays; Studio is the "Tweak" path out of it).
 - Multi-user; public exposure beyond the existing Tailscale setup.

@@ -25,7 +25,12 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
 
 from . import eyes, masks, registry, runner
 from .graph import Session
-from .paths import SESSIONS_DIR
+from .paths import REPO, SESSIONS_DIR, STATE
+
+KNOWLEDGE_FILE = REPO / "studio" / "agent-knowledge.md"
+JOURNAL_FILE = STATE / "journal.md"
+TASTE_FILE = STATE / "taste.json"
+JOURNAL_TAIL_CHARS = 4000
 
 MODEL = "sonnet"  # fast + cheap on the subscription; the buddy talks in short bursts
 
@@ -75,6 +80,35 @@ def _append_history(session_id: str, role: str, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "a") as f:
         f.write(json.dumps({"role": role, "text": text, "ts": time.time()}) + "\n")
+
+
+def _brain_blocks() -> str:
+    """§3.6 shared project brain: knowledge doc + taste profile + cross-session
+    journal tail. Same for every session — what makes them feel like one
+    continuous collaboration."""
+    parts = []
+    try:
+        parts.append("\n\n# Craft knowledge\n" + KNOWLEDGE_FILE.read_text())
+    except OSError:
+        pass
+    try:
+        taste = json.loads(TASTE_FILE.read_text())
+        parts.append("\n\n# Ronnie's taste profile (mined from favorites/votes)\n"
+                     + json.dumps(taste, indent=1))
+    except (OSError, ValueError):
+        pass
+    try:
+        tail = JOURNAL_FILE.read_text()[-JOURNAL_TAIL_CHARS:]
+        parts.append("\n\n# Cross-session journal (recent)\n" + tail)
+    except OSError:
+        pass
+    return "".join(parts)
+
+
+def append_journal(note: str) -> None:
+    JOURNAL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(JOURNAL_FILE, "a") as f:
+        f.write(f"- {time.strftime('%Y-%m-%d %H:%M')} — {note.strip()}\n")
 
 
 def _tools_summary() -> str:
@@ -301,6 +335,18 @@ def _make_server(session_id: str, events: asyncio.Queue):
             return {"content": [{"type": "text", "text": f"update_recipe failed: {e}"}],
                     "is_error": True}
 
+    @tool("journal", "Append a one-line insight to the shared cross-session journal "
+          "('whole batch wanted less contrast', 'Ronnie hates warm cast on skin in "
+          "the red-fever set'). Every Studio session reads it — use for anything a "
+          "future session should know.", {"note": str})
+    async def journal_tool(args):
+        note = (args.get("note") or "").strip()
+        if not note:
+            return {"content": [{"type": "text", "text": "empty note"}],
+                    "is_error": True}
+        await asyncio.to_thread(append_journal, note)
+        return {"content": [{"type": "text", "text": "noted in the journal"}]}
+
     @tool("get_graph", "Current step graph: chain of steps root→head with params.", {})
     async def get_graph(args):
         s = Session.load(session_id)
@@ -319,7 +365,8 @@ def _make_server(session_id: str, events: asyncio.Queue):
     return create_sdk_mcp_server("studio",
                                  tools=[run_step, run_variants, build_mask, look,
                                         propose_params, lock_tool, save_recipe,
-                                        update_recipe, get_graph, undo])
+                                        update_recipe, journal_tool, get_graph,
+                                        undo])
 
 
 def _scrubbed_env() -> dict:
@@ -370,13 +417,14 @@ async def chat(session_id: str, message: str, context: dict | None = None):
         model=MODEL,
         system_prompt=SYSTEM_PROMPT + "\n\nCurrent photo: " + s.data["source_path"]
         + "\n\nAvailable tools for run_step:\n" + _tools_summary()
-        + graph_block + history_block,
+        + _brain_blocks() + graph_block + history_block,
         mcp_servers={"studio": _make_server(session_id, events)},
         allowed_tools=["mcp__studio__run_step", "mcp__studio__run_variants",
                        "mcp__studio__build_mask", "mcp__studio__look",
                        "mcp__studio__propose_params", "mcp__studio__lock",
                        "mcp__studio__save_recipe", "mcp__studio__update_recipe",
-                       "mcp__studio__get_graph", "mcp__studio__undo"],
+                       "mcp__studio__journal", "mcp__studio__get_graph",
+                       "mcp__studio__undo"],
         disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep",
                           "WebFetch", "WebSearch", "Task", "NotebookEdit"],
         permission_mode="bypassPermissions",

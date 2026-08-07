@@ -5,6 +5,7 @@ import { init as initChat } from "./chat.js";
 import { initVariantNav, updateVariantNav } from "./variants.js";
 import { initLock } from "./lock.js";
 import { initRecipeSave } from "./recipe_save.js";
+import { init as initSessionTabs } from "./session_tabs.js";
 
 const BASE = window.STUDIO.base || "";
 const SESSION_ID = window.STUDIO.sessionId;
@@ -100,6 +101,16 @@ async function main() {
   });
   initLock({ apiBase: API, sessionId: SESSION_ID, buttonEl: els.lockBtn, toast, onLocked: refreshSession });
   initRecipeSave({ apiBase: API, base: BASE, sessionId: SESSION_ID, buttonEl: els.recipeSaveBtn, toast });
+  initSessionTabs({
+    containerEl: document.getElementById("session-tabs"),
+    apiBase: API,
+    base: BASE,
+    sessionId: SESSION_ID,
+    onCurrentReady: async () => {
+      await refreshSession();
+      await refreshCost();
+    },
+  });
 
   wireTopbar();
   wireModeBar();
@@ -397,17 +408,28 @@ function renderAddStepForm(container, toolName) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tool: toolName, params, seed: values.seed, flags: values.flags }),
       });
-      progress.textContent = "Running (this can take a while)…";
-      await api(`/session/${SESSION_ID}/eval`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ node_id: node.id }),
-      });
+      const schema = state.tools[toolName];
+      if (schema && schema.wall_time_estimate_sec > 30) {
+        progress.textContent = "Running in background…";
+        await api(`/session/${SESSION_ID}/eval`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: node.id, background: true }),
+        });
+        toast("Running in background — tab badge + phone ping when ready");
+      } else {
+        progress.textContent = "Running (this can take a while)…";
+        await api(`/session/${SESSION_ID}/eval`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: node.id }),
+        });
+        toast("Step complete");
+      }
       state.addingTool = null;
       state.selectedNodeId = null;
       await refreshSession();
       await refreshCost();
-      toast("Step complete");
     } catch (err) {
       progress.textContent = `Failed: ${err.message}`;
     } finally {
@@ -470,15 +492,26 @@ function renderEditForm(container, node) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ node_id: node.id, params, seed: values.seed }),
       });
-      progress.textContent = "Running (this can take a while)…";
-      await api(`/session/${SESSION_ID}/eval`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ node_id: head }),
-      });
+      const schema = state.tools[node.tool];
+      if (schema && schema.wall_time_estimate_sec > 30) {
+        progress.textContent = "Running in background…";
+        await api(`/session/${SESSION_ID}/eval`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: head, background: true }),
+        });
+        toast("Running in background — tab badge + phone ping when ready");
+      } else {
+        progress.textContent = "Running (this can take a while)…";
+        await api(`/session/${SESSION_ID}/eval`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: head }),
+        });
+        toast("Updated");
+      }
       await refreshSession();
       await refreshCost();
-      toast("Updated");
     } catch (err) {
       progress.textContent = `Failed: ${err.message}`;
     } finally {

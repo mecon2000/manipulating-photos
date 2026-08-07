@@ -2,6 +2,10 @@
 
 Photo transformation pipeline for portrait/boudoir photography. Fourteen active tools with unified `--affect`/`--exclude` masking. See `tools_tree.md` (at repo root) for the full map with status (active/paused/dropped).
 
+## Studio (conversational photo tweaking)
+
+`studio/` — chat+canvas app for iterating on single photos with an AI buddy. Full spec + per-phase status: `plans/studio.md`. Services: web app :8701 (tailnet `https://desktop-ddrctuq.tail4fbebb.ts.net/studio/`), tool server :8702, SAM 2 tap-to-mask :8703, Ollama VLM :11434. Start all: `./studio/run.sh`; systemd units in `studio/systemd/` (`cp` to `~/.config/systemd/user/`, `systemctl --user enable --now studio studio-tools studio-sam`). Runtime state on ext4 at `studio/state/` (gitignored); recipes/batches/finals export to `shared/`. Key gotchas: Claude Agent SDK runs on the CLI subscription — `ANTHROPIC_API_KEY` must be scrubbed at process level (options.env MERGES over parent env); tailscale serve strips the `/studio` mount path (detected via `X-Forwarded-Host`); writes to `shared/` (9p) must use `shutil.copyfile` (copy2/copy hit EPERM on utime/chmod); torch cudnn is disabled in the SAM service (WSL cu13 sublibrary mismatch). The agent's craft brain lives in `studio/agent-knowledge.md` — append new tool lessons there so the buddy keeps up.
+
 **Archived / parked / superseded tools live in `ARCHIVED.md`. Read that file before answering questions about, or recommending, any of these:** `silhouette-backdrop`, `style_transfer_replicate`, `tensor_photo_workflow`, `pro_photo_workflow*`, `anya_pro_workflow`, `michaela_pro_workflow`, removed presets `glacial-veil` / `frozen-breath`, or shadow-casting in `noir-paint`.
 
 ## Bootstrap (fresh machine)

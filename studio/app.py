@@ -216,6 +216,47 @@ def api_brush_mask(session_id: str, body: dict = Body(...)):
     return {"mask": ref}
 
 
+SAM_URL = "http://127.0.0.1:8703"
+
+
+def _canvas_ref(s: Session) -> str:
+    return api_session(s.data["id"])["canvas_ref"]
+
+
+@app.post("/api/session/{session_id}/point-mask")
+def api_point_mask(session_id: str, body: dict = Body(...)):
+    """Tap-to-mask: forward normalized points to the SAM 2 service against
+    the current canvas image."""
+    import requests as _rq
+    s = _load_session(session_id)
+    payload = {"ref": body.get("ref") or _canvas_ref(s),
+               "points": body.get("points") or [],
+               "labels": body.get("labels")}
+    if body.get("box"):
+        payload["box"] = body["box"]
+    try:
+        r = _rq.post(f"{SAM_URL}/segment", json=payload, timeout=120)
+        r.raise_for_status()
+        return r.json()
+    except _rq.RequestException as e:
+        raise HTTPException(502, f"SAM service unavailable: {e}")
+
+
+@app.post("/api/session/{session_id}/describe")
+def api_describe(session_id: str, body: dict = Body(default={})):
+    """Eyes on the current canvas (or a region of it) — used for marker labels
+    and ad-hoc looks. Routed local/Gemini by the session source's NSFW level."""
+    from . import eyes
+    s = _load_session(session_id)
+    try:
+        return eyes.describe(body.get("ref") or _canvas_ref(s),
+                             question=body.get("question"),
+                             region=body.get("region"),
+                             source_path=s.data["source_path"])
+    except Exception as e:
+        raise HTTPException(502, f"eyes failed: {e}")
+
+
 @app.post("/api/session/{session_id}/ui")
 def api_ui(session_id: str, body: dict = Body(...)):
     _load_session(session_id)

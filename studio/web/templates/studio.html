@@ -27,12 +27,18 @@
         <button class="mode-btn active" data-mode="pan">Pan</button>
         <button class="mode-btn" data-mode="brush">Brush</button>
         <button class="mode-btn" data-mode="markers">Markers</button>
+        <button class="mode-btn" data-mode="select">Select</button>
       </div>
       <div id="brush-controls" class="brush-controls hidden">
         <input id="brush-size" type="range" min="0.5" max="8" step="0.1" value="2.5">
         <button id="brush-clear" class="btn btn-small">Clear</button>
         <button id="brush-use" class="btn btn-small btn-accent">Use as mask</button>
         <span id="mask-chip" class="chip hidden">mask ✓</span>
+      </div>
+      <div id="select-controls" class="brush-controls hidden">
+        <button id="select-neg" class="btn btn-small">− Negative</button>
+        <button id="select-clear" class="btn btn-small">Clear</button>
+        <span id="select-status" class="chip hidden">segmenting…</span>
       </div>
     </div>
   </section>

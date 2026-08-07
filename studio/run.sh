@@ -7,6 +7,8 @@ PY=~/openclaw-venv/bin/python3
 
 "$PY" -m uvicorn studio.server:app --host 127.0.0.1 --port 8702 &
 TOOL_PID=$!
-trap 'kill $TOOL_PID 2>/dev/null' EXIT
+"$PY" -m uvicorn studio.sam_service:app --host 127.0.0.1 --port 8703 &
+SAM_PID=$!
+trap 'kill $TOOL_PID $SAM_PID 2>/dev/null' EXIT
 
 exec "$PY" -m uvicorn studio.app:app --host 127.0.0.1 --port 8701

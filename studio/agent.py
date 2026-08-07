@@ -23,7 +23,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
                               ClaudeSDKClient, TextBlock,
                               create_sdk_mcp_server, tool)
 
-from . import masks, registry, runner
+from . import eyes, masks, registry, runner
 from .graph import Session
 from .paths import SESSIONS_DIR
 
@@ -47,7 +47,12 @@ Use run_step with a tool from the list you're given. Params ride the registry sc
 "preset" and "artifact" are special params. Stochastic tools take a seed — re-roll by
 running again with a new seed. build_mask makes semantic masks (subject/bg/skin/hair/
 clothes, exclude hands/ropes). If he references numbered markers or a brush mask, their
-data is appended to his message."""
+data is appended to his message.
+
+You have eyes: run_step already tells you what each result looks like, and `look`
+re-examines the current image any time (optionally with a question — "is her hand
+intact?", "critique the composition"). Ground your opinions in what you actually see,
+and check results before declaring success on anatomy-sensitive steps."""
 
 
 HISTORY_REPLAY = 24  # messages of context replayed into each fresh SDK session
@@ -92,6 +97,22 @@ def _make_server(session_id: str, events: asyncio.Queue):
     async def _emit(ev: dict):
         await events.put(ev)
 
+    def _look_at(ref: str, question: str | None = None) -> str:
+        """Eyes on an output ref, NSFW-routed by the session source. Never
+        raises — a blind round shouldn't kill the chat."""
+        try:
+            s = Session.load(session_id)
+            return eyes.describe(ref, question=question,
+                                 source_path=s.data["source_path"])["text"]
+        except Exception as e:
+            return f"(eyes unavailable: {e})"
+
+    def _current_ref() -> str:
+        s = Session.load(session_id)
+        if s.data["head"]:
+            return runner.evaluate(s)[-1]["output"]
+        return runner.preview_source(s.data["source_path"])
+
     @tool("run_step", "Append a tool step to the photo's graph and run it (1024px preview). "
           "params is an object matching the tool's schema; use 'preset'/'artifact' keys for those.",
           {"tool": str, "params": dict, "seed": int})
@@ -111,9 +132,10 @@ def _make_server(session_id: str, events: asyncio.Queue):
             await _emit({"type": "tool_end", "name": "run_step",
                          "detail": f"{name} done {time.time()-t0:.0f}s"})
             took = "cache hit" if last["cache_hit"] else f"{last.get('wall_time')}s"
+            seen = await asyncio.to_thread(_look_at, last["output"])
             return {"content": [{"type": "text", "text":
                     f"ran {name}; output ref {last['output'][:12]}; {took}. "
-                    "The result is now on the canvas."}]}
+                    f"The result is now on the canvas. What it looks like: {seen}"}]}
         except Exception as e:
             await _emit({"type": "tool_end", "name": "run_step", "detail": f"{name} FAILED"})
             return {"content": [{"type": "text", "text": f"step failed: {e}"}], "is_error": True}
@@ -139,6 +161,21 @@ def _make_server(session_id: str, events: asyncio.Queue):
             await _emit({"type": "tool_end", "name": "build_mask", "detail": "FAILED"})
             return {"content": [{"type": "text", "text": f"mask failed: {e}"}], "is_error": True}
 
+    @tool("look", "Look at the current image with fresh eyes (local VLM, NSFW-safe). "
+          "Optional question, e.g. 'is her hand mangled?' or 'critique the composition'.",
+          {"question": str})
+    async def look(args):
+        await _emit({"type": "tool_start", "name": "look", "detail": ""})
+        try:
+            text = await asyncio.to_thread(
+                lambda: _look_at(_current_ref(), args.get("question") or None))
+            await _emit({"type": "tool_end", "name": "look", "detail": "done"})
+            return {"content": [{"type": "text", "text": text}]}
+        except Exception as e:
+            await _emit({"type": "tool_end", "name": "look", "detail": "FAILED"})
+            return {"content": [{"type": "text", "text": f"look failed: {e}"}],
+                    "is_error": True}
+
     @tool("get_graph", "Current step graph: chain of steps root→head with params.", {})
     async def get_graph(args):
         s = Session.load(session_id)
@@ -154,7 +191,8 @@ def _make_server(session_id: str, events: asyncio.Queue):
         await _emit({"type": "graph_changed"})
         return {"content": [{"type": "text", "text": f"head now {head or 'source (no steps)'}"}]}
 
-    return create_sdk_mcp_server("studio", tools=[run_step, build_mask, get_graph, undo])
+    return create_sdk_mcp_server("studio",
+                                 tools=[run_step, build_mask, look, get_graph, undo])
 
 
 def _scrubbed_env() -> dict:
@@ -202,7 +240,8 @@ async def chat(session_id: str, message: str, context: dict | None = None):
         + graph_block + history_block,
         mcp_servers={"studio": _make_server(session_id, events)},
         allowed_tools=["mcp__studio__run_step", "mcp__studio__build_mask",
-                       "mcp__studio__get_graph", "mcp__studio__undo"],
+                       "mcp__studio__look", "mcp__studio__get_graph",
+                       "mcp__studio__undo"],
         disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep",
                           "WebFetch", "WebSearch", "Task", "NotebookEdit"],
         permission_mode="bypassPermissions",

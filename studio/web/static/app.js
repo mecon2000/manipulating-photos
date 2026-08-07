@@ -60,6 +60,10 @@ const els = {
   brushClear: document.getElementById("brush-clear"),
   brushUse: document.getElementById("brush-use"),
   maskChip: document.getElementById("mask-chip"),
+  selectControls: document.getElementById("select-controls"),
+  selectNeg: document.getElementById("select-neg"),
+  selectClear: document.getElementById("select-clear"),
+  selectStatus: document.getElementById("select-status"),
   stepsToggle: document.getElementById("steps-toggle"),
   stepsBody: document.getElementById("steps-body"),
   stepsStrip: document.getElementById("steps-strip"),
@@ -71,16 +75,22 @@ const els = {
   chatForm: document.getElementById("chat-form"),
 };
 
-let brushMaskRef = null;
+let activeMaskRef = null; // last mask set via brush "Use as mask" OR Select tap-to-mask
+let selectPoints = []; // [[x,y], ...] normalized, accumulated in Select mode
+let selectLabels = []; // [1|0, ...] parallel to selectPoints
+let selectNegative = false; // "−" toggle: next tap adds a negative point
 
 // ---- init ----
 async function main() {
   canvas.init(els.stageContainer);
   canvas.on("markersChanged", debounce(syncMarkers, 500));
+  canvas.on("markerAdded", onMarkerAdded);
+  canvas.on("selectPoint", onSelectPoint);
 
   wireTopbar();
   wireModeBar();
   wireCollapsibles();
+  wireSelectControls();
 
   state.tools = await api("/tools");
   await refreshSession();
@@ -92,7 +102,7 @@ async function main() {
     formEl: els.chatForm,
     apiBase: API,
     sessionId: SESSION_ID,
-    getContext: () => ({ brush_mask: brushMaskRef, markers: canvas.getMarkers() }),
+    getContext: () => ({ brush_mask: activeMaskRef, markers: canvas.getMarkers() }),
     onGraphChanged: async () => {
       await refreshSession();
       await refreshCost();
@@ -121,6 +131,7 @@ function wireModeBar() {
       canvas.setMode(m);
       els.modeToggle.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
       els.brushControls.classList.toggle("hidden", m !== "brush");
+      els.selectControls.classList.toggle("hidden", m !== "select");
     });
   });
 
@@ -136,11 +147,72 @@ function wireModeBar() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ png: dataUrl }),
     });
-    brushMaskRef = res.mask;
+    activeMaskRef = res.mask;
     els.maskChip.classList.remove("hidden");
     toast("Mask saved");
   });
 }
+
+function wireSelectControls() {
+  els.selectNeg.addEventListener("click", () => {
+    selectNegative = !selectNegative;
+    els.selectNeg.classList.toggle("active", selectNegative);
+  });
+  els.selectClear.addEventListener("click", () => {
+    selectPoints = [];
+    selectLabels = [];
+    canvas.clearSelectOverlay();
+    els.selectStatus.classList.add("hidden");
+  });
+}
+
+// ---- Select mode: tap-to-mask ----
+async function onSelectPoint({ x, y, shift }) {
+  const label = (shift || selectNegative) ? 0 : 1;
+  selectPoints.push([x, y]);
+  selectLabels.push(label);
+  els.selectStatus.textContent = "segmenting…";
+  els.selectStatus.classList.remove("hidden");
+  try {
+    const res = await api(`/session/${SESSION_ID}/point-mask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ points: selectPoints, labels: selectLabels }),
+    });
+    activeMaskRef = res.mask;
+    els.maskChip.classList.remove("hidden");
+    await canvas.renderMaskOverlay(objectUrl(res.mask));
+    els.selectStatus.textContent = `mask ${Math.round(res.coverage_pct || 0)}%`;
+  } catch (e) {
+    // error already toasted by api()
+  } finally {
+    setTimeout(() => els.selectStatus.classList.add("hidden"), 1500);
+  }
+}
+
+// ---- Markers: VLM label lookup ----
+async function onMarkerAdded(marker) {
+  const x0 = clamp01(marker.x - 0.05);
+  const y0 = clamp01(marker.y - 0.05);
+  try {
+    const res = await fetch(`${API}/session/${SESSION_ID}/describe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        region: [x0, y0, 0.1, 0.1],
+        question: "In 3-6 words, what is at the center of this crop?",
+      }),
+    });
+    if (!res.ok) return; // label is a nice-to-have, never block on failure
+    const data = await res.json();
+    if (data && data.text) {
+      canvas.setMarkerLabel(marker.n, data.text);
+      await syncMarkers(canvas.getMarkers());
+    }
+  } catch (e) { /* ignore — label is best-effort */ }
+}
+
+function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
 function wireCollapsibles() {
   els.stepsToggle.addEventListener("click", () => {

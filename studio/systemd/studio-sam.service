@@ -1,0 +1,13 @@
+[Unit]
+Description=Studio SAM 2 tap-to-mask service (:8703)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/rong/gitrep/manipulating-photos
+Environment=PATH=/home/rong/openclaw-venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/rong/openclaw-venv/bin/python3 -m uvicorn studio.sam_service:app --host 127.0.0.1 --port 8703
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

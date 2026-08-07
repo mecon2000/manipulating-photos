@@ -30,3 +30,5 @@ mediapipe>=0.10
 fastapi
 uvicorn[standard]
 httpx
+claude-agent-sdk
+sam2

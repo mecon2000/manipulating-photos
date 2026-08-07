@@ -1,6 +1,6 @@
 // canvas.js — Konva-based image viewer with pan/zoom, brush mask, markers.
 
-let stage, imgLayer, overlayLayer, markerLayer;
+let stage, imgLayer, overlayLayer, selectLayer, markerLayer;
 let konvaImage = null;
 let imgEl = null;
 let natW = 0, natH = 0;
@@ -9,7 +9,8 @@ let mode = "pan";
 let brushSizePct = 2.5; // % of image width
 let strokes = []; // Konva.Line[] in image coords
 let currentLine = null;
-let markers = []; // {n, x, y} normalized 0..1
+let selectOverlayNode = null; // Konva.Image, tinted mask
+let markers = []; // {n, x, y, label} normalized 0..1
 let markerNodes = new Map(); // n -> Konva.Group
 let container = null;
 let listeners = {};
@@ -29,15 +30,18 @@ export function init(el) {
   stage = new Konva.Stage({ container: el, width: w, height: h });
   imgLayer = new Konva.Layer();
   overlayLayer = new Konva.Layer();
+  selectLayer = new Konva.Layer();
   markerLayer = new Konva.Layer();
   stage.add(imgLayer);
   stage.add(overlayLayer);
+  stage.add(selectLayer);
   stage.add(markerLayer);
 
   stage.draggable(false);
 
   wireZoomPan();
   wireBrush();
+  wireSelect();
   wireMarkers();
 
   window.addEventListener("resize", refit);
@@ -101,7 +105,7 @@ function refit() {
 
 // Base transform bakes fit into layer positions; stage scale/pos handle user zoom/pan.
 function applyBaseTransform() {
-  [imgLayer, overlayLayer, markerLayer].forEach((layer) => {
+  [imgLayer, overlayLayer, selectLayer, markerLayer].forEach((layer) => {
     layer.offsetX(0);
     layer.offsetY(0);
   });
@@ -109,7 +113,12 @@ function applyBaseTransform() {
     konvaImage.position({ x: fitX, y: fitY });
     konvaImage.size({ width: natW * fitScale, height: natH * fitScale });
   }
+  if (selectOverlayNode) {
+    selectOverlayNode.position({ x: fitX, y: fitY });
+    selectOverlayNode.size({ width: natW * fitScale, height: natH * fitScale });
+  }
   imgLayer.batchDraw();
+  selectLayer.batchDraw();
 }
 
 function wireZoomPan() {
@@ -252,6 +261,66 @@ export function getBrushMaskDataURL() {
   return off.toDataURL("image/png");
 }
 
+// ---- Select (tap-to-mask) ----
+function wireSelect() {
+  stage.on("click tap", (e) => {
+    if (mode !== "select") return;
+    if (e.target !== stage && e.target.getLayer() === markerLayer) return;
+    const pos = stage.getRelativePointerPosition();
+    const imgPt = toImageCoords(pos);
+    if (imgPt.x < 0 || imgPt.y < 0 || imgPt.x > natW || imgPt.y > natH) return;
+    const shift = !!(e.evt && e.evt.shiftKey);
+    emit("selectPoint", { x: imgPt.x / natW, y: imgPt.y / natH, shift });
+  });
+}
+
+// Loads a white-on-black L-mode mask PNG and tints it teal, translucent-over-transparent.
+function tintMaskImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const off = document.createElement("canvas");
+      off.width = img.naturalWidth;
+      off.height = img.naturalHeight;
+      const ctx = off.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      const data = ctx.getImageData(0, 0, off.width, off.height);
+      const px = data.data;
+      for (let i = 0; i < px.length; i += 4) {
+        const v = px[i]; // grayscale mask stored in R (=G=B)
+        px[i] = 45; px[i + 1] = 212; px[i + 2] = 191; // teal
+        px[i + 3] = Math.round((v / 255) * 0.4 * 255);
+      }
+      ctx.putImageData(data, 0, 0);
+      resolve(off);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+export async function renderMaskOverlay(url) {
+  const tinted = await tintMaskImage(url);
+  if (selectOverlayNode) selectOverlayNode.destroy();
+  selectOverlayNode = new Konva.Image({
+    image: tinted,
+    x: fitX, y: fitY,
+    width: natW * fitScale, height: natH * fitScale,
+    listening: false,
+  });
+  selectLayer.add(selectOverlayNode);
+  selectLayer.batchDraw();
+}
+
+export function clearSelectOverlay() {
+  if (selectOverlayNode) {
+    selectOverlayNode.destroy();
+    selectOverlayNode = null;
+    selectLayer.batchDraw();
+  }
+}
+
 // ---- Markers ----
 function wireMarkers() {
   stage.on("click tap", (e) => {
@@ -266,6 +335,7 @@ function wireMarkers() {
     markers.push(marker);
     drawMarker(marker);
     emitMarkersChanged();
+    emit("markerAdded", marker);
   });
 }
 
@@ -295,8 +365,23 @@ function drawMarker(marker) {
     align: "center",
     verticalAlign: "middle",
   });
+  const labelText = new Konva.Text({
+    text: marker.label || "",
+    fontSize: 11,
+    fill: "#eafff9",
+    width: 140,
+    offsetX: 70,
+    y: 20,
+    align: "center",
+    visible: !!marker.label,
+    shadowColor: "#06201c",
+    shadowBlur: 3,
+    shadowOpacity: 0.9,
+  });
   group.add(circle);
   group.add(text);
+  group.add(labelText);
+  group.setAttr("labelNode", labelText);
   const stagePt = toStageCoordsUnscaled(marker);
   group.position(stagePt);
   group.scale({ x: markerVisualScale(), y: markerVisualScale() });
@@ -346,10 +431,22 @@ function emitMarkersChanged() {
 }
 
 export function getMarkers() {
-  return markers.map((m) => ({ n: m.n, x: m.x, y: m.y }));
+  return markers.map((m) => ({ n: m.n, x: m.x, y: m.y, label: m.label }));
 }
 
 export function setMarkers(list) {
-  markers = (list || []).map((m) => ({ n: m.n, x: m.x, y: m.y }));
+  markers = (list || []).map((m) => ({ n: m.n, x: m.x, y: m.y, label: m.label }));
   redrawAllMarkers();
+}
+
+export function setMarkerLabel(n, label) {
+  const m = markers.find((mm) => mm.n === n);
+  if (m) m.label = label;
+  const group = markerNodes.get(n);
+  if (!group) return;
+  const labelNode = group.getAttr("labelNode");
+  if (!labelNode) return;
+  labelNode.text(label || "");
+  labelNode.visible(!!label);
+  markerLayer.batchDraw();
 }

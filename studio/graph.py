@@ -109,6 +109,23 @@ class Session:
         return sorted((n for n in self.nodes.values() if n["parent"] == node_id),
                       key=lambda n: n["created"])
 
+    def set_head(self, node_id: str | None) -> str | None:
+        """Jump head to any node (variant switch / step-strip selection)."""
+        if node_id is not None and node_id not in self.nodes:
+            raise KeyError(f"unknown node {node_id}")
+        self.data["head"] = node_id
+        self.save()
+        return node_id
+
+    def variant_group(self, node_id: str) -> list[dict]:
+        """Sibling variants of a node: same parent, tool and params, differing
+        only by seed. Includes the node itself, ordered by creation."""
+        n = self.nodes[node_id]
+        return sorted((c for c in self.nodes.values()
+                       if c["parent"] == n["parent"] and c["tool"] == n["tool"]
+                       and c["params"] == n["params"]),
+                      key=lambda c: c["created"])
+
     def undo(self) -> str | None:
         head = self.data["head"]
         if head is None:

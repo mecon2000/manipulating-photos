@@ -176,6 +176,91 @@ def _make_server(session_id: str, events: asyncio.Queue):
             return {"content": [{"type": "text", "text": f"look failed: {e}"}],
                     "is_error": True}
 
+    @tool("run_variants", "Fan out N seeds of a stochastic step in parallel and look at "
+          "each — for cheap steps (≤$0.03 or ≤15s) default to 3 and let Ronnie pick. "
+          "Head lands on variant 1; Ronnie can flip on the canvas.",
+          {"tool": str, "params": dict, "n": int})
+    async def run_variants(args):
+        name = args["tool"]
+        n = max(2, min(int(args.get("n") or 3), 6))
+        await _emit({"type": "tool_start", "name": "run_variants",
+                     "detail": f"{name} ×{n}"})
+        try:
+            def _work():
+                from .app import run_variants_impl
+                s = Session.load(session_id)
+                return run_variants_impl(s, name, args.get("params") or {}, None, n)
+            results = await asyncio.to_thread(_work)
+            await _emit({"type": "graph_changed"})
+            await _emit({"type": "tool_end", "name": "run_variants",
+                         "detail": f"{name} ×{n} done"})
+            seen = []
+            for i, r in enumerate(results):
+                desc = await asyncio.to_thread(
+                    _look_at, r["output"],
+                    "One sentence: what stands out in this render (flaws included)?")
+                seen.append(f"variant {i+1} (node {r['node']}): {desc}")
+            return {"content": [{"type": "text", "text":
+                    f"ran {n} variants of {name}. " + " | ".join(seen) +
+                    " — variant 1 is on canvas; Ronnie can flip between them."}]}
+        except Exception as e:
+            await _emit({"type": "tool_end", "name": "run_variants", "detail": "FAILED"})
+            return {"content": [{"type": "text", "text": f"variants failed: {e}"}],
+                    "is_error": True}
+
+    @tool("propose_params", "Surface a registry param in Ronnie's panel with a ✨ badge "
+          "when a knob deserves direct manipulation. param must exist in the tool's "
+          "schema ('preset' counts).", {"tool": str, "param": str, "note": str})
+    async def propose_params(args):
+        name, param = args["tool"], args["param"]
+        meta = registry.steps_meta().get(name)
+        if not meta or (param not in meta["params"] and
+                        param not in ("preset", "artifact")):
+            return {"content": [{"type": "text", "text":
+                    f"no such param {param!r} on {name}"}], "is_error": True}
+        def _work():
+            import json as _j
+            from .paths import SESSIONS_DIR
+            p = SESSIONS_DIR / session_id / "ui.json"
+            try:
+                ui = _j.loads(p.read_text())
+            except (OSError, ValueError):
+                ui = {"markers": []}
+            props = ui.setdefault("proposed_params", [])
+            if not any(x["tool"] == name and x["param"] == param for x in props):
+                props.append({"tool": name, "param": param,
+                              "note": args.get("note", ""), "ts": time.time()})
+            p.write_text(_j.dumps(ui, indent=2))
+        await asyncio.to_thread(_work)
+        await _emit({"type": "graph_changed"})
+        return {"content": [{"type": "text", "text":
+                f"proposed {name}.{param} to the panel (✨)"}]}
+
+    @tool("lock", "Finalize the current draft — Lock = fav. mode 'upscale' (default; "
+          "Real-ESRGAN 2x/4x of the exact draft) or 'rerender' (full-res re-run; "
+          "generative steps may drift — warn Ronnie first).",
+          {"mode": str, "scale": int})
+    async def lock_tool(args):
+        mode = args.get("mode") or "upscale"
+        await _emit({"type": "tool_start", "name": "lock", "detail": mode})
+        try:
+            def _work():
+                from . import lock as lock_mod
+                s = Session.load(session_id)
+                if mode == "rerender":
+                    return lock_mod.lock_rerender(s)
+                return lock_mod.lock_upscale(s, scale=int(args.get("scale") or 4))
+            res = await asyncio.to_thread(_work)
+            await _emit({"type": "graph_changed"})
+            await _emit({"type": "tool_end", "name": "lock", "detail": "faved ⭐"})
+            return {"content": [{"type": "text", "text":
+                    f"locked ({res['mode']}) → {res['file']} (also in finals/). "
+                    "It's in favorites with full reconstruction data."}]}
+        except Exception as e:
+            await _emit({"type": "tool_end", "name": "lock", "detail": "FAILED"})
+            return {"content": [{"type": "text", "text": f"lock failed: {e}"}],
+                    "is_error": True}
+
     @tool("get_graph", "Current step graph: chain of steps root→head with params.", {})
     async def get_graph(args):
         s = Session.load(session_id)
@@ -192,7 +277,8 @@ def _make_server(session_id: str, events: asyncio.Queue):
         return {"content": [{"type": "text", "text": f"head now {head or 'source (no steps)'}"}]}
 
     return create_sdk_mcp_server("studio",
-                                 tools=[run_step, build_mask, look, get_graph, undo])
+                                 tools=[run_step, run_variants, build_mask, look,
+                                        propose_params, lock_tool, get_graph, undo])
 
 
 def _scrubbed_env() -> dict:
@@ -239,9 +325,10 @@ async def chat(session_id: str, message: str, context: dict | None = None):
         + "\n\nAvailable tools for run_step:\n" + _tools_summary()
         + graph_block + history_block,
         mcp_servers={"studio": _make_server(session_id, events)},
-        allowed_tools=["mcp__studio__run_step", "mcp__studio__build_mask",
-                       "mcp__studio__look", "mcp__studio__get_graph",
-                       "mcp__studio__undo"],
+        allowed_tools=["mcp__studio__run_step", "mcp__studio__run_variants",
+                       "mcp__studio__build_mask", "mcp__studio__look",
+                       "mcp__studio__propose_params", "mcp__studio__lock",
+                       "mcp__studio__get_graph", "mcp__studio__undo"],
         disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep",
                           "WebFetch", "WebSearch", "Task", "NotebookEdit"],
         permission_mode="bypassPermissions",

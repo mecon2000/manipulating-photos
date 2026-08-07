@@ -43,8 +43,34 @@ export function init(el) {
   wireBrush();
   wireSelect();
   wireMarkers();
+  wireSwipe();
 
   window.addEventListener("resize", refit);
+}
+
+// ---- Swipe (variant flip) ----
+// Horizontal-swipe detection on the raw container, independent of pan/zoom mode —
+// listeners decide whether to act on the emitted event (e.g. only when a variant
+// group is active for the currently shown node).
+function wireSwipe() {
+  let startX = 0, startY = 0, startTime = 0;
+  container.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    startTime = Date.now();
+  }, { passive: true });
+  container.addEventListener("touchend", (e) => {
+    if (!startTime) return;
+    const dt = Date.now() - startTime;
+    startTime = 0;
+    if (!e.changedTouches || !e.changedTouches.length) return;
+    const dx = e.changedTouches[0].clientX - startX;
+    const dy = e.changedTouches[0].clientY - startY;
+    if (dt < 600 && Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      emit("swipe", { direction: dx < 0 ? "next" : "prev" });
+    }
+  }, { passive: true });
 }
 
 function stageContentGroupScale() {

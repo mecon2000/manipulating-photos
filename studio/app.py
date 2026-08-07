@@ -20,7 +20,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import agent, cache, costs, registry, runner
+from . import agent, cache, costs, lock, params_usage, registry, runner
 from .graph import Session
 from .paths import RUNS_DIR, SESSIONS_DIR, ensure_dirs, safe_source
 
@@ -125,7 +125,21 @@ def health():
 
 @app.get("/api/tools")
 def api_tools():
-    return registry.steps_meta()
+    meta = registry.steps_meta()
+    for tool, m in meta.items():
+        hidden = set(params_usage.hidden_params(tool))
+        for pname, spec in m["params"].items():
+            spec["hidden"] = pname in hidden
+    return meta
+
+
+@app.post("/api/params-usage")
+def api_params_usage(body: dict = Body(...)):
+    kind = body.get("kind")
+    if kind not in ("appear", "touch"):
+        raise HTTPException(400, "kind must be appear|touch")
+    params_usage.record(str(body["tool"]), str(body["param"]), kind)
+    return {"ok": True}
 
 
 @app.get("/api/session/{session_id}")
@@ -147,9 +161,24 @@ def api_session(session_id: str):
         input_ref = rec["output"]
     head = s.data["head"]
     canvas_ref = outputs.get(head, s.data["source_ref"])
+    variants = {}
+    for node in chain:
+        group = s.variant_group(node["id"])
+        if len(group) > 1:
+            variants[node["id"]] = [g["id"] for g in group]
+            for g in group:  # variant outputs are peekable too
+                key = cache.step_key({"tool": g["tool"], "params": g["params"],
+                                      "flags": g["flags"], "seed": g["seed"],
+                                      "preview": g["preview"],
+                                      "input": outputs.get(g["parent"]) or
+                                      (runner.preview_source(Path(s.data["source_path"]))
+                                       if g["parent"] is None else None)})
+                rec = cache.get_step(key)
+                if rec:
+                    outputs[g["id"]] = rec["output"]
     return {"graph": s.data, "chain": [n["id"] for n in chain],
             "outputs": outputs, "canvas_ref": canvas_ref,
-            "ui": _load_ui(session_id)}
+            "variants": variants, "ui": _load_ui(session_id)}
 
 
 @app.post("/api/session/{session_id}/step")
@@ -186,6 +215,67 @@ def api_edit(session_id: str, body: dict = Body(...)):
     except KeyError as e:
         raise HTTPException(400, str(e))
     return {"head": tail["id"]}
+
+
+def run_variants_impl(s: Session, tool: str, params: dict, flags, n: int,
+                      seeds=None) -> list[dict]:
+    """Fan out n sibling variant nodes (same parent/params, different seeds)
+    and evaluate them in parallel. Head lands on the first variant."""
+    import random
+    from concurrent.futures import ThreadPoolExecutor
+    if tool in registry.DETERMINISTIC_TOOLS:
+        raise ValueError(f"{tool} is deterministic — variants would be identical; "
+                         "run it once instead")
+    parent = s.data["head"]
+    if parent:  # materialize the shared prefix once, before fanning out
+        runner.evaluate(s)
+    seeds = list(seeds or [])
+    while len(seeds) < n:
+        seeds.append(random.randint(0, 999_999))
+    nodes = [s.add_step(tool, params, seed=seeds[i], preview=True,
+                        flags=flags, parent=parent) for i in range(n)]
+    with ThreadPoolExecutor(max_workers=min(n, 4)) as ex:
+        futs = [ex.submit(runner.evaluate, s, node["id"]) for node in nodes]
+        results = [f.result()[-1] for f in futs]
+    s.set_head(nodes[0]["id"])
+    return results
+
+
+@app.post("/api/session/{session_id}/variants")
+def api_variants(session_id: str, body: dict = Body(...)):
+    s = _load_session(session_id)
+    tool = body["tool"]
+    meta = registry.steps_meta()
+    if tool not in meta:
+        raise HTTPException(400, f"unknown tool {tool}")
+    n = max(2, min(int(body.get("n", 3)), 6))
+    try:
+        results = run_variants_impl(s, tool, body.get("params") or {},
+                                    body.get("flags"), n)
+    except (RuntimeError, ValueError, FileNotFoundError) as e:
+        raise HTTPException(500, str(e))
+    return {"results": results, "head": s.data["head"]}
+
+
+@app.post("/api/session/{session_id}/head")
+def api_head(session_id: str, body: dict = Body(...)):
+    s = _load_session(session_id)
+    try:
+        return {"head": s.set_head(body.get("node_id"))}
+    except KeyError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/session/{session_id}/lock")
+def api_lock(session_id: str, body: dict = Body(default={})):
+    s = _load_session(session_id)
+    mode = body.get("mode", "upscale")
+    try:
+        if mode == "rerender":
+            return lock.lock_rerender(s)
+        return lock.lock_upscale(s, scale=int(body.get("scale", 4)))
+    except (RuntimeError, ValueError, FileNotFoundError) as e:
+        raise HTTPException(500, str(e))
 
 
 @app.post("/api/session/{session_id}/undo")
@@ -261,7 +351,8 @@ def api_describe(session_id: str, body: dict = Body(default={})):
 def api_ui(session_id: str, body: dict = Body(...)):
     _load_session(session_id)
     ui = _load_ui(session_id)
-    ui.update({k: v for k, v in body.items() if k in ("markers",)})
+    ui.update({k: v for k, v in body.items()
+               if k in ("markers", "proposed_params")})
     _ui_path(session_id).write_text(json.dumps(ui, indent=2))
     return {"ok": True}
 

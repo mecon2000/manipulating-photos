@@ -2,6 +2,8 @@ import * as canvas from "./canvas.js";
 import { renderSteps } from "./steps.js";
 import { renderToolGrid, renderParamForm } from "./params.js";
 import { init as initChat } from "./chat.js";
+import { initVariantNav, updateVariantNav } from "./variants.js";
+import { initLock } from "./lock.js";
 
 const BASE = window.STUDIO.base || "";
 const SESSION_ID = window.STUDIO.sessionId;
@@ -14,6 +16,7 @@ const state = {
   addingTool: null, // tool name chosen in "add step" flow, or null
   formHandle: null,
   mode: "pan",
+  pinnedParams: new Set(),
 };
 
 const toastEl = document.getElementById("toast");
@@ -67,6 +70,7 @@ const els = {
   stepsToggle: document.getElementById("steps-toggle"),
   stepsBody: document.getElementById("steps-body"),
   stepsStrip: document.getElementById("steps-strip"),
+  lockBtn: document.getElementById("lock-btn"),
   paramsToggle: document.getElementById("params-toggle"),
   paramsBody: document.getElementById("params-body"),
   paramsContent: document.getElementById("params-content"),
@@ -86,6 +90,13 @@ async function main() {
   canvas.on("markersChanged", debounce(syncMarkers, 500));
   canvas.on("markerAdded", onMarkerAdded);
   canvas.on("selectPoint", onSelectPoint);
+
+  initVariantNav({
+    canvasWrapEl: document.getElementById("canvas-wrap"),
+    canvasModule: canvas,
+    onFlip: onVariantPick,
+  });
+  initLock({ apiBase: API, sessionId: SESSION_ID, buttonEl: els.lockBtn, toast, onLocked: refreshSession });
 
   wireTopbar();
   wireModeBar();
@@ -241,9 +252,37 @@ async function refreshSession() {
   canvas.setMarkers(session.ui && session.ui.markers ? session.ui.markers : []);
 
   els.stepsToggle.textContent = `Steps (${session.chain.length}) ▾`;
-  renderSteps(els.stepsStrip, session.chain, session.graph.nodes, state.selectedNodeId, onSelectStep);
+  renderSteps(els.stepsStrip, session.chain, session.graph.nodes, state.selectedNodeId, onSelectStep, session.variants, onVariantPick);
+
+  const currentNode = state.selectedNodeId || session.chain[session.chain.length - 1];
+  updateVariantNav(currentNode, session.variants);
 
   renderParamsPanel();
+}
+
+// ---- variant flip (steps strip stack, or canvas arrows/swipe) ----
+async function onVariantPick(nodeId) {
+  await api(`/session/${SESSION_ID}/head`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node_id: nodeId }),
+  });
+  state.selectedNodeId = null;
+  await refreshSession();
+}
+
+// ---- ✨ agent-proposed params: dismiss (touched or ✕'d) ----
+async function dismissProposedParam(tool, param) {
+  const list = (state.session.ui && state.session.ui.proposed_params) || [];
+  const filtered = list.filter((p) => !(p.tool === tool && p.param === param));
+  try {
+    await api(`/session/${SESSION_ID}/ui`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proposed_params: filtered }),
+    });
+  } catch (e) { /* toast already shown by api() */ }
+  if (state.session.ui) state.session.ui.proposed_params = filtered;
 }
 
 async function refreshCost() {
@@ -255,11 +294,13 @@ function onSelectStep(nodeId) {
   state.selectedNodeId = nodeId === state.selectedNodeId ? null : nodeId;
   state.addingTool = null;
   const session = state.session;
-  renderSteps(els.stepsStrip, session.chain, session.graph.nodes, state.selectedNodeId, onSelectStep);
+  renderSteps(els.stepsStrip, session.chain, session.graph.nodes, state.selectedNodeId, onSelectStep, session.variants, onVariantPick);
   const canvasRef = state.selectedNodeId && session.outputs[state.selectedNodeId]
     ? session.outputs[state.selectedNodeId]
     : session.canvas_ref;
   canvas.loadImage(objectUrl(canvasRef));
+  const currentNode = state.selectedNodeId || session.chain[session.chain.length - 1];
+  updateVariantNav(currentNode, session.variants);
   renderParamsPanel();
 }
 
@@ -311,7 +352,14 @@ function renderAddStepForm(container, toolName) {
 
   const formArea = document.createElement("div");
   container.appendChild(formArea);
-  const handle = renderParamForm(formArea, schema, {});
+  const proposed = ((state.session.ui && state.session.ui.proposed_params) || []).filter((p) => p.tool === toolName);
+  const handle = renderParamForm(formArea, schema, {}, {
+    apiBase: API,
+    toolName,
+    proposedParams: proposed,
+    pinned: state.pinnedParams,
+    onProposedDismiss: (key) => dismissProposedParam(toolName, key),
+  });
 
   const runRow = document.createElement("div");
   runRow.className = "run-row";
@@ -379,10 +427,17 @@ function renderEditForm(container, node) {
 
   const formArea = document.createElement("div");
   container.appendChild(formArea);
+  const proposed = ((state.session.ui && state.session.ui.proposed_params) || []).filter((p) => p.tool === node.tool);
   const handle = renderParamForm(formArea, schema, {
     params: node.params,
     flags: node.flags,
     seed: node.seed,
+  }, {
+    apiBase: API,
+    toolName: node.tool,
+    proposedParams: proposed,
+    pinned: state.pinnedParams,
+    onProposedDismiss: (key) => dismissProposedParam(node.tool, key),
   });
 
   const runRow = document.createElement("div");

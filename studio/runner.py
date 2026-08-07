@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 from PIL import Image
@@ -72,7 +73,8 @@ def run_step(tool: str, params: dict | None, flags: list | None, seed,
         raise FileNotFoundError(f"input ref {input_ref} not in object store")
 
     ensure_dirs()
-    scratch = RUNS_DIR / (time.strftime("%Y%m%d-%H%M%S") + "-" + tool)
+    scratch = RUNS_DIR / (time.strftime("%Y%m%d-%H%M%S") + "-" + tool
+                          + "-" + uuid.uuid4().hex[:6])
     scratch.mkdir(parents=True)
     argv = registry.build_argv(tool, input_path, params, flags, seed, scratch)
 

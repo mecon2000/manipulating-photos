@@ -296,6 +296,164 @@ a { color: var(--accent); text-decoration: none; }
   max-width: 90vw;
 }
 
+/* Variant stacks (steps strip) */
+.step-chip-wrap { position: relative; flex: none; display: flex; flex-direction: column; }
+.variant-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: var(--accent);
+  color: #06201c;
+  border: 1px solid #06201c;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.variant-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  margin-top: 4px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+}
+.variant-item {
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.variant-item:active { background: var(--bg-2); }
+.variant-item.current { color: var(--accent); font-weight: 600; }
+
+/* Variant nav on canvas */
+.variant-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 15;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: rgba(17,17,17,0.55);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.variant-arrow-left { left: 10px; }
+.variant-arrow-right { right: 10px; }
+.variant-chip {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 15;
+  background: rgba(17,17,17,0.6);
+  color: #eee;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Params drawer / search / proposed / pin */
+.param-list { display: flex; flex-direction: column; }
+.param-label-left { display: flex; align-items: center; gap: 6px; }
+.param-drawer-toggle {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.param-drawer { border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 4px; }
+.param-search {
+  width: 100%;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 8px;
+  min-height: 36px;
+  margin-bottom: 10px;
+}
+.param-row-dim { opacity: 0.35; }
+.param-row-match { outline: 1px solid var(--accent-dim); border-radius: 6px; }
+.param-pin {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.5;
+  padding: 0;
+}
+.param-pin.active { opacity: 1; }
+.param-row-proposed { border: 1px solid var(--accent-dim); border-radius: 8px; padding: 8px; background: rgba(45,212,191,0.06); }
+.param-badge-new {
+  background: var(--accent);
+  color: #06201c;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  cursor: help;
+}
+.param-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 13px;
+}
+.param-note { font-size: 12px; color: var(--accent); margin-top: 2px; }
+.proposed-section:empty { display: none; }
+.proposed-section > .param-row { margin-bottom: 12px; }
+
+/* Lock dialog */
+.lock-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.lock-box {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  width: 100%;
+  max-width: 360px;
+}
+.lock-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+.lock-mode-row, .lock-scale-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.lock-mode-row .btn, .lock-scale-row .btn { flex: 1; }
+.lock-warning { font-size: 12px; color: var(--danger); margin-bottom: 10px; }
+.lock-error { font-size: 12px; color: var(--danger); margin-bottom: 10px; }
+.lock-spinner { font-size: 13px; color: var(--accent); margin-top: 10px; text-align: center; }
+
 @media (min-width: 900px) {
   .studio-layout { flex-direction: row; height: calc(100vh - 49px); }
   .canvas-col { width: 62%; height: 100%; }

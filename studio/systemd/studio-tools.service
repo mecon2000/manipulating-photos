@@ -1,0 +1,13 @@
+[Unit]
+Description=Studio tool server (step runner + cache, :8702)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/rong/gitrep/manipulating-photos
+Environment=PATH=/home/rong/openclaw-venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/rong/openclaw-venv/bin/python3 -m uvicorn studio.server:app --host 127.0.0.1 --port 8702
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

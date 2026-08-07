@@ -1,21 +1,28 @@
 name: photo-tools
 label: "Photo tools"
+links:
+  studio: {url: "/studio/", label: "Studio"}
 content:
   root: ~/.openclaw/workspace/shared/photo-tools
   areas:
     finals:
+      link_template: {url: "/studio/new?src={path}", label: "Tweak"}
       dir: ~/.openclaw/workspace/shared/finals
       media: [photo, video]
     favorites:
+      link_template: {url: "/studio/new?src={path}", label: "Tweak"}
       dir: ~/.openclaw/workspace/shared/favorites
       media: [photo]
     anime:
+      link_template: {url: "/studio/new?src={path}", label: "Tweak"}
       dir: ~/.openclaw/workspace/shared/anime
       media: [photo]
     edit-later:
+      link_template: {url: "/studio/new?src={path}", label: "Tweak"}
       dir: ~/.openclaw/workspace/shared/edit-later
       media: [photo]
     candidates:
+      link_template: {url: "/studio/new?src={path}", label: "Tweak"}
       dir: ~/.openclaw/workspace/shared/candidates
       media: [photo]
     surreal:

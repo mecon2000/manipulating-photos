@@ -1,0 +1,13 @@
+[Unit]
+Description=Studio web app (conversational photo tweaking, :8701)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/rong/gitrep/manipulating-photos
+Environment=PATH=/home/rong/openclaw-venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/rong/openclaw-venv/bin/python3 -m uvicorn studio.app:app --host 127.0.0.1 --port 8701
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

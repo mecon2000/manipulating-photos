@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Studio — {{ source_name }}</title>
+<link rel="stylesheet" href="{{ base }}/static/app.css">
+</head>
+<body>
+<div id="topbar" class="topbar studio-topbar">
+  <a class="back-link" href="{{ base }}/">‹</a>
+  <div class="source-name" id="source-name" title="{{ source_name }}">{{ source_name }}</div>
+  <div class="topbar-actions">
+    <button id="undo-btn" class="icon-btn" title="Undo">↶</button>
+    <button id="redo-btn" class="icon-btn" title="Redo">↷</button>
+    <span id="cost-chip" class="chip">$0.00</span>
+  </div>
+</div>
+
+<main class="studio-layout">
+  <section class="canvas-col">
+    <div id="canvas-wrap" class="canvas-wrap">
+      <div id="stage-container" class="stage-container"></div>
+    </div>
+    <div class="mode-bar">
+      <div class="mode-toggle" id="mode-toggle">
+        <button class="mode-btn active" data-mode="pan">Pan</button>
+        <button class="mode-btn" data-mode="brush">Brush</button>
+        <button class="mode-btn" data-mode="markers">Markers</button>
+      </div>
+      <div id="brush-controls" class="brush-controls hidden">
+        <input id="brush-size" type="range" min="0.5" max="8" step="0.1" value="2.5">
+        <button id="brush-clear" class="btn btn-small">Clear</button>
+        <button id="brush-use" class="btn btn-small btn-accent">Use as mask</button>
+        <span id="mask-chip" class="chip hidden">mask ✓</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="side-col">
+    <div class="collapsible" id="steps-panel">
+      <button class="collapsible-toggle" id="steps-toggle">Steps (0) ▾</button>
+      <div class="collapsible-body hidden" id="steps-body">
+        <div id="steps-strip" class="steps-strip"></div>
+      </div>
+    </div>
+
+    <div class="collapsible" id="params-panel">
+      <button class="collapsible-toggle" id="params-toggle">Params ▾</button>
+      <div class="collapsible-body hidden" id="params-body">
+        <div id="params-content"></div>
+      </div>
+    </div>
+
+    <div class="chat-col">
+      <div id="chat-messages" class="chat-messages"></div>
+      <form id="chat-form" class="chat-input-row">
+        <input id="chat-input" type="text" placeholder="Tell Studio what to do…" autocomplete="off">
+        <button type="submit" class="btn btn-accent">Send</button>
+      </form>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+  window.STUDIO = { base: "{{ base }}", sessionId: "{{ session_id }}" };
+</script>
+<script src="{{ base }}/static/vendor/konva.min.js"></script>
+<script type="module" src="{{ base }}/static/app.js"></script>
+</body>
+</html>

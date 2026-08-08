@@ -57,7 +57,20 @@ data is appended to his message.
 You have eyes: run_step already tells you what each result looks like, and `look`
 re-examines the current image any time (optionally with a question — "is her hand
 intact?", "critique the composition"). Ground your opinions in what you actually see,
-and check results before declaring success on anatomy-sensitive steps."""
+and check results before declaring success on anatomy-sensitive steps.
+
+You are NOT limited to the pre-made tools. For generative edits — add/remove/replace
+an object ("add flowers at #1", "remove the cable") — use run_step with tool
+"inpaint": params {prompt, mask, strength}. Choosing the mask:
+- ADDING something new at a spot → region_mask(x, y) blob (marker coords). Never
+  sam_mask an empty area — it segments the entire background.
+- Editing/removing an EXISTING object → sam_mask(x, y) on it.
+- Broad regions → build_mask (bg/skin/hair…); Ronnie's painted mask ref if given.
+Inpaint prompts auto-inherit the image's style/medium (match-style is on by
+default) — a bare "bouquet of red roses" is enough; only add style words to
+deliberately break style. Caveat: the inpaint model rejects explicit input frames
+(comes back black — you'll get a clear error); say so and suggest a local
+alternative instead of retrying blindly."""
 
 
 HISTORY_REPLAY = 24  # messages of context replayed into each fresh SDK session
@@ -194,6 +207,51 @@ def _make_server(session_id: str, events: asyncio.Queue):
         except Exception as e:
             await _emit({"type": "tool_end", "name": "build_mask", "detail": "FAILED"})
             return {"content": [{"type": "text", "text": f"mask failed: {e}"}], "is_error": True}
+
+    @tool("sam_mask", "Point-mask: segment the thing at normalized (x, y) on the "
+          "current image via SAM 2 — use marker coordinates for 'at #1' requests. "
+          "Returns a mask ref for inpaint or masked steps.", {"x": float, "y": float})
+    async def sam_mask(args):
+        await _emit({"type": "tool_start", "name": "sam_mask", "detail": ""})
+        try:
+            def _work():
+                import requests as _rq
+                r = _rq.post("http://127.0.0.1:8703/segment",
+                             json={"ref": _current_ref(),
+                                   "points": [[float(args["x"]), float(args["y"])]]},
+                             timeout=120)
+                r.raise_for_status()
+                return r.json()
+            res = await asyncio.to_thread(_work)
+            await _emit({"type": "tool_end", "name": "sam_mask",
+                         "detail": f"{res['coverage_pct']}% of frame"})
+            return {"content": [{"type": "text", "text":
+                    f"mask ref {res['mask']}: score {res['score']:.2f}, "
+                    f"covers {res['coverage_pct']}% of frame"}]}
+        except Exception as e:
+            await _emit({"type": "tool_end", "name": "sam_mask", "detail": "FAILED"})
+            return {"content": [{"type": "text", "text": f"sam_mask failed: {e}"}],
+                    "is_error": True}
+
+    @tool("region_mask", "Soft elliptical blob mask at normalized (x, y) — for ADDING "
+          "new content at a spot ('add flowers at #1'). rx/ry are radii as fractions "
+          "of width/height (default 0.15). Use sam_mask instead for existing objects.",
+          {"x": float, "y": float, "rx": float, "ry": float})
+    async def region_mask(args):
+        await _emit({"type": "tool_start", "name": "region_mask", "detail": ""})
+        try:
+            def _work():
+                return masks.region_mask(_current_ref(),
+                                         float(args["x"]), float(args["y"]),
+                                         rx=float(args.get("rx") or 0.15),
+                                         ry=float(args.get("ry") or 0.15))
+            res = await asyncio.to_thread(_work)
+            await _emit({"type": "tool_end", "name": "region_mask", "detail": "done"})
+            return {"content": [{"type": "text", "text": f"mask ref {res['mask']}"}]}
+        except Exception as e:
+            await _emit({"type": "tool_end", "name": "region_mask", "detail": "FAILED"})
+            return {"content": [{"type": "text", "text": f"region_mask failed: {e}"}],
+                    "is_error": True}
 
     @tool("look", "Look at the current image with fresh eyes (local VLM, NSFW-safe). "
           "Optional question, e.g. 'is her hand mangled?' or 'critique the composition'.",
@@ -363,10 +421,10 @@ def _make_server(session_id: str, events: asyncio.Queue):
         return {"content": [{"type": "text", "text": f"head now {head or 'source (no steps)'}"}]}
 
     return create_sdk_mcp_server("studio",
-                                 tools=[run_step, run_variants, build_mask, look,
-                                        propose_params, lock_tool, save_recipe,
-                                        update_recipe, journal_tool, get_graph,
-                                        undo])
+                                 tools=[run_step, run_variants, build_mask, sam_mask,
+                                        region_mask, look, propose_params, lock_tool,
+                                        save_recipe, update_recipe, journal_tool,
+                                        get_graph, undo])
 
 
 def _scrubbed_env() -> dict:
@@ -420,7 +478,8 @@ async def chat(session_id: str, message: str, context: dict | None = None):
         + _brain_blocks() + graph_block + history_block,
         mcp_servers={"studio": _make_server(session_id, events)},
         allowed_tools=["mcp__studio__run_step", "mcp__studio__run_variants",
-                       "mcp__studio__build_mask", "mcp__studio__look",
+                       "mcp__studio__build_mask", "mcp__studio__sam_mask",
+                       "mcp__studio__region_mask", "mcp__studio__look",
                        "mcp__studio__propose_params", "mcp__studio__lock",
                        "mcp__studio__save_recipe", "mcp__studio__update_recipe",
                        "mcp__studio__journal", "mcp__studio__get_graph",

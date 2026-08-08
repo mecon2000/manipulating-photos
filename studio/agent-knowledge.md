@@ -66,3 +66,8 @@ the bottom, keep entries terse.
   recurring deltas across a batch and propose folding them into the recipe.
 
 <!-- Append new lessons below this line. -->
+- 2026-08-08: inpaint step (builtin, Flux via fal) for add/remove-object edits. For
+  ADDING at a spot use region_mask blob — SAM on an empty background patch segments
+  the whole background (96% of frame) and the inpaint eats the subject. For editing
+  existing objects, sam_mask. Bare prompts auto-inherit the image style (match-style).
+  Flux rejects explicit input frames (black output → clear error).

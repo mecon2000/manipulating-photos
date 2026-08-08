@@ -64,10 +64,35 @@ def _capture_output(stdout: str, scratch: Path, started: float) -> Path | None:
     return newest
 
 
+def _run_builtin(tool: str, params: dict, seed, input_ref: str,
+                 meta: dict) -> dict:
+    """Studio-native steps that run in-process (no CLI script)."""
+    started = time.time()
+    if tool == "inpaint":
+        from . import inpaint
+        p = dict(params or {})
+        if not p.get("mask"):
+            raise RuntimeError("inpaint needs a mask ref (params.mask) — "
+                               "brush/Select mask or sam_mask a point first")
+        output_ref = inpaint.run_inpaint(
+            input_ref, p["mask"], p.get("prompt", ""),
+            strength=float(p.get("strength", 0.95)),
+            grow_mask_pct=float(p.get("grow-mask-pct", 2.0)), seed=seed,
+            match_style=bool(int(p.get("match-style", 1))))
+    else:
+        raise RuntimeError(f"unknown builtin step {tool}")
+    costs.accrue(tool, meta["cost_estimate_usd"])
+    return {"output": output_ref, "tool": tool,
+            "wall_time": round(time.time() - started, 1),
+            "cost_usd": meta["cost_estimate_usd"], "log": ""}
+
+
 def run_step(tool: str, params: dict | None, flags: list | None, seed,
              input_ref: str, preview: bool) -> dict:
     """Execute one step (no cache check — see evaluate). Returns step record."""
     meta = registry.steps_meta()[tool]
+    if meta.get("builtin"):
+        return _run_builtin(tool, params or {}, seed, input_ref, meta)
     input_path = cache.object_path(input_ref)
     if input_path is None:
         raise FileNotFoundError(f"input ref {input_ref} not in object store")

@@ -25,8 +25,10 @@ def load_registry() -> dict:
 
 
 def steps_meta() -> dict:
-    """Step metadata for /tools: schema, determinism, cost, estimates."""
-    out = {}
+    """Step metadata for /tools: schema, determinism, cost, estimates.
+    Registry tools plus Studio-native builtin steps (e.g. inpaint)."""
+    from .inpaint import META as INPAINT_META
+    out = {"inpaint": dict(INPAINT_META)}
     for name, t in load_registry().items():
         if not isinstance(t, dict) or "script" not in t or name in _UNSUPPORTED:
             continue

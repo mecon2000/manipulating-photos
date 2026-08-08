@@ -172,28 +172,40 @@ function wireZoomPan() {
     rescaleMarkers();
   });
 
+  // Two fingers = pinch-zoom AND pan (via midpoint drift), one finger = Konva
+  // drag-pan. Konva's drag grabs the first finger and keeps overriding
+  // position once a second finger lands, so we stop it the moment a pinch
+  // starts — otherwise zoom appears dead while dragging and vice versa.
+  stage.on("touchstart", (e) => {
+    if (e.evt.touches.length >= 2 && stage.isDragging()) stage.stopDrag();
+  });
+
   stage.on("touchmove", (e) => {
     const touches = e.evt.touches;
     if (touches.length !== 2) return;
     e.evt.preventDefault();
+    if (stage.isDragging()) stage.stopDrag();
     const [t1, t2] = touches;
     const p1 = { x: t1.clientX, y: t1.clientY };
     const p2 = { x: t2.clientX, y: t2.clientY };
     const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
     const center = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-    if (lastDist) {
+    if (lastDist && lastCenter) {
       const oldScale = stage.scaleX();
       const newScale = clamp(oldScale * (dist / lastDist), 0.3, 8);
       const rect = stage.container().getBoundingClientRect();
       const localCenter = { x: center.x - rect.left, y: center.y - rect.top };
-      const mousePointTo = {
-        x: (localCenter.x - stage.x()) / oldScale,
-        y: (localCenter.y - stage.y()) / oldScale,
+      const lastLocal = { x: lastCenter.x - rect.left, y: lastCenter.y - rect.top };
+      // anchor on where the midpoint WAS: scaling stays centered between the
+      // fingers, and midpoint drift translates the stage (two-finger pan)
+      const pointTo = {
+        x: (lastLocal.x - stage.x()) / oldScale,
+        y: (lastLocal.y - stage.y()) / oldScale,
       };
       stage.scale({ x: newScale, y: newScale });
       stage.position({
-        x: localCenter.x - mousePointTo.x * newScale,
-        y: localCenter.y - mousePointTo.y * newScale,
+        x: localCenter.x - pointTo.x * newScale,
+        y: localCenter.y - pointTo.y * newScale,
       });
       stage.batchDraw();
       rescaleMarkers();

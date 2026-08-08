@@ -71,3 +71,8 @@ the bottom, keep entries terse.
   the whole background (96% of frame) and the inpaint eats the subject. For editing
   existing objects, sam_mask. Bare prompts auto-inherit the image style (match-style).
   Flux rejects explicit input frames (black output → clear error).
+- 2026-08-09: inpaint engine switched to FLUX Fill (fal-ai/flux-pro/v1/fill,
+  general-inpainting as fallback) — "add a heart" now actually adds a heart;
+  flux-general repainted context and ignored the prompt. Every inpaint is now
+  auto-verified: the edited region is cropped and the VLM answers YES/NO against
+  the prompt — trust that verdict over the model's own claim of success.

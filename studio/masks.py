@@ -16,6 +16,22 @@ if str(_WORKFLOWS) not in sys.path:
 import masking  # noqa: E402  (scripts/workflows/masking.py)
 
 
+def mask_bbox(mask_ref: str) -> list | None:
+    """Normalized [x, y, w, h] bounding box of a mask's nonzero area — used to
+    crop verification looks to just the edited region."""
+    from PIL import Image
+    p = cache.object_path(mask_ref)
+    if p is None:
+        return None
+    m = Image.open(p).convert("L")
+    box = m.point(lambda v: 255 if v > 32 else 0).getbbox()
+    if box is None:
+        return None
+    W, H = m.size
+    x0, y0, x1, y1 = box
+    return [x0 / W, y0 / H, (x1 - x0) / W, (y1 - y0) / H]
+
+
 def region_mask(input_ref: str, x: float, y: float,
                 rx: float = 0.15, ry: float = 0.15) -> dict:
     """Soft elliptical blob mask centered at normalized (x, y) — for ADDING

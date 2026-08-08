@@ -309,9 +309,11 @@ function onSelectStep(nodeId) {
   state.addingTool = null;
   const session = state.session;
   renderSteps(els.stepsStrip, session.chain, session.graph.nodes, state.selectedNodeId, onSelectStep, session.variants, onVariantPick);
-  const canvasRef = state.selectedNodeId && session.outputs[state.selectedNodeId]
-    ? session.outputs[state.selectedNodeId]
-    : session.canvas_ref;
+  const canvasRef = state.selectedNodeId === "__source__"
+    ? session.graph.source_ref
+    : state.selectedNodeId && session.outputs[state.selectedNodeId]
+      ? session.outputs[state.selectedNodeId]
+      : session.canvas_ref;
   canvas.loadImage(objectUrl(canvasRef));
   const currentNode = state.selectedNodeId || session.chain[session.chain.length - 1];
   updateVariantNav(currentNode, session.variants);

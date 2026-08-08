@@ -5,6 +5,14 @@ let expandedGroup = null; // chain node id whose variant stack is currently expa
 export function renderSteps(container, chain, nodes, activeId, onSelect, variants, onVariantPick) {
   container.innerHTML = "";
   variants = variants || {};
+
+  // Baseline chip: the untouched source photo, before step 1.
+  const srcChip = document.createElement("button");
+  srcChip.type = "button";
+  srcChip.className = "step-chip step-chip-source" + (activeId === "__source__" ? " active" : "");
+  srcChip.textContent = "0 source";
+  srcChip.addEventListener("click", () => onSelect("__source__"));
+  container.appendChild(srcChip);
   chain.forEach((nodeId, i) => {
     const node = nodes[nodeId];
     if (!node) return;

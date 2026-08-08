@@ -180,9 +180,26 @@ def _make_server(session_id: str, events: asyncio.Queue):
                          "detail": f"{name} done {time.time()-t0:.0f}s"})
             took = "cache hit" if last["cache_hit"] else f"{last.get('wall_time')}s"
             seen = await asyncio.to_thread(_look_at, last["output"])
-            return {"content": [{"type": "text", "text":
-                    f"ran {name}; output ref {last['output'][:12]}; {took}. "
-                    f"The result is now on the canvas. What it looks like: {seen}"}]}
+            text = (f"ran {name}; output ref {last['output'][:12]}; {took}. "
+                    f"The result is now on the canvas. What it looks like: {seen}")
+            # Inpaint lies happily — verify the edited region against the ask.
+            p = args.get("params") or {}
+            if name == "inpaint" and p.get("mask") and p.get("prompt"):
+                def _verify():
+                    region = masks.mask_bbox(p["mask"])
+                    s = Session.load(session_id)
+                    return eyes.describe(
+                        last["output"], region=region,
+                        source_path=s.data["source_path"],
+                        question=(f"Answer YES or NO first: does this crop contain "
+                                  f"{p['prompt']!r}? Then one short sentence on what "
+                                  "IS actually there."))["text"]
+                verdict = await asyncio.to_thread(_verify)
+                text += (f"\n\nVERIFICATION of the edited region: {verdict}\n"
+                         "If that's a NO, the edit failed — tell Ronnie honestly "
+                         "(never claim success), and offer ONE retry with a new "
+                         "seed or a rephrased/more literal prompt.")
+            return {"content": [{"type": "text", "text": text}]}
         except Exception as e:
             await _emit({"type": "tool_end", "name": "run_step", "detail": f"{name} FAILED"})
             return {"content": [{"type": "text", "text": f"step failed: {e}"}], "is_error": True}

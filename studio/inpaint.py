@@ -19,7 +19,10 @@ from PIL import Image, ImageFilter
 from . import cache
 from .paths import RUNS_DIR, ensure_dirs
 
-FAL_MODEL = "fal-ai/flux-general/inpainting"
+# FLUX Fill is the purpose-built inpainting model — far better prompt adherence
+# than flux-general/inpainting (repo lore: general "asked for doorframe, got
+# foliage"). Fill first, general as fallback if the endpoint errors.
+FAL_MODELS = ("fal-ai/flux-pro/v1/fill", "fal-ai/flux-general/inpainting")
 BLACK_MEAN_THRESHOLD = 10
 
 
@@ -93,14 +96,26 @@ def run_inpaint(input_ref: str, mask_ref: str, prompt: str,
     img.save(tmp_img, "JPEG", quality=95)
     mask.save(tmp_mask, "PNG")
     try:
-        args = {"image_url": fal_client.upload_file(str(tmp_img)),
-                "mask_url": fal_client.upload_file(str(tmp_mask)),
-                "prompt": prompt, "strength": float(strength),
-                "num_images": 1, "output_format": "jpeg",
-                "enable_safety_checker": False}
-        if seed is not None:
-            args["seed"] = int(seed)
-        result = fal_client.submit(FAL_MODEL, arguments=args).get()
+        img_url = fal_client.upload_file(str(tmp_img))
+        mask_url = fal_client.upload_file(str(tmp_mask))
+        result, last_err = None, None
+        for model in FAL_MODELS:
+            args = {"image_url": img_url, "mask_url": mask_url,
+                    "prompt": prompt, "num_images": 1, "output_format": "jpeg"}
+            if model.endswith("/fill"):
+                args["safety_tolerance"] = "5"
+            else:
+                args["strength"] = float(strength)
+                args["enable_safety_checker"] = False
+            if seed is not None:
+                args["seed"] = int(seed)
+            try:
+                result = fal_client.submit(model, arguments=args).get()
+                break
+            except Exception as e:    # endpoint missing/erroring — try fallback
+                last_err = e
+        if result is None:
+            raise RuntimeError(f"all inpaint endpoints failed: {last_err}")
     finally:
         tmp_img.unlink(missing_ok=True)
         tmp_mask.unlink(missing_ok=True)

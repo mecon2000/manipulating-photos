@@ -346,6 +346,7 @@ a { color: var(--accent); text-decoration: none; }
 .msg-agent { align-self: flex-start; background: var(--bg-3); border-bottom-left-radius: 3px; }
 .msg-system { align-self: center; color: var(--danger); font-size: 12px; }
 .msg-tool { align-self: flex-start; font-size: 12px; color: var(--fg-dim); background: var(--bg-3); border-radius: 8px; padding: 4px 10px; }
+.step-chip-source { opacity: 0.75; font-style: italic; }
 .msg-working { align-self: flex-start; background: var(--bg-3); border-radius: 12px; padding: 10px 14px; display: flex; gap: 5px; }
 .msg-working span { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); opacity: 0.3; animation: working-dot 1.2s infinite; }
 .msg-working span:nth-child(2) { animation-delay: 0.2s; }

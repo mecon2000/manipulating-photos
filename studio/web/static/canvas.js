@@ -172,28 +172,39 @@ function wireZoomPan() {
     rescaleMarkers();
   });
 
-  // Two fingers = pinch-zoom AND pan (via midpoint drift), one finger = Konva
-  // drag-pan. Konva's drag grabs the first finger and keeps overriding
-  // position once a second finger lands, so we stop it the moment a pinch
-  // starts — otherwise zoom appears dead while dragging and vice versa.
-  stage.on("touchstart", (e) => {
-    if (e.evt.touches.length >= 2 && stage.isDragging()) stage.stopDrag();
-  });
+  // Two fingers = pinch-zoom AND pan (midpoint drift), one finger = Konva
+  // drag-pan. Pinch runs on NATIVE container listeners, not Konva events —
+  // with a draggable stage Konva's drag machinery swallows/reorders touch
+  // events unpredictably, which is why pinch kept dying in Pan mode.
+  let pinchActive = false;
 
-  stage.on("touchmove", (e) => {
-    const touches = e.evt.touches;
-    if (touches.length !== 2) return;
-    e.evt.preventDefault();
-    if (stage.isDragging()) stage.stopDrag();
+  function touchPair(touches) {
     const [t1, t2] = touches;
-    const p1 = { x: t1.clientX, y: t1.clientY };
-    const p2 = { x: t2.clientX, y: t2.clientY };
-    const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    const center = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    return {
+      dist: Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY),
+      center: { x: (t1.clientX + t2.clientX) / 2,
+                y: (t1.clientY + t2.clientY) / 2 },
+    };
+  }
+
+  container.addEventListener("touchstart", (e) => {
+    if (e.touches.length < 2) return;
+    pinchActive = true;
+    if (stage.isDragging()) stage.stopDrag();
+    stage.draggable(false);
+    const { dist, center } = touchPair(e.touches);
+    lastDist = dist;
+    lastCenter = center;
+  }, { passive: true });
+
+  container.addEventListener("touchmove", (e) => {
+    if (!pinchActive || e.touches.length !== 2) return;
+    e.preventDefault();
+    const { dist, center } = touchPair(e.touches);
     if (lastDist && lastCenter) {
       const oldScale = stage.scaleX();
       const newScale = clamp(oldScale * (dist / lastDist), 0.3, 8);
-      const rect = stage.container().getBoundingClientRect();
+      const rect = container.getBoundingClientRect();
       const localCenter = { x: center.x - rect.left, y: center.y - rect.top };
       const lastLocal = { x: lastCenter.x - rect.left, y: lastCenter.y - rect.top };
       // anchor on where the midpoint WAS: scaling stays centered between the
@@ -212,8 +223,38 @@ function wireZoomPan() {
     }
     lastDist = dist;
     lastCenter = center;
+  }, { passive: false });
+
+  function endPinch(e) {
+    if (!pinchActive || e.touches.length >= 2) return;
+    pinchActive = false;
+    lastDist = null;
+    lastCenter = null;
+    stage.draggable(mode === "pan");
+  }
+  container.addEventListener("touchend", endPinch, { passive: true });
+  container.addEventListener("touchcancel", endPinch, { passive: true });
+
+  // Double-tap (Pan mode): reset zoom/pan if transformed, else zoom in 2.5×
+  // at the tap point. Other modes keep their tap semantics untouched.
+  stage.on("dbltap dblclick", () => {
+    if (mode !== "pan") return;
+    const transformed = Math.abs(stage.scaleX() - 1) > 0.01 ||
+      Math.abs(stage.x()) > 1 || Math.abs(stage.y()) > 1;
+    if (transformed) {
+      stage.scale({ x: 1, y: 1 });
+      stage.position({ x: 0, y: 0 });
+    } else {
+      const pointer = stage.getPointerPosition() ||
+        { x: stage.width() / 2, y: stage.height() / 2 };
+      const z = 2.5;
+      stage.scale({ x: z, y: z });
+      stage.position({ x: pointer.x - pointer.x * z,
+                       y: pointer.y - pointer.y * z });
+    }
+    stage.batchDraw();
+    rescaleMarkers();
   });
-  stage.on("touchend", () => { lastDist = null; lastCenter = null; });
 }
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }

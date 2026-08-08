@@ -56,12 +56,28 @@ function setSending(v) {
   if (btn) btn.disabled = v;
 }
 
+// Animated "working" bubble so a long silent stretch reads as busy, not stuck.
+let workingEl = null;
+function showWorking() {
+  if (!workingEl) {
+    workingEl = document.createElement("div");
+    workingEl.className = "msg msg-working";
+    workingEl.innerHTML = "<span></span><span></span><span></span>";
+  }
+  messagesEl.appendChild(workingEl); // (re-)append keeps it below latest content
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function hideWorking() {
+  if (workingEl && workingEl.parentNode) workingEl.parentNode.removeChild(workingEl);
+}
+
 async function send(text, apiBase, sessionId, getContext) {
   setSending(true);
   let agentDiv = null;
   let agentText = "";
   const toolChips = {};
 
+  showWorking();
   try {
     const res = await fetch(`${apiBase}/session/${sessionId}/chat`, {
       method: "POST",
@@ -71,6 +87,7 @@ async function send(text, apiBase, sessionId, getContext) {
     if (!res.ok || !res.body) {
       addMessage("system", `Error: ${res.statusText}`);
       setSending(false);
+      hideWorking();
       return;
     }
     const reader = res.body.getReader();
@@ -93,6 +110,7 @@ async function send(text, apiBase, sessionId, getContext) {
     addMessage("system", `Error: ${err.message}`);
   } finally {
     setSending(false);
+    hideWorking();
   }
 
   function handleEvent(ev) {
@@ -100,9 +118,11 @@ async function send(text, apiBase, sessionId, getContext) {
       if (!agentDiv) agentDiv = addMessage("agent", "");
       agentText += ev.delta;
       agentDiv.textContent = agentText;
+      showWorking(); // keep the busy dots below the newest content
       messagesEl.scrollTop = messagesEl.scrollHeight;
     } else if (ev.type === "tool_start") {
       toolChips[ev.name + ":" + ev.detail] = addToolChip(ev.name, ev.detail);
+      showWorking();
     } else if (ev.type === "tool_end") {
       const key = ev.name + ":" + ev.detail;
       const existing = Object.entries(toolChips).find(([k]) => k.startsWith(ev.name + ":"));

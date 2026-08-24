@@ -106,6 +106,27 @@ def auto_align_angle(img, landmarks):
     return -angle
 
 
+def story_crop(w, h, face_bbox, height_in_faces=5.2, face_from_top=0.34, ar=9/16):
+    """Aspect-exact 9:16 head-and-shoulders crop, anchored on the face.
+
+    The other options here clamp to the frame and lose their ratio in the
+    process; a story crop has to stay exactly 9:16, so this shrinks the box to
+    fit rather than clipping one side of it.
+    """
+    if not face_bbox:
+        ch = min(h, w / ar)
+        cw = ch * ar
+        return int((w - cw) / 2), int((h - ch) / 2), int(cw), int(ch)
+    fx1, fy1, fx2, fy2 = face_bbox
+    fh = max(fy2 - fy1, 1)
+    cx, cy = (fx1 + fx2) / 2.0, (fy1 + fy2) / 2.0
+    ch = min(fh * height_in_faces, h, w / ar)
+    cw = ch * ar
+    x1 = int(round(min(max(cx - cw / 2, 0), w - cw)))
+    y1 = int(round(min(max(cy - ch * face_from_top, 0), h - ch)))
+    return x1, y1, int(cw), int(ch)
+
+
 def generate_crop_options(w, h, mask_binary, landmarks, face_bbox):
     """Generate multiple crop suggestions. Returns list of (name, x1, y1, x2, y2)."""
     # Subject bounding box from mask
@@ -169,6 +190,10 @@ def generate_crop_options(w, h, mask_binary, landmarks, face_bbox):
     cin_y1 = subj_cy - cin_h // 2
     options.append(("16:9 cinematic",
                     *clamp(cin_x1, cin_y1, cin_x1 + cin_w, cin_y1 + cin_h)))
+
+    # 6. 9:16 story (head & shoulders) — aspect-exact, for IG/TikTok verticals
+    sx, sy, scw, sch = story_crop(w, h, face_bbox)
+    options.append(("9:16 story (head+shoulders)", sx, sy, sx + scw, sy + sch))
 
     # --- Unusual/artistic crops ---
     # Estimate body segments from mask when pose detection fails
@@ -555,6 +580,9 @@ def main():
                         help="Apply crop number N (from --show-options)")
     parser.add_argument("--custom", type=str, default=None,
                         help="Custom crop: x1,y1,x2,y2")
+    parser.add_argument("--story", action="store_true",
+                        help="apply the aspect-exact 9:16 head-and-shoulders crop directly "
+                             "(no option list needed — usable in batch)")
     parser.add_argument("--outpaint", action="store_true",
                         help="Fill extended canvas areas with AI-generated content")
     parser.add_argument("--outpaint-prompt", type=str, default=None,
@@ -640,7 +668,27 @@ def main():
     crop_coords = None
     crop_name = None
 
-    if args.custom:
+    if args.story:
+        # Prefer the 468-point face mesh over the pose model's coarse face box:
+        # the pose estimate can sit far enough off-centre to crop half a face
+        # out of the frame, which a story crop cannot recover from.
+        story_bbox = face_bbox
+        try:
+            import numpy as _np
+            import face_align as _FA
+            _pts = _FA.landmarks(_np.asarray(img.convert("RGB")))
+            if _pts:
+                _xs = [p[0] for p in _pts.values()]
+                _ys = [p[1] for p in _pts.values()]
+                story_bbox = (min(_xs), min(_ys), max(_xs), max(_ys))
+                print("  story crop: using face-mesh bbox")
+        except Exception as e:
+            print(f"  story crop: face-mesh unavailable ({e}) — using pose bbox")
+        sx, sy, scw, sch = story_crop(w, h, story_bbox)
+        crop_coords = (sx, sy, sx + scw, sy + sch)
+        crop_name = "9:16 story (head+shoulders)"
+
+    elif args.custom:
         parts = [int(x) for x in args.custom.split(",")]
         if len(parts) == 4:
             crop_coords = tuple(parts)

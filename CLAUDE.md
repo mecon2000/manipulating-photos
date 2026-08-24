@@ -280,10 +280,13 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 ### `scripts/workflows/smart-crop.py`
 **Intelligent photo cropping.** Analyzes subject position (BiRefNet mask + MediaPipe pose), generates 12 crop suggestions including standard compositions and unusual/artistic crops. Dual-panel overlay for easy comparison.
 
-**12 crop types:** tight subject, rule of thirds, square, 4:5 portrait, 16:9 cinematic, face close-up, chin-down (headless), knee-up, chin-to-knee, torso only, waist-down, off-center. Falls back to mask-based body estimation when pose detection fails.
+**13 crop types:** tight subject, rule of thirds, square, 4:5 portrait, 16:9 cinematic, **9:16 story (head+shoulders)**, face close-up, chin-down (headless), knee-up, chin-to-knee, torso only, waist-down, off-center. Falls back to mask-based body estimation when pose detection fails.
+
+The 9:16 story crop is **aspect-exact** (the others clamp to the frame and lose their ratio), face-anchored, and shrinks to fit rather than clipping a side. It prefers `face_align`'s 468-point mesh over the pose model's coarse face box — the pose estimate can sit far enough off-centre to crop half a face out of frame. Use `--story` to apply it directly, which makes it batchable.
 
 **Usage:**
 ```bash
+./scripts/workflows/smart-crop.py --source photo.jpg --story                  # 9:16 head+shoulders (IG stories)
 ./scripts/workflows/smart-crop.py --source photo.jpg --show-options          # show numbered options
 ./scripts/workflows/smart-crop.py --source photo.jpg --crop 9                # apply crop #9
 ./scripts/workflows/smart-crop.py --source photo.jpg --crop 3 --outpaint    # extend canvas with AI fill
@@ -291,7 +294,7 @@ Ghost in dissolve mode uses exponential arc offsets (scaled to image size) for v
 ./scripts/workflows/smart-crop.py --source photo.jpg --custom 100,200,900,1800
 ```
 
-**All flags:** `--source`, `--show-options`, `--crop N`, `--custom x1,y1,x2,y2`, `--outpaint` (AI canvas fill), `--auto-align` (straighten), `--output-to`, `--local-output-dir`
+**All flags:** `--source`, `--show-options`, `--crop N`, `--story` (apply the 9:16 head+shoulders crop directly), `--custom x1,y1,x2,y2`, `--outpaint` (AI canvas fill), `--auto-align` (straighten), `--output-to`, `--local-output-dir`
 
 **Tips:**
 - Most useful for unprocessed photos; processed usually don't need cropping
@@ -400,10 +403,12 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 1. Relight (IC-Light, fal.ai) — gives the face a clean directional light it can dominate the surreal BG with
 2. `bw_with_curve` — desaturate + S-curve for punchy mid-tones
 3. become-image (Replicate `fofr/become-image`) — InstantID + IPAdapter + depth ControlNet + DreamShaperXL Lightning, identity-preserving stylization driven by `--style` reference
-4. MediaPipe face-axis ellipse mask — oriented to actual face tilt, falloff into shoulders
+4. Face mask — with `--align-face` (recommended): MediaPipe **face_landmarker** (468 pts) detects the face in BOTH the source and the become-image output, solves a similarity transform, warps the source onto the stylized head, and derives the ellipse from the TARGET. Without it, the legacy pose-landmarker ellipse is built from the source only
 4.5. (optional) Text overlay via `text_overlay.py` — literary quote, edge-flush, color sampled from photo highlights
 4.7. (optional) Color grade via `color_grade.py` — applied to the composite (subject + surreal + text together)
-5. Histogram match → composite face onto surreal → optional Real-ESRGAN 4× upscale (`upscale_replicate.py`)
+5. Colour match → composite face onto surreal → optional Real-ESRGAN 4× upscale (`upscale_replicate.py`)
+
+**Why `--align-face` matters:** become-image moves and rotates the head, so a mask built from the source lands where the face *used to be* — on tilted poses it reads as an oval pasted at the wrong angle. Alignment fixes that at the root. It also detects faces the pose model misses entirely (which previously fell back to a centred ellipse in the wrong place).
 
 **Usage:**
 ```bash
@@ -412,7 +417,27 @@ Subfolders of `style-refs/<family>/` are auto-discovered by `/api/style-families
 ./scripts/workflows/surreal_with_face.py --relit ... --no-face-overlay --upscale 0
 ```
 
-**All flags:** `--relit`, `--style`, `--no-face-overlay` (for face-less photos), `--upscale` (0/2/4, default 4), `--text` (string or `auto`), `--text-style` (font preset), `--text-orientation` (horizontal/vertical/auto, default horizontal), `--text-angle` (degrees override), `--text-size-pct` (% of short edge), `--grade` (mode for `color_grade.py`: warm-cool/split/wash:<color>), `--grade-strength` (0-1), `--mask-inner-mult` (default 0.7, sharp face region), `--mask-outer-mult` (default 3.0, falloff edge), `--mask-falloff-power` (default 1.0 linear). Outputs `{tag}__final.jpg` (+ `_4x.jpg` if upscaled) to `shared/surreal-with-face/`. Total ~4min, **~$0.07/image** (mostly relight at $0.06; become-image $0.01; upscale $0.005).
+**All flags:** `--relit` (any source image — it does NOT have to be relit; relighting is optional and often unhelpful for dark/dramatic references), `--style`, `--color` (skip the B&W conversion — run become-image on the colour source and composite in RGB, keeping the style ref's palette), `--align-face` (detect + warp onto the stylized face; see above), `--match-scope` (`face`/`frame`/`hybrid`, default `hybrid`), `--match-strength` (0-1), `--no-face-overlay` (for face-less photos), `--upscale` (0/2/4, default 4), `--text` (string or `auto`), `--text-style` (font preset), `--text-orientation` (horizontal/vertical/auto, default horizontal), `--text-angle` (degrees override), `--text-size-pct` (% of short edge), `--grade` (mode for `color_grade.py`: warm-cool/split/wash:<color>), `--grade-strength` (0-1), `--mask-inner-mult` (default 0.7, sharp face region), `--mask-outer-mult` (default 3.0, falloff edge), `--mask-falloff-power` (default 1.0 linear). Outputs `{tag}__final.jpg` (+ `_4x.jpg` if upscaled) to `shared/surreal-with-face/`. Total ~4min, **~$0.07/image** (mostly relight at $0.06; become-image $0.01; upscale $0.005).
+
+### `scripts/workflows/face_align.py`
+**Face detection + source→target alignment, used by `surreal_with_face.py --align-face`.** Not a standalone tool — a library.
+
+- `landmarks()` — MediaPipe face_landmarker (468 pts). On failure it retries once on a gray-world + CLAHE normalized copy, which recovers heavily gelled low-key portraits (a face lit by one orange flare against black reads as "no face" otherwise). The normalization is detection-only and never touches output pixels.
+- `similarity_transform()` / `warp()` — rotation+scale+translation fit over 9 landmarks.
+- `ellipse_from_landmarks()` — face ellipse spanning forehead→chin and cheek→cheek.
+- `radial_mask()` — soft elliptical falloff (`inner`/`outer`/`power`).
+- `match_in_region()` — Reinhard mean/std colour transfer in LAB. **`scope`** picks where the target stats come from: `face` (stylized face only — safe, but the head looks dull beside a punchy scene), `frame` (whole image — picks up contrast and palette, but a dark canvas drags face brightness down), `hybrid` (default: brightness anchored on the face, contrast + colour from the frame).
+
+**Two dead ends worth not repeating:** matching histograms over the whole frame turns faces black (a dark canvas drags skin to its global histogram); matching over the mask's *bounding box* turns them red (the box is still mostly background). Sample only `mask > 0.5`.
+
+### `scripts/workflows/recompose_face.py`
+**Redo just the face-composite steps on an already-generated `<tag>__surreal.jpg`.** Tuning the mask or colour transfer by re-running the pipeline costs an API call each time; this reruns steps 2-4 locally and free.
+
+```bash
+./scripts/workflows/recompose_face.py --source PHOTO --surreal TAG__surreal.jpg --out OUT.jpg
+```
+
+**Flags:** `--source`, `--surreal`, `--out`, `--inner`, `--outer`, `--power`, `--match-scope`, `--match-strength`.
 
 ### `scripts/workflows/text_overlay.py`
 **Literary text overlay.** Renders a quote onto a photo, edge-flush, with color sampled from the photo's own highlights. Standalone or imported by `surreal_with_face.py` as step 4.5. Free local + one small Gemini Flash call when picking a mood phrase.

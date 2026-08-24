@@ -253,6 +253,17 @@ def main():
     p.add_argument("--save-stack", action="store_true",
                    help="export each pipeline step as a layer in a multi-page TIFF "
                         "(saved alongside final as <tag>__stack.tif)")
+    p.add_argument("--match-scope", choices=["face", "frame", "hybrid"], default="hybrid",
+                   help="where the face's target colour stats come from (see face_align)")
+    p.add_argument("--match-strength", type=float, default=1.0,
+                   help="0 = keep source tones, 1 = full transfer")
+    p.add_argument("--align-face", action="store_true",
+                   help="detect the face in the stylized output too, warp the source "
+                        "onto it, and build the mask from the TARGET face (fixes the "
+                        "oval landing off-face when become-image moves the head)")
+    p.add_argument("--color", action="store_true",
+                   help="skip the B&W conversion — run become-image on the color "
+                        "source and composite in RGB (keeps the style ref's palette)")
     p.add_argument("--no-face-overlay", action="store_true",
                    help="skip face mask + composite (use when source has no detectable face)")
     p.add_argument("--upscale", type=int, default=4, choices=[0, 2, 4],
@@ -303,10 +314,16 @@ def main():
     # 0.5 — B&W with curve
     relit_pil = Image.open(relit_path).convert("RGB")
     _stash("00_relit", relit_pil)
-    bw_relit = bw_with_curve(relit_pil)
-    bw_relit_path = out_dir / f"{tag}__bw_relit.jpg"
-    bw_relit.save(bw_relit_path, quality=95)
-    print(f"step 0.5: bw_with_curve → {bw_relit_path.name}")
+    if args.color:
+        bw_relit = relit_pil
+        bw_relit_path = out_dir / f"{tag}__src.jpg"
+        bw_relit.save(bw_relit_path, quality=95)
+        print(f"step 0.5: SKIPPED bw_with_curve (--color) → {bw_relit_path.name}")
+    else:
+        bw_relit = bw_with_curve(relit_pil)
+        bw_relit_path = out_dir / f"{tag}__bw_relit.jpg"
+        bw_relit.save(bw_relit_path, quality=95)
+        print(f"step 0.5: bw_with_curve → {bw_relit_path.name}")
     _stash("01_bw_relit", bw_relit)
 
     # 1 — become-image
@@ -336,9 +353,41 @@ def main():
     relit_arr = np.asarray(relit_pil)
     if relit_arr.shape[:2] != bw_arr.shape:
         relit_arr = np.asarray(relit_pil.resize(bw_relit.size, Image.LANCZOS))
+    aligned_src_pil = bw_relit          # source used for the composite
     if args.no_face_overlay:
         print("step 2: SKIPPED (--no-face-overlay)")
         mask = np.zeros(bw_arr.shape, dtype=np.float32)
+    elif args.align_face:
+        print("step 2: face align + mask …")
+        import face_align as FA
+        src_pts = FA.landmarks(relit_arr)
+        dst_pts = FA.landmarks(np.asarray(surreal_pil))
+        if src_pts is None or dst_pts is None:
+            which = "source" if src_pts is None else "stylized"
+            print(f"  face NOT detected in {which} — falling back to source geometry")
+            pts = src_pts or dst_pts
+            if pts is None:
+                print("  no face in either image — skipping overlay")
+                mask = np.zeros(bw_arr.shape, dtype=np.float32)
+            else:
+                c, semi, ang = FA.ellipse_from_landmarks(pts)
+                mask = FA.radial_mask(bw_relit.size, c, semi, ang,
+                                      args.mask_inner_mult, args.mask_outer_mult,
+                                      args.mask_falloff_power)
+        else:
+            M = FA.similarity_transform(src_pts, dst_pts)
+            if M is None:
+                print("  transform solve failed — using source unwarped")
+            else:
+                warped = FA.warp(np.asarray(bw_relit.convert("RGB")), M, bw_relit.size)
+                aligned_src_pil = Image.fromarray(warped)
+                print(f"  warped source onto stylized face")
+            c, semi, ang = FA.ellipse_from_landmarks(dst_pts)
+            print(f"  target face: center=({c[0]:.0f},{c[1]:.0f}) "
+                  f"semi=({semi[0]:.0f}x{semi[1]:.0f}) angle={ang:.1f}°")
+            mask = FA.radial_mask(bw_relit.size, c, semi, ang,
+                                  args.mask_inner_mult, args.mask_outer_mult,
+                                  args.mask_falloff_power)
     else:
         print("step 2: face mask …")
         mask = face_ellipse_mask(bw_relit.size, relit_arr,
@@ -350,13 +399,30 @@ def main():
 
     # 3 — histogram-match bw_relit's tone to surreal_gray
     print("step 3: histogram match …")
-    bw_matched = match_histograms(bw_arr, surreal_gray).astype(np.uint8)
+    if args.color:
+        surreal_work = np.asarray(surreal_pil).astype(np.uint8)
+        src_work     = np.asarray(aligned_src_pil.convert("RGB")).astype(np.uint8)
+    else:
+        surreal_work = surreal_gray
+        src_work     = grayscale(aligned_src_pil)
+    if args.align_face:
+        import face_align as FA
+        bw_matched = FA.match_in_region(src_work, surreal_work, mask,
+                                        strength=args.match_strength,
+                                        scope=args.match_scope)
+        print("  histogram matched within face region only")
+    elif args.color:
+        bw_matched = match_histograms(src_work, surreal_work,
+                                      channel_axis=-1).astype(np.uint8)
+    else:
+        bw_matched = match_histograms(src_work, surreal_work).astype(np.uint8)
     _stash("05_bw_matched", bw_matched)
 
     # 4 — composite
     print("step 4: composite …")
-    final = surreal_gray.astype(np.float32) * (1 - mask) \
-            + bw_matched.astype(np.float32) * mask
+    m = mask[..., None] if args.color else mask
+    final = surreal_work.astype(np.float32) * (1 - m) \
+            + bw_matched.astype(np.float32) * m
     final_u8 = np.clip(final, 0, 255).astype(np.uint8)
     if args.grain > 0:
         # Build a larger ellipse mask for grain attenuation: mask=1 inside (low grain),
@@ -374,7 +440,7 @@ def main():
             Image.fromarray((grain_mask * 255).astype(np.uint8)).save(
                 out_dir / f"{tag}__grain_mask.png")
         print(f"  added grain ({args.grain} outside, {args.grain*args.grain_inside_pct:.3f} inside, ellipse-scale={scale})")
-    final_arr = np.stack([final_u8]*3, axis=-1)
+    final_arr = final_u8 if args.color else np.stack([final_u8]*3, axis=-1)
     _stash("06_composite", final_arr)
 
     # Step 4.5 — optional text overlay (BEFORE grading so grade sweeps text too)

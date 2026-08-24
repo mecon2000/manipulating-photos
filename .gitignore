@@ -4,3 +4,5 @@ scripts/workflows/literary_quotes.npy
 # Studio runtime state (ext4, regenerable)
 studio/state/
 __pycache__/
+__pycache__/
+*.pyc

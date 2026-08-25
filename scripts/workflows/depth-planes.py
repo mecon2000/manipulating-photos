@@ -127,7 +127,18 @@ def main():
     p.add_argument("--plates", nargs=4, required=True,
                    help="plates for planes 1 2 4 5, in that order")
     p.add_argument("--out", required=True)
-    p.add_argument("--scale", type=float, default=1.0, help="portrait scale on plane 3")
+    p.add_argument("--scale", type=float, default=1.0,
+                   help="shrink the portrait inside the frame (0.8 = 10%% clear each side), "
+                        "so the side planes have room to read")
+    p.add_argument("--mask-from", default=None,
+                   help="segment THIS image instead of the portrait. A stylized frame with "
+                        "flat graphic clothing barely reads as a person (27%% coverage vs 58%% "
+                        "on the photo it came from), so the cut-out tears. Defaults to the "
+                        "matching frame under the reel's _sources/crop_916/ when present")
+    p.add_argument("--subject-relief", type=float, default=0.85,
+                   help="0-1: how much the near planes thin out over her whole silhouette. "
+                        "The face relief alone only clears a disc around the head, which "
+                        "leaves the torso to be swallowed by front shapes")
     p.add_argument("--front-relief", type=float, default=0.75,
                    help="0-1: how much the near planes thin out over her face")
     args = p.parse_args()
@@ -137,10 +148,54 @@ def main():
     pts = mesh(port)
     if pts is None:
         print("  no face found — front planes will not be eye-masked", file=sys.stderr)
-    subj = subject_alpha(port)
+    mask_src = args.mask_from
+    if not mask_src:                       # sibling original from the same reel, same crop
+        stem = Path(args.portrait).stem.split("__style")[0]
+        cand = Path(args.portrait).parent.parent / "_sources" / "crop_916" / f"{stem}.jpg"
+        if cand.is_file():
+            mask_src = str(cand)
+            print(f"  masking from the source crop: {cand.name}")
+    if mask_src:
+        m = np.asarray(Image.open(mask_src).convert("RGB"))
+        if m.shape[:2] != (H, W):
+            m = cv2.resize(m, (W, H), interpolation=cv2.INTER_LANCZOS4)
+        subj = subject_alpha(m)
+    else:
+        subj = subject_alpha(port)
+
+    if args.scale != 1.0:
+        # Inset the subject so the near planes have margin to work in. The landmarks are
+        # moved by the same transform rather than re-detected: re-running the mesh on a
+        # resampled image would shift the eye guard by a pixel or two for no gain.
+        sw, sh = int(W * args.scale), int(H * args.scale)
+        small = cv2.resize(port, (sw, sh), interpolation=cv2.INTER_LANCZOS4)
+        small_a = cv2.resize(subj, (sw, sh), interpolation=cv2.INTER_LINEAR)
+        ox = (W - sw) // 2
+        oy = H - sh                        # sit her on the bottom edge: only the SIDES inset,
+                                           # so her body runs off-frame as it did before
+        port = np.zeros_like(port)
+        subj = np.zeros((H, W), np.float32)
+        # Her silhouette was clipped by the original crop, so insetting turns those clips
+        # into straight cut lines floating in the collage. Fade the alpha at the inset
+        # border; interior edges are untouched because the mask is already 0 there.
+        fade = max(6, int(min(sw, sh) * 0.03))
+        ramp = np.ones((sh, sw), np.float32)
+        g = np.linspace(0, 1, fade, dtype=np.float32)
+        ramp[:, :fade] *= g; ramp[:, -fade:] *= g[::-1]
+        ramp[:fade, :] *= g[:, None]
+        small_a = small_a * ramp
+        port[oy:oy + sh, ox:ox + sw] = small
+        subj[oy:oy + sh, ox:ox + sw] = small_a
+        if pts is not None:
+            pts = pts * args.scale + np.array([ox, oy], np.float32)
+        print(f"  portrait inset to {args.scale:.2f} "
+              f"({ox}px clear each side)")
     hole = eye_hole((H, W), pts)
     relief = face_relief((H, W), pts, args.front_relief)
-    front = hole * relief
+    # Thin the near planes across the subject too, so decorations gather at the sides
+    # rather than sitting on her body. Blurred so shapes still graze hair and shoulders.
+    body = cv2.GaussianBlur(subj, (0, 0), max(W, H) * 0.02)
+    front = hole * relief * (1.0 - args.subject_relief * np.clip(body, 0, 1))
 
     def plate(path, plane):
         im = np.asarray(Image.open(path).convert("RGB").resize((W, H), Image.LANCZOS))

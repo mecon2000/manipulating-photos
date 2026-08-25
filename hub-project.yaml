@@ -25,6 +25,17 @@ content:
       link_template: {url: "/studio/new?src={path}", label: "Tweak"}
       dir: ~/.openclaw/workspace/shared/candidates
       media: [photo]
+    reels:
+      dir: ~/.openclaw/workspace/shared/faces-candidates/reels
+      media: [photo]
+    reel-inputs:
+      dir: ~/.openclaw/workspace/shared/faces-candidates/inputs
+      media: [photo]
+      hidden_by_default: true
+    reel-explorations:
+      dir: ~/.openclaw/workspace/shared/faces-candidates/explorations
+      media: [photo]
+      hidden_by_default: true
     surreal:
       dir: ~/.openclaw/workspace/shared/surreal-with-face
       media: [photo]

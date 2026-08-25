@@ -173,11 +173,19 @@ def main():
     if args.dry_run:
         return
 
-    style_stem = Path(args.style).stem.replace(" ", "_").replace("-", "_")
-    tag = f"{clean(model)}_{style_stem}_{args.name}"
-    in_dir, out_dir = SHARED / f"input_{tag}", SHARED / f"output_{tag}"
-    (in_dir / "originals").mkdir(parents=True, exist_ok=True)
-    src_dir = in_dir / "originals"
+    # One folder per reel: finals/ is the only thing meant for browsing, and the
+    # leading underscore on _intermediates/ is load-bearing — project-hub's scanner
+    # skips directories starting with "_", so intermediates stay out of the UI.
+    style_stem = Path(args.style).stem.replace(" ", "-").replace("_", "-")
+    idx = args.name if not args.name.startswith("reel") else args.name
+    m = re.match(r"reel(\d+)$", idx)
+    if m:
+        idx = f"reel{int(m.group(1)):02d}"
+    reel_dir = SHARED / "reels" / f"{idx}_{clean(model)}_{style_stem}"
+    in_dir = reel_dir / "sources"
+    out_dir = reel_dir / "finals"
+    src_dir = in_dir
+    src_dir.mkdir(parents=True, exist_ok=True)
 
     for f in picked:
         shutil.copyfile(f, src_dir / f"{clean(model)}_{clean(Path(f).stem)}.jpg")
@@ -187,7 +195,7 @@ def main():
     else:
         # Crop BEFORE stylizing: become-image renders ~1024px on the long edge, so a
         # 9:16 crop taken afterwards would throw most of that away on landscape frames.
-        run_dir = in_dir / "crop_916"
+        run_dir = reel_dir / "sources" / "crop_916"
         run_dir.mkdir(exist_ok=True)
         finals = Path("~/.openclaw/workspace/shared/finals").expanduser()
         for f in sorted(src_dir.glob("*.jpg")):
@@ -214,10 +222,10 @@ def main():
         print(f"  {f.stem}: {last[-1].strip() if last else 'FAILED'}")
 
     # Keep only the finals in view; intermediates still enable free recompose_face.py runs.
-    inter = out_dir / "_intermediates"
+    inter = reel_dir / "_intermediates"
     inter.mkdir(exist_ok=True)
-    for f in list(out_dir.glob("*__surreal.jpg")) + list(out_dir.glob("*__src.jpg")) \
-            + list(out_dir.glob("*__bw_relit.jpg")):
+    for f in (list(out_dir.glob("*__surreal.jpg")) + list(out_dir.glob("*__src.jpg"))
+              + list(out_dir.glob("*__bw_relit.jpg")) + list(out_dir.glob("*.json"))):
         shutil.move(str(f), str(inter / f.name))
 
     n = len(list(out_dir.glob("*__final.jpg")))

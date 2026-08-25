@@ -28,6 +28,11 @@ content:
     reels:
       dir: ~/.openclaw/workspace/shared/faces-candidates/reels
       media: [photo]
+      group_by: dir          # one card per reel; fav applies to the whole set
+    depth-planes:
+      dir: ~/.openclaw/workspace/shared/faces-candidates/depth-planes
+      media: [photo]
+      group_by: dir
     reel-inputs:
       dir: ~/.openclaw/workspace/shared/faces-candidates/inputs
       media: [photo]
@@ -35,6 +40,7 @@ content:
     reel-explorations:
       dir: ~/.openclaw/workspace/shared/faces-candidates/explorations
       media: [photo]
+      group_by: dir
       hidden_by_default: true
     surreal:
       dir: ~/.openclaw/workspace/shared/surreal-with-face

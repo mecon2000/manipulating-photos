@@ -122,7 +122,7 @@ def main():
 
     # every JPEG of this session, by frame number
     jpgs = {}
-    for f in glob.glob(str(session_dir) + "/**/*.jpg", recursive=True):
+    for f in sorted(glob.glob(str(session_dir) + "/**/*.jpg", recursive=True)):
         n = frame_no(f)
         if n is not None:
             jpgs.setdefault(n, f)         # first hit wins; Processed sorts before Unprocessed

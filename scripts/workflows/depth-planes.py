@@ -60,14 +60,25 @@ def noise_source(w, h, plane, seed, ground=238):
     rng = np.random.default_rng(seed)
     a = np.full((h, w, 3), float(ground) if np.isscalar(ground) else ground, np.float32)
     yy, xx = np.mgrid[0:h, 0:w]
-    edge = np.minimum.reduce([xx / w, (w - 1 - xx) / w, yy / h, (h - 1 - yy) / h])
+
+    # Zoom is a centre crop, and the edge weighting deliberately empties the centre —
+    # left uncorrected those fight, and a plane magnifies into its own quiet zone.
+    # (Measured: plane 2 at 1.6x kept only 39% of the frame and a THIRD less artwork
+    # than the plate held.) So compose within the window that will actually survive.
+    z = max(rec["zoom"], 1.0)
+    vw, vh = w / z, h / z
+    ox, oy = (w - vw) / 2, (h - vh) / 2
+    u = np.clip((xx - ox) / vw, 0, 1)
+    v = np.clip((yy - oy) / vh, 0, 1)
+    edge = np.minimum.reduce([u, 1 - u, v, 1 - v])
     band = np.clip(1.0 - edge / rec["band"], 0, 1) ** 1.4
     blobs = np.zeros((h, w), np.float32)
     for _ in range(int(rng.integers(*rec["count"]))):
-        cx, cy = rng.uniform(0, w), rng.uniform(0, h)
-        if 0.30 * w < cx < 0.70 * w and 0.18 * h < cy < 0.82 * h:
+        cx = rng.uniform(ox, ox + vw)          # place blobs inside the surviving window
+        cy = rng.uniform(oy, oy + vh)
+        if ox + 0.30 * vw < cx < ox + 0.70 * vw and oy + 0.18 * vh < cy < oy + 0.82 * vh:
             continue
-        r = rng.uniform(rec["r"][0] * w, rec["r"][1] * w)
+        r = rng.uniform(rec["r"][0] * vw, rec["r"][1] * vw)
         blobs += np.exp(-(((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * r * r)))
     noise = rng.normal(0, 1, (h, w, 1)) * 85 + rng.normal(0, 1, (h, w, 3)) * 40
     a += noise * band[..., None] + blobs[..., None] * band[..., None] * rng.uniform(-72, 72, (1, 1, 3))

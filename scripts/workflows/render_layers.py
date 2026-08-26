@@ -37,15 +37,20 @@ def ffmpeg():
     return shutil.which("ffmpeg")
 
 
-def make_video(frames, out_path, w, h):
-    """Build up at 300ms, hold the finished picture, then tear down at 100ms."""
+def make_video(build, hold, teardown, out_path, w, h):
+    """Build up at 300ms, hold the finished picture, then tear down at 100ms.
+
+    Teardown is its own frame list, not the build reversed: the build shows planes that
+    were tried and dropped, and replaying those backwards would re-introduce work the
+    picture had already rejected.
+    """
     exe = ffmpeg()
     if not exe:
         print("  ffmpeg not found — skipping video")
         return None
-    seq = [(f, BUILD_MS) for f in frames[:-1]]
-    seq.append((frames[-1], HOLD_MS))
-    seq += [(f, TEARDOWN_MS) for f in reversed(frames[:-1])]
+    seq = [(f, BUILD_MS) for f in build]
+    seq.append((hold, HOLD_MS))
+    seq += [(f, TEARDOWN_MS) for f in teardown]
     lst = out_path.with_suffix(".concat.txt")
     lines = []
     for f, ms in seq:
@@ -130,62 +135,76 @@ def main():
     out_dir = Path(args.out_dir).expanduser() if args.out_dir else \
         SHARED / "depth-planes" / f"edit_{cfg['stem'][:40]}"
     (out_dir / "finals").mkdir(parents=True, exist_ok=True)
-    canvas = np.full((H, W, 3), np.array(meta.get("ground", [238, 238, 238]),
-                                          np.float32), np.float32)
+    ground = np.array(meta.get("ground", [238, 238, 238]), np.float32)
     planes = cfg.get("planes", {})
-    stages = []                      # only stages that actually change the picture
+    ORDER = [5, 4, "portrait", 2, 1]          # far to near
 
-    def stage(name):
-        stages.append((name, canvas.copy()))
+    def compose(active, grade=False):
+        """Composite an arbitrary set of planes. Removal steps need to rebuild from
+        scratch — you cannot un-draw a layer once it is composited."""
+        c = np.full((H, W, 3), ground, np.float32)
+        for item in ORDER:
+            if item not in active:
+                continue
+            if item == "portrait":
+                if cfg.get("shadow", {}).get("on"):
+                    c = dp.drop_shadow(c, subj_l, cfg["shadow"].get("amount", 0.18),
+                                       0.035, 10, 14, W, H)
+                c = dp.over(c, port_l.astype(np.float32), subj_l)
+            else:
+                im, a = plate(item, planes.get(str(item), {}).get("opt", "a"))
+                c = dp.over(c, im, a)
+        if grade:
+            if cfg.get("pop", "off") != "off":
+                soft = cv2.GaussianBlur(np.clip(subj_l, 0, 1), (0, 0), max(W, H) * 0.006)
+                c = dp.separate(c, soft, cfg["pop"], cfg.get("pop_amount", 0.4))
+            if cfg.get("vignette", {}).get("on"):
+                c = dp.vignette(c, cfg["vignette"].get("amount", 0.12), W, H)
+        return c
 
-    for plane in (5, 4):
-        cf = planes.get(str(plane), {})
-        if not cf.get("on", True):
-            continue                 # a hidden plane must not produce a duplicate frame
-        im, a = plate(plane, cf.get("opt", "a"))
-        canvas = dp.over(canvas, im, a)
-        stage(f"plane{plane}")
+    chosen = [i for i in ORDER
+              if (i == "portrait" and cfg.get("portrait_on", True))
+              or (i != "portrait" and planes.get(str(i), {}).get("on", True))]
+    rejected = [i for i in ORDER if i not in chosen]
 
-    if cfg.get("portrait_on", True):
-        if cfg.get("shadow", {}).get("on"):
-            canvas = dp.drop_shadow(canvas, subj_l, cfg["shadow"].get("amount", 0.18),
-                                    0.035, 10, 14, W, H)
-        canvas = dp.over(canvas, port_l.astype(np.float32), subj_l)
-        stage("portrait")
+    # Every plane appears, then the rejected ones drop away, so the film ends on exactly
+    # the chosen picture rather than quietly skipping what was tried and discarded.
+    seq, active = [], []
+    for item in ORDER:
+        active.append(item)
+        seq.append((f"add_{item}", list(active)))
+    for item in reversed([i for i in ORDER if i in rejected]):
+        active = [x for x in active if x != item]
+        seq.append((f"drop_{item}", list(active)))
 
-    for plane in (2, 1):
-        cf = planes.get(str(plane), {})
-        if not cf.get("on", True):
-            continue
-        im, a = plate(plane, cf.get("opt", "a"))
-        canvas = dp.over(canvas, im, a)
-        stage(f"plane{plane}")
+    stages = [(name, compose(a)) for name, a in seq]
+    stages.append(("final", compose(chosen, grade=True)))
 
-    # Separation and vignette are finishing passes, applied ONLY to the finished picture.
-    # Applied per stage they key off the subject mask and stamp her silhouette into
-    # frames she has not been placed into yet.
-    if stages:
-        name, last = stages[-1]
-        if cfg.get("pop", "off") != "off":
-            soft = cv2.GaussianBlur(np.clip(subj_l, 0, 1), (0, 0), max(W, H) * 0.006)
-            last = dp.separate(last, soft, cfg["pop"], cfg.get("pop_amount", 0.4))
-        if cfg.get("vignette", {}).get("on"):
-            last = dp.vignette(last, cfg["vignette"].get("amount", 0.12), W, H)
-        stages[-1] = (name, last)
+    # Teardown: strip the chosen picture back down, nearest plane first.
+    down = []
+    active = list(chosen)
+    for item in [i for i in reversed(ORDER) if i in chosen][:-1]:
+        active = [x for x in active if x != item]
+        down.append((f"undo_{item}", compose(active)))
 
-    frames = []
+    frames, tear = [], []
     for i, (name, c) in enumerate(stages, 1):
-        f = out_dir / "finals" / f"build_{i}_{name}.jpg"
+        f = out_dir / "finals" / f"build_{i:02d}_{name}.jpg"
         Image.fromarray(np.clip(c, 0, 255).astype(np.uint8)).save(f, quality=94)
         frames.append(str(f))
-    print(f"  {len(frames)} visible stages: {[s[0] for s in stages]}")
+    for i, (name, c) in enumerate(down, 1):
+        f = out_dir / "_teardown_{:02d}_{}.jpg".format(i, name)
+        Image.fromarray(np.clip(c, 0, 255).astype(np.uint8)).save(f, quality=90)
+        tear.append(str(f))
+    print(f"  {len(frames)} build stages: {[n for n, _ in stages]}")
+    print(f"  {len(tear)} teardown stages")
 
     shutil.copyfile(frames[-1], out_dir / "finals" / "final.jpg")
     (out_dir / "settings.json").write_text(json.dumps(cfg, indent=2))
     print(f"  {len(frames)} build frames + final → {out_dir/'finals'}")
 
     if not args.no_video:
-        v = make_video(frames, out_dir / "build.mp4", W, H)
+        v = make_video(frames[:-1], frames[-1], tear, out_dir / "build.mp4", W, H)
         if v:
             print(f"  video → {v}")
 

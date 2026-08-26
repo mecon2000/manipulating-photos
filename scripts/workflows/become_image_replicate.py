@@ -108,7 +108,7 @@ def main():
     p.add_argument("--prompt", default="long-exposure black and white motion-blur dance photograph, dramatic side lighting")
     p.add_argument("--negative-prompt", default="lowres, blurry, deformed, distorted face, mutation, ugly")
     p.add_argument("--instant-id-strength",       type=float, default=1.0,
-                   help="face preservation (0-2; higher = more faithful identity)")
+                   help="face preservation, 0-1 (the model rejects anything above 1)")
     p.add_argument("--image-to-become-strength",  type=float, default=0.75,
                    help="style strength (0-1; higher = stronger style)")
     p.add_argument("--denoising-strength",        type=float, default=1.0,
@@ -121,6 +121,9 @@ def main():
     p.add_argument("--out-dir", default=str(OUT_DIR))
     p.add_argument("--workers", type=int, default=6)
     args = p.parse_args()
+    if args.instant_id_strength > 1.0:      # become-image 422s above 1
+        print(f"  instant-id-strength {args.instant_id_strength} > 1, clamping to 1.0")
+        args.instant_id_strength = 1.0
 
     token = load_token()
     if not token:

@@ -43,10 +43,22 @@ def _normalize_for_detection(img_arr):
     return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
 
-def landmarks(img_arr, _retry=True):
-    """Return {name: (x, y)} in pixel coords, or None if no face found."""
+def landmarks(img_arr, _retry=True, max_edge=1600):
+    """Return {name: (x, y)} in pixel coords, or None if no face found.
+
+    Detection runs on a downscaled copy and the result is scaled back. MediaPipe
+    misses small faces in very large frames — a 3078x5472 crop with the subject a
+    few percent of the height detected nothing at full size and fine at 1600px —
+    and every caller that worked was already downscaling by accident.
+    """
     import mediapipe as mp
     H, W = img_arr.shape[:2]
+    scale = 1.0
+    if max(H, W) > max_edge:
+        scale = max_edge / max(H, W)
+        img_arr = cv2.resize(img_arr, (int(W * scale), int(H * scale)),
+                             interpolation=cv2.INTER_AREA)
+        H, W = img_arr.shape[:2]
     try:
         mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
                           data=np.ascontiguousarray(img_arr).astype(np.uint8))
@@ -61,10 +73,14 @@ def landmarks(img_arr, _retry=True):
     if not res.face_landmarks:
         if _retry:
             print("  no face — retrying on normalized copy")
-            return landmarks(_normalize_for_detection(img_arr), _retry=False)
+            got = landmarks(_normalize_for_detection(img_arr), _retry=False,
+                            max_edge=max_edge)
+            if got is not None and scale != 1.0:
+                got = {k: v / scale for k, v in got.items()}   # retry saw the small copy
+            return got
         return None
     lms = res.face_landmarks[0]
-    return {k: np.array([lms[i].x * W, lms[i].y * H], dtype=np.float32)
+    return {k: np.array([lms[i].x * W / scale, lms[i].y * H / scale], dtype=np.float32)
             for k, i in IDX.items()}
 
 

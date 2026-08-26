@@ -116,6 +116,28 @@ def face_relief(shape, pts, strength, spread=1.9):
     return (1.0 - strength * np.exp(-d2 / (2 * sigma * sigma))).astype(np.float32)
 
 
+def separate(canvas, subj, mode, amt):
+    """Pull the subject forward by adjusting the SURROUNDINGS, not by fighting the palette.
+
+    Complementary-colour tricks would break the retro scheme; nudging saturation or
+    value on one side of the mask keeps every hue where the style put it and still
+    gives the eye somewhere to land.
+    """
+    rgb = np.clip(canvas, 0, 255).astype(np.uint8)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
+    bg = 1.0 - np.clip(subj, 0, 1)
+    out = hsv.copy()
+    if mode in ("bg-desat", "bg-desat-dim"):
+        out[..., 1] *= (1 - amt * bg)
+    if mode in ("bg-dim", "bg-desat-dim"):
+        out[..., 2] *= (1 - amt * 0.55 * bg)
+    if mode == "subj-sat":
+        out[..., 1] *= (1 + amt * np.clip(subj, 0, 1))
+    out[..., 1] = np.clip(out[..., 1], 0, 255)
+    out[..., 2] = np.clip(out[..., 2], 0, 255)
+    return cv2.cvtColor(out.astype(np.uint8), cv2.COLOR_HSV2RGB).astype(np.float32)
+
+
 def over(dst, src_rgb, src_a):
     a = src_a[..., None]
     return dst * (1 - a) + src_rgb * a
@@ -130,6 +152,16 @@ def main():
     p.add_argument("--scale", type=float, default=1.0,
                    help="shrink the portrait inside the frame (0.8 = 10%% clear each side), "
                         "so the side planes have room to read")
+    p.add_argument("--near-zoom", type=float, default=2.6,
+                   help="magnify plane 1 so only a few huge shapes are in frame, most of "
+                        "each running off the edge — how a real foreground element behaves")
+    p.add_argument("--near-darken", type=float, default=0.72,
+                   help="brightness of plane 1: nearest to camera catches least light")
+    p.add_argument("--pop", default="off",
+                   choices=["off", "bg-desat", "bg-dim", "subj-sat", "bg-desat-dim"],
+                   help="separate the subject from her surroundings by colour, not by hue "
+                        "contrast — keeps the palette intact")
+    p.add_argument("--pop-amount", type=float, default=0.35)
     p.add_argument("--mask-from", default=None,
                    help="segment THIS image instead of the portrait. A stylized frame with "
                         "flat graphic clothing barely reads as a person (27%% coverage vs 58%% "
@@ -199,7 +231,14 @@ def main():
 
     def plate(path, plane):
         im = np.asarray(Image.open(path).convert("RGB").resize((W, H), Image.LANCZOS))
+        if plane == 1 and args.near_zoom > 1.0:
+            z = args.near_zoom
+            big = cv2.resize(im, (int(W * z), int(H * z)), interpolation=cv2.INTER_LANCZOS4)
+            cx, cy = big.shape[1] // 2, big.shape[0] // 2
+            im = big[cy - H // 2:cy - H // 2 + H, cx - W // 2:cx - W // 2 + W]
         a = key_cream(im)
+        if plane == 1 and args.near_darken != 1.0:
+            im = np.clip(im.astype(np.float32) * args.near_darken, 0, 255).astype(np.uint8)
         k = BLUR[plane] | 1
         im = cv2.GaussianBlur(im.astype(np.float32), (k * 2 + 1, k * 2 + 1), k / 2)
         a = cv2.GaussianBlur(a, (k * 2 + 1, k * 2 + 1), k / 2)
@@ -213,6 +252,9 @@ def main():
     canvas = over(canvas, port.astype(np.float32), subj)   # plane 3 — sharp portrait
     im, a = plate(p2, 2); canvas = over(canvas, im, a * front)  # near, eyes protected
     im, a = plate(p1, 1); canvas = over(canvas, im, a * front)  # nearest
+
+    if args.pop != "off":
+        canvas = separate(canvas, subj, args.pop, args.pop_amount)
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8)).save(args.out, quality=95)

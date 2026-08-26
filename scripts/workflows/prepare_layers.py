@@ -37,33 +37,6 @@ def _dp():
     return m
 
 
-def noise_source(w, h, plane, seed):
-    """A cream canvas whose noise is driven to the edges.
-
-    Stylisers decorate where there is signal, so this is how the decorations end up
-    framing the subject instead of covering her. Near planes get fewer, larger blobs
-    because a foreground element should read as one big out-of-focus shape.
-    """
-    rng = np.random.default_rng(seed)
-    a = np.full((h, w, 3), 238, np.float32)
-    yy, xx = np.mgrid[0:h, 0:w]
-    edge = np.minimum.reduce([xx / w, (w - 1 - xx) / w, yy / h, (h - 1 - yy) / h])
-    near = plane <= 2
-    band = np.clip(1.0 - edge / (0.34 if near else 0.26), 0, 1) ** 1.4
-    n = rng.integers(6, 11) if near else rng.integers(16, 28)
-    rmin, rmax = (w * .12, w * .34) if near else (w * .04, w * .20)
-    blobs = np.zeros((h, w), np.float32)
-    for _ in range(n):
-        cx, cy = rng.uniform(0, w), rng.uniform(0, h)
-        if 0.30 * w < cx < 0.70 * w and 0.18 * h < cy < 0.82 * h:
-            continue                                   # keep the middle quiet
-        r = rng.uniform(rmin, rmax)
-        blobs += np.exp(-(((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * r * r)))
-    noise = rng.normal(0, 1, (h, w, 1)) * 85 + rng.normal(0, 1, (h, w, 3)) * 40
-    a += noise * band[..., None] + blobs[..., None] * band[..., None] * rng.uniform(-72, 72, (1, 1, 3))
-    return np.clip(a, 0, 255).astype(np.uint8)
-
-
 def rgba_webp(rgb, alpha, path, width):
     im = Image.fromarray(np.dstack([np.clip(rgb, 0, 255).astype(np.uint8),
                                     (np.clip(alpha, 0, 1) * 255).astype(np.uint8)]), "RGBA")
@@ -106,7 +79,7 @@ def main():
             if dst.exists():
                 continue
             s = src_dir / f"plane{pl}_{letter}.jpg"
-            Image.fromarray(noise_source(W, H, pl, args.seed + i)).save(s, quality=94)
+            Image.fromarray(dp.noise_source(W, H, pl, args.seed + i)).save(s, quality=94)
             r = subprocess.run([PY, str(HERE / "style_transfer_replicate.py"),
                                 "--source", str(s), "--style", str(Path(args.style).expanduser()),
                                 "--prompt", args.prompt, "--denoising-strength", "0.85",
@@ -156,31 +129,7 @@ def main():
     sh_a = np.clip(sh_a - np.clip(subj_l, 0, 1), 0, 1)
     rgba_webp(np.zeros_like(port), sh_a, out / "preview" / "shadow.webp", args.preview_width)
 
-    # 3. layers ------------------------------------------------------------
-    made = []
-    for pl, letter in jobs:
-        src = out / "plates" / f"plane{pl}_{letter}.jpg"
-        if not src.is_file():
-            continue
-        im = np.asarray(Image.open(src).convert("RGB").resize((W, H), Image.LANCZOS))
-        if pl == 1:
-            z = 2.6
-            big = cv2.resize(im, (int(W * z), int(H * z)), interpolation=cv2.INTER_LANCZOS4)
-            cy, cx = big.shape[0] // 2, big.shape[1] // 2
-            im = big[cy - H // 2:cy - H // 2 + H, cx - W // 2:cx - W // 2 + W]
-        a = dp.key_cream(im)
-        if pl == 1:
-            im = np.clip(im.astype(np.float32) * 0.72, 0, 255).astype(np.uint8)
-        b = dp.BLUR[pl] | 1
-        im = cv2.GaussianBlur(im.astype(np.float32), (b * 2 + 1, b * 2 + 1), b / 2)
-        a = cv2.GaussianBlur(a, (b * 2 + 1, b * 2 + 1), b / 2)
-        if pl in (1, 2):
-            a = a * front                     # near planes keep clear of her and the eyes
-        rgba_webp(im, a, out / "preview" / f"plane{pl}_{letter}.webp", args.preview_width)
-        made.append(f"plane{pl}_{letter}")
-
-    # The ground behind everything is the farthest plate's own paper colour. Assuming
-    # cream is a retro-only assumption and would show as a bright halo behind a dark style.
+    # ground first: the haze pass blends far planes toward it
     ground = [238, 238, 238]
     far = out / "plates" / f"plane5_{LETTERS[0]}.jpg"
     if far.is_file():
@@ -190,6 +139,19 @@ def main():
         sel = flat == np.bincount(flat.ravel()).argmax()
         ground = [int(v) for v in np.median(fa[sel].reshape(-1, 3), axis=0)]
         print(f"  ground colour from plane5: {ground}")
+
+    # 3. layers ------------------------------------------------------------
+    made = []
+    for pl, letter in jobs:
+        src = out / "plates" / f"plane{pl}_{letter}.jpg"
+        if not src.is_file():
+            continue
+        im = np.asarray(Image.open(src).convert("RGB"))
+        im, a = dp.render_plate(im, pl, W, H, ground)
+        if pl in (1, 2):
+            a = a * front                     # near planes keep clear of her and the eyes
+        rgba_webp(im, a, out / "preview" / f"plane{pl}_{letter}.webp", args.preview_width)
+        made.append(f"plane{pl}_{letter}")
 
     meta = {"stem": stem, "ground": ground, "portrait": str(portrait), "style": str(Path(args.style).expanduser()),
             "prompt": args.prompt, "w": W, "h": H, "preview_width": args.preview_width,

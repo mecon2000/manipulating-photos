@@ -27,7 +27,75 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import face_align as FA
 
-BLUR = {1: 24, 2: 10, 4: 5, 5: 12}          # near blurs harder than far
+# One recipe per plane, monotonic in every dimension, because a plane only reads as a
+# DEPTH if it differs from its neighbours in the size of its forms — not merely in blur.
+# Generating 1 and 2 (and 4 and 5) from the same parameters made adjacent planes
+# interchangeable, so stacking them added clutter instead of depth.
+#   count/r   : many tiny elements far away -> a couple of huge ones up close
+#   zoom      : element scale grows toward the camera
+#   blur      : distance from the focal plane (the portrait), not distance from camera
+#   haze      : aerial perspective — far planes fade toward the ground colour
+#   dark      : near planes catch less light
+PLANE_RECIPE = {
+    5: {"count": (22, 34), "r": (0.03, 0.10), "band": 0.22,
+        "zoom": 1.00, "blur": 14, "haze": 0.45, "dark": 1.00},
+    4: {"count": (12, 20), "r": (0.06, 0.17), "band": 0.26,
+        "zoom": 1.15, "blur": 6,  "haze": 0.20, "dark": 1.00},
+    2: {"count": (5, 9),   "r": (0.14, 0.30), "band": 0.32,
+        "zoom": 1.60, "blur": 18, "haze": 0.00, "dark": 0.90},
+    1: {"count": (2, 4),   "r": (0.30, 0.62), "band": 0.40,
+        "zoom": 2.60, "blur": 34, "haze": 0.00, "dark": 0.68},
+}
+BLUR = {p: r["blur"] for p, r in PLANE_RECIPE.items()}
+
+
+def noise_source(w, h, plane, seed, ground=238):
+    """Edge-weighted noise canvas, shaped by the plane's recipe.
+
+    Stylisers decorate where there is signal, so driving the noise to the edges is what
+    keeps the middle clear for the subject. The blob size and count come from the recipe,
+    which is what makes each plane's artwork a different scale of thing.
+    """
+    rec = PLANE_RECIPE[plane]
+    rng = np.random.default_rng(seed)
+    a = np.full((h, w, 3), float(ground) if np.isscalar(ground) else ground, np.float32)
+    yy, xx = np.mgrid[0:h, 0:w]
+    edge = np.minimum.reduce([xx / w, (w - 1 - xx) / w, yy / h, (h - 1 - yy) / h])
+    band = np.clip(1.0 - edge / rec["band"], 0, 1) ** 1.4
+    blobs = np.zeros((h, w), np.float32)
+    for _ in range(int(rng.integers(*rec["count"]))):
+        cx, cy = rng.uniform(0, w), rng.uniform(0, h)
+        if 0.30 * w < cx < 0.70 * w and 0.18 * h < cy < 0.82 * h:
+            continue
+        r = rng.uniform(rec["r"][0] * w, rec["r"][1] * w)
+        blobs += np.exp(-(((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * r * r)))
+    noise = rng.normal(0, 1, (h, w, 1)) * 85 + rng.normal(0, 1, (h, w, 3)) * 40
+    a += noise * band[..., None] + blobs[..., None] * band[..., None] * rng.uniform(-72, 72, (1, 1, 3))
+    return np.clip(a, 0, 255).astype(np.uint8)
+
+
+def render_plate(im, plane, W, H, ground=None):
+    """Turn a styled plate into a finished layer: zoom, haze, darken, key, blur.
+
+    Shared by prepare_layers (preview) and render_layers (final) so the two cannot drift.
+    """
+    rec = PLANE_RECIPE[plane]
+    im = cv2.resize(im, (W, H), interpolation=cv2.INTER_LANCZOS4)
+    z = rec["zoom"]
+    if z > 1.0:
+        big = cv2.resize(im, (int(W * z), int(H * z)), interpolation=cv2.INTER_LANCZOS4)
+        cy, cx = big.shape[0] // 2, big.shape[1] // 2
+        im = big[cy - H // 2:cy - H // 2 + H, cx - W // 2:cx - W // 2 + W]
+    a = key_cream(im)
+    f = im.astype(np.float32)
+    if rec["haze"] > 0 and ground is not None:
+        f = f * (1 - rec["haze"]) + np.array(ground, np.float32) * rec["haze"]
+    if rec["dark"] != 1.0:
+        f = f * rec["dark"]
+    b = rec["blur"] | 1
+    f = cv2.GaussianBlur(f, (b * 2 + 1, b * 2 + 1), b / 2)
+    a = cv2.GaussianBlur(a, (b * 2 + 1, b * 2 + 1), b / 2)
+    return np.clip(f, 0, 255), a
 SELFIE = Path("~/openclaw-venv/mediapipe_models/selfie_multiclass.tflite").expanduser()
 EYE_L = [33, 133, 159, 145, 160, 144, 158, 153]
 EYE_R = [263, 362, 386, 374, 387, 373, 385, 380]

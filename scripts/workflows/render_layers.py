@@ -116,18 +116,8 @@ def main():
 
     def plate(plane, letter):
         f = prep / "plates" / f"plane{plane}_{letter}.jpg"
-        im = np.asarray(Image.open(f).convert("RGB").resize((W, H), Image.LANCZOS))
-        if plane == 1:
-            z = 2.6
-            big = cv2.resize(im, (int(W * z), int(H * z)), interpolation=cv2.INTER_LANCZOS4)
-            cy, cx = big.shape[0] // 2, big.shape[1] // 2
-            im = big[cy - H // 2:cy - H // 2 + H, cx - W // 2:cx - W // 2 + W]
-        a = dp.key_cream(im)
-        if plane == 1:
-            im = np.clip(im.astype(np.float32) * 0.72, 0, 255).astype(np.uint8)
-        b = dp.BLUR[plane] | 1
-        im = cv2.GaussianBlur(im.astype(np.float32), (b * 2 + 1, b * 2 + 1), b / 2)
-        a = cv2.GaussianBlur(a, (b * 2 + 1, b * 2 + 1), b / 2)
+        im = np.asarray(Image.open(f).convert("RGB"))
+        im, a = dp.render_plate(im, plane, W, H, meta.get("ground"))
         if plane in (1, 2):
             a = a * front
         return im, a

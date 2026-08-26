@@ -116,6 +116,50 @@ def face_relief(shape, pts, strength, spread=1.9):
     return (1.0 - strength * np.exp(-d2 / (2 * sigma * sigma))).astype(np.float32)
 
 
+def refine_alpha(img, a, radius=14, eps=1e-3, shrink=1.5):
+    """Snap a coarse mask onto the image's real edges (guided filter).
+
+    MediaPipe returns a blobby silhouette. That was invisible while subject and
+    surroundings shared a palette; the moment separation pushes them apart, the cut
+    line shows. A guided filter re-fits the alpha to local image structure, and a
+    slight shrink pulls the boundary just inside her so no ring of old background
+    survives around the edge. cv2.ximgproc.guidedFilter is absent in this build, so
+    it is done here with box filters.
+    """
+    g = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    p = np.clip(a, 0, 1).astype(np.float32)
+    r = (radius, radius)
+    mean_g = cv2.blur(g, r); mean_p = cv2.blur(p, r)
+    cov = cv2.blur(g * p, r) - mean_g * mean_p
+    var = cv2.blur(g * g, r) - mean_g * mean_g
+    k = cov / (var + eps)
+    b = mean_p - k * mean_g
+    q = cv2.blur(k, r) * g + cv2.blur(b, r)
+    q = np.clip(q, 0, 1)
+    if shrink > 0:                       # bias the edge inward, killing the halo
+        q = np.clip((q - shrink * 0.01) / (1 - shrink * 0.01), 0, 1)
+    return q.astype(np.float32)
+
+
+def drop_shadow(canvas, subj, opacity, blur_pct, dx, dy, W, H):
+    """A soft shadow so she sits IN the collage instead of on top of it."""
+    k = max(3, int(min(W, H) * blur_pct)) | 1
+    sh = cv2.GaussianBlur(np.clip(subj, 0, 1), (k, k), 0)
+    sh = np.roll(np.roll(sh, int(dy), axis=0), int(dx), axis=1)
+    sh = np.clip(sh - np.clip(subj, 0, 1), 0, 1)     # never darken her own pixels
+    return canvas * (1.0 - (opacity * sh)[..., None])
+
+
+def vignette(canvas, amount, W, H):
+    """Barely-there corner falloff — felt rather than seen."""
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    nx = (xx - W / 2) / (W / 2)
+    ny = (yy - H / 2) / (H / 2)
+    r = np.sqrt(nx * nx + ny * ny) / 1.414
+    v = 1.0 - amount * np.clip((r - 0.45) / 0.55, 0, 1) ** 1.6
+    return canvas * v[..., None]
+
+
 def separate(canvas, subj, mode, amt):
     """Pull the subject forward by adjusting the SURROUNDINGS, not by fighting the palette.
 
@@ -157,6 +201,15 @@ def main():
                         "each running off the edge — how a real foreground element behaves")
     p.add_argument("--near-darken", type=float, default=0.72,
                    help="brightness of plane 1: nearest to camera catches least light")
+    p.add_argument("--edge-refine", type=float, default=1.0,
+                   help="0 disables; snaps the cut-out onto real image edges")
+    p.add_argument("--shadow", type=float, default=0.0,
+                   help="drop-shadow opacity, 0-1 (0.18 is a good subtle start)")
+    p.add_argument("--shadow-blur", type=float, default=0.035)
+    p.add_argument("--shadow-dx", type=float, default=10)
+    p.add_argument("--shadow-dy", type=float, default=14)
+    p.add_argument("--vignette", type=float, default=0.0,
+                   help="corner falloff, 0-1 (0.12 is felt, not seen)")
     p.add_argument("--pop", default="off",
                    choices=["off", "bg-desat", "bg-dim", "subj-sat", "bg-desat-dim"],
                    help="separate the subject from her surroundings by colour, not by hue "
@@ -192,8 +245,12 @@ def main():
         if m.shape[:2] != (H, W):
             m = cv2.resize(m, (W, H), interpolation=cv2.INTER_LANCZOS4)
         subj = subject_alpha(m)
+        if args.edge_refine > 0:
+            subj = refine_alpha(m, subj, shrink=args.edge_refine)   # guide with the PHOTO
     else:
         subj = subject_alpha(port)
+        if args.edge_refine > 0:
+            subj = refine_alpha(port, subj, shrink=args.edge_refine)
 
     if args.scale != 1.0:
         # Inset the subject so the near planes have margin to work in. The landmarks are
@@ -249,12 +306,20 @@ def main():
 
     im, a = plate(p5, 5); canvas = over(canvas, im, a)     # far
     im, a = plate(p4, 4); canvas = over(canvas, im, a)
+    if args.shadow > 0:
+        canvas = drop_shadow(canvas, subj, args.shadow, args.shadow_blur,
+                             args.shadow_dx, args.shadow_dy, W, H)
     canvas = over(canvas, port.astype(np.float32), subj)   # plane 3 — sharp portrait
     im, a = plate(p2, 2); canvas = over(canvas, im, a * front)  # near, eyes protected
     im, a = plate(p1, 1); canvas = over(canvas, im, a * front)  # nearest
 
     if args.pop != "off":
-        canvas = separate(canvas, subj, args.pop, args.pop_amount)
+        # Soften the mask for the separation only: a hard switch in saturation exactly on
+        # the cut line is what makes a composite look pasted.
+        soft = cv2.GaussianBlur(np.clip(subj, 0, 1), (0, 0), max(W, H) * 0.006)
+        canvas = separate(canvas, soft, args.pop, args.pop_amount)
+    if args.vignette > 0:
+        canvas = vignette(canvas, args.vignette, W, H)
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8)).save(args.out, quality=95)

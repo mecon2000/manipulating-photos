@@ -287,6 +287,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--session", required=True)
     p.add_argument("--refresh", action="store_true")
+    p.add_argument("--anchor", nargs=3, metavar=("FRAME", "CLIP", "MM:SS"),
+                   help="one frame you can SEE being taken in a clip, e.g. "
+                        "--anchor BLD_9889 VID20251017170836.mp4 00:36. Exact, takes "
+                        "seconds, and beats every automatic method tried so far")
     p.add_argument("--set-minutes", type=float,
                    help="record the offset by hand (minutes to ADD to camera times); "
                         "measured once per session, then reused forever")
@@ -295,6 +299,24 @@ def main():
     if not hits:
         sys.exit("no such session")
     sd = hits[0]
+    if args.anchor:
+        frame, clipname, ts = args.anchor
+        vd = B.video_dir(sd)
+        clip = next((c for c in vd.iterdir() if c.name == clipname), None)
+        if not clip:
+            sys.exit(f"no clip named {clipname} in {vd}")
+        mm, ss = (ts.split(":") + ["0"])[:2]
+        into = int(mm) * 60 + float(ss)
+        cam = B.shot_time(sd, re.sub(r"\..*$", "", frame))
+        if not cam:
+            sys.exit(f"{frame} is not in the catalog for this session")
+        phone = B.clip_start(clip) + timedelta(seconds=into)
+        secs = (phone - cam).total_seconds()
+        set_offset(sd, secs, f"anchored on {frame} at {ts} in {clipname}")
+        print(f"session : {sd.name}\n{frame} camera clock : {cam}\n"
+              f"{clipname} +{into:.0f}s      : {phone}\n"
+              f"offset  : {secs:+.0f}s ({secs/60:+.2f} min), recorded")
+        return
     if args.set_minutes is not None:
         off = set_offset(sd, args.set_minutes * 60)
         print(f"session : {sd.name}\noffset  : {off:+.0f}s ({args.set_minutes:+.1f} min), recorded")

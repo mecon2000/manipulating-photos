@@ -54,15 +54,50 @@ def ffprobe():
 def model_from_session(name):
     """'2025-06-09 Elly (Eleanora) at Yogev's house' -> 'Elly (Eleanora)'."""
     s = re.sub(r"^\d{4}-\d{2}-\d{2}\s*", "", name)
-    return re.split(r"\s+at\s+|\s+,|\s+with\s+", s)[0].strip(" ,-")
+    # Folder names append the location or theme after a comma with no space before it
+    # ("Elina, Bdsm"), so splitting on ",\s" alone left the theme attached to the name
+    # and the consent lookup missed.
+    return re.split(r"\s+at\s+|\s*,\s*|\s+with\s+|\s+&\s+", s)[0].strip(" ,-")
 
 
-def consent_ok(model):
-    r = subprocess.run([sys.executable, str(CONSENT), "--check", model],
-                       capture_output=True, text=True, cwd=str(CONSENT.parent))
-    line = (r.stdout or "").strip().splitlines()
-    verdict = line[-1] if line else ""
-    return verdict.startswith("OK"), verdict
+def name_variants(model):
+    """Folder names carry stage names: 'Zoey (Lucia Weissman)'. The allowlist is keyed
+    on one of them, not always the one that comes first, so try each — a lookup miss
+    must never read as 'no consent recorded'."""
+    out = [model]
+    m = re.search(r"\(([^)]+)\)", model)
+    if m:
+        out.append(m.group(1).strip())
+    out.append(re.sub(r"\s*\([^)]*\)", "", model).strip())
+    seen, uniq = set(), []
+    for n in out:
+        if n and n not in seen:
+            seen.add(n); uniq.append(n)
+    return uniq
+
+
+def consent_ok(model, allow_ask=True):
+    """Three states, not two.
+
+    consent.py answers OK / ASK / not-listed. Treating ASK as refusal blocks models who
+    ARE cleared for SFW work and merely carry a per-photo caveat; treating it as consent
+    would be worse. So ASK proceeds only where a human confirmation step exists, and the
+    caveat is carried through to the candidate so it cannot be forgotten.
+    """
+    tried, ask = [], None
+    for name in name_variants(model):
+        r = subprocess.run([sys.executable, str(CONSENT), "--check", name],
+                           capture_output=True, text=True, cwd=str(CONSENT.parent))
+        line = (r.stdout or "").strip().splitlines()
+        verdict = line[-1] if line else ""
+        tried.append(f"{name}: {verdict.split(':',1)[-1].strip()[:60]}")
+        if verdict.startswith("OK"):
+            return True, f"{verdict}  (matched on {name!r})"
+        if verdict.startswith("ASK") and ask is None:
+            ask = f"{verdict}  (matched on {name!r})"
+    if ask and allow_ask:
+        return True, "CONDITIONAL — " + ask
+    return False, " | ".join(tried)
 
 
 def develop(raw_path, mode="flat", half=False):

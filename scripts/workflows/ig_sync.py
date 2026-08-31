@@ -89,7 +89,7 @@ def _train(times_s, lo, hi):
     return v
 
 
-def estimate_offset(session_dir):
+def estimate_offset(session_dir, candidates=None, drift_window=20 * 60):
     """Seconds to ADD to a camera timestamp to reach phone/video time."""
     vd = B.video_dir(session_dir)
     if not vd:
@@ -121,6 +121,14 @@ def estimate_offset(session_dir):
     pos, neg = corr[:limit], corr[-limit:]
     scores = np.concatenate([neg, pos])
     lags = np.concatenate([np.arange(-limit, 0), np.arange(0, limit)]) * BIN
+    # Only look near plausible answers. Over six hours the correlation has thousands of
+    # chances to land on a coincidence; a whole-hour candidate plus a small clock drift
+    # is the entire realistic space, and searching only that removes most of the noise.
+    if candidates:
+        near = np.zeros_like(scores, bool)
+        for c in candidates:
+            near |= np.abs(lags - c) <= drift_window
+        scores = np.where(near, scores, -1.0)
     k = int(np.argmax(scores))
     best_lag, best = float(lags[k]), float(scores[k])
     # Sigma above the noise floor is not the right test: the floor is near zero, so a
@@ -137,16 +145,124 @@ def estimate_offset(session_dir):
     return best_lag, note
 
 
+def camera_of(session_dir):
+    import sqlite3
+    con = sqlite3.connect(str(R.CATALOG))
+    row = con.execute(
+        """SELECT p.camera, COUNT(*) c FROM photos p JOIN sessions s ON s.id = p.session_id
+           WHERE s.folder_path LIKE ? AND p.camera IS NOT NULL
+           GROUP BY p.camera ORDER BY c DESC""", (f"%{session_dir.name}%",)).fetchone()
+    con.close()
+    return row[0] if row else None
+
+
+def session_date(session_dir):
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", session_dir.name)
+    return datetime(*[int(x) for x in m.groups()]) if m else None
+
+
+def drift_from_siblings(session_dir, window_days=400):
+    """Borrow the drift measured on another session from the SAME camera.
+
+    A camera's clock error changes slowly, so a session solved once calibrates its
+    neighbours. This is what stops the manual step from recurring: measure a body's
+    drift a couple of times and every other session it shot inherits it.
+    """
+    cam, when = camera_of(session_dir), session_date(session_dir)
+    if not cam or not when or not CACHE.exists():
+        return None, "no camera or date to match on", None
+    data = json.loads(CACHE.read_text())
+    best = None
+    for name, rec in data.items():
+        if rec.get("camera") != cam or "drift_s" not in rec:
+            continue
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", name)
+        if not m:
+            continue
+        d = abs((datetime(*[int(x) for x in m.groups()]) - when).days)
+        if d <= window_days and (best is None or d < best[0]):
+            best = (d, rec["drift_s"], name, rec.get("camera_tz"))
+    if not best:
+        return None, f"no solved session from {cam} within {window_days} days", None
+    d, drift, name, cam_tz = best
+    return drift, f"drift {drift/60:+.1f} min borrowed from {name} ({d}d away, {cam})", cam_tz
+
+
+def phone_tz(session_dir):
+    """The phone's UTC offset in hours, read from the clips themselves."""
+    vd = B.video_dir(session_dir)
+    if not vd:
+        return None
+    for p in sorted(vd.iterdir()):
+        if p.suffix.lower() not in (".mp4", ".mov"):
+            continue
+        start, dur = B.clip_start(p), B.duration(p)
+        out = subprocess.run([R.ffprobe(), "-v", "error", "-show_entries",
+                              "format_tags=creation_time", "-of", "csv=p=0", str(p)],
+                             capture_output=True, text=True).stdout.strip()
+        if not (start and out):
+            continue
+        try:
+            utc_end = datetime.fromisoformat(out.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            continue
+        return round(((start + timedelta(seconds=dur)) - utc_end).total_seconds() / 3600)
+    return None
+
+
+def dst_candidates(session_dir):
+    """Whole-hour candidates, from the data rather than a DST table.
+
+    The phone's UTC offset is recoverable per clip (filename is local start, the
+    container tag is UTC end). The camera carries no zone at all, so the remaining
+    unknown is only whether its clock sits on summer time — a +/- one hour choice.
+    """
+    vd = B.video_dir(session_dir)
+    if not vd:
+        return [0.0]
+    for p in sorted(vd.iterdir()):
+        if p.suffix.lower() not in (".mp4", ".mov"):
+            continue
+        start, dur = B.clip_start(p), B.duration(p)
+        out = subprocess.run([R.ffprobe(), "-v", "error", "-show_entries",
+                              "format_tags=creation_time", "-of", "csv=p=0", str(p)],
+                             capture_output=True, text=True).stdout.strip()
+        if not (start and out):
+            continue
+        try:
+            utc_end = datetime.fromisoformat(out.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            continue
+        tz = round(((start + timedelta(seconds=dur)) - utc_end).total_seconds() / 3600)
+        return [0.0, 3600.0, -3600.0, tz * 3600.0]
+    return [0.0, 3600.0, -3600.0]
+
+
 def cached_offset(session_dir, refresh=False):
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(CACHE.read_text()) if CACHE.exists() else {}
     key = session_dir.name
     if not refresh and key in data:
         return data[key]["offset_s"], data[key]["note"] + " (cached)"
-    off, note = estimate_offset(session_dir)
+    cands = dst_candidates(session_dir)
+    off, note = estimate_offset(session_dir, candidates=cands)
+    if off is None:
+        # nothing measurable here — inherit this camera's drift from a solved session
+        drift, why, cam_tz = drift_from_siblings(session_dir)
+        tz = phone_tz(session_dir)
+        if drift is not None and cam_tz is not None and tz is not None:
+            # The camera's clock was set once and never follows DST; the phone always
+            # does. So the whole-hour part is simply the difference between the phone's
+            # zone today and the zone the camera was set in — computed, not guessed.
+            off = (tz - cam_tz) * 3600 + drift
+            note = f"inherited: {why}, phone UTC+{tz} vs camera set at UTC+{cam_tz}"
+            note = f"inherited: {why}"
     if off is not None:
-        data[key] = {"offset_s": off, "note": note,
-                     "measured_at": datetime.now().isoformat()}
+        hour = round(off / 3600) * 3600
+        tz = phone_tz(session_dir)
+        data[key] = {"offset_s": off, "drift_s": off - hour, "camera": camera_of(session_dir),
+                     "camera_tz": (tz - round(hour / 3600)) if tz is not None else None,
+                     "note": note, "measured_at": datetime.now().isoformat()}
         CACHE.write_text(json.dumps(data, indent=2))
     return off, note
 
@@ -154,8 +270,12 @@ def cached_offset(session_dir, refresh=False):
 def set_offset(session_dir, seconds, note="set by hand"):
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(CACHE.read_text()) if CACHE.exists() else {}
-    data[session_dir.name] = {"offset_s": float(seconds), "note": note,
-                              "measured_at": datetime.now().isoformat()}
+    hour = round(float(seconds) / 3600) * 3600
+    tz = phone_tz(session_dir)
+    data[session_dir.name] = {"offset_s": float(seconds), "drift_s": float(seconds) - hour,
+                              "camera": camera_of(session_dir),
+                              "camera_tz": (tz - round(hour / 3600)) if tz is not None else None,
+                              "note": note, "measured_at": datetime.now().isoformat()}
     CACHE.write_text(json.dumps(data, indent=2))
     return float(seconds)
 

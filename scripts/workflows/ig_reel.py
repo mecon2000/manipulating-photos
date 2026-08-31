@@ -299,14 +299,22 @@ def render_video(segments, out_path):
     return out_path
 
 
-def write_txt(path, model, session_dir, fmt, sources, set_id, hook, alts, caption, kw, flags):
-    path.write_text(
-        f"CAPTION\n{caption}\n\nKEYWORDS\n{', '.join(kw)}\n\n"
-        f"HOOK USED\n{hook}\n\nALTERNATIVE HOOKS\n" + "\n".join(f"- {a}" for a in alts) +
-        f"\n\nPOST AS: Trial Reel\nMUSIC: add in-app\n"
-        f"FORMAT: {fmt}\nMODEL: {model}\nSESSION: {session_dir}\nSET: {set_id}\n"
-        f"SOURCE FILES:\n" + "\n".join(f"  {s}" for s in sources) +
-        (f"\n\nFLAGS: {', '.join(flags)}\n" if flags else "\n"), encoding="utf-8")
+def write_txt(path, model, session_dir, fmt, sources, set_id, hook, alts, caption, kw,
+              flags, timing=None):
+    parts = [
+        f"CAPTION\n{caption}\n",
+        f"KEYWORDS\n{', '.join(kw)}\n",
+        f"HOOK USED\n{hook}\n",
+        "ALTERNATIVE HOOKS\n" + "\n".join(f"- {a}" for a in alts) + "\n",
+        "POST AS: Trial Reel\nMUSIC: add in-app\n"
+        f"FORMAT: {fmt}\nMODEL: {model}\nSESSION: {session_dir}\nSET: {set_id}\n",
+    ]
+    if timing:
+        parts.append("TIMING\n" + "\n".join(timing) + "\n")
+    parts.append("SOURCE FILES\n" + "\n".join(f"  {s}" for s in sources) + "\n")
+    if flags:
+        parts.append("FLAGS\n" + "\n".join(f"- {f}" for f in flags) + "\n")
+    path.write_text("\n".join(parts), encoding="utf-8")
 
 
 def main():

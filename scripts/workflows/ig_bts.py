@@ -184,20 +184,36 @@ def main():
     print(f"clock   : camera {off/60:+.1f} min vs phone — {note}")
 
     clips = sorted(p for p in vd.iterdir() if p.suffix.lower() in (".mp4", ".mov"))
-    best = None
+    # A clip that was still ROLLING when the shutter fired shows the actual moment; one
+    # that stopped beforehand only shows the run-up, and can be a different setup by the
+    # time the photo happens. Prefer the former, fall back to the latter.
+    inside, before = [], []
     for c in clips:
         st = clip_start(c)
         if not st:
             continue
+        dur = duration(c)
         gap = (shot_at - st).total_seconds()
-        if 0 <= gap <= LOOKBACK_S + duration(c):
-            if best is None or gap < best[1]:
-                best = (c, gap, st)
+        if 0 <= gap <= dur:
+            inside.append((c, gap, st, dur))
+        elif 0 <= gap <= dur + LOOKBACK_S:
+            before.append((c, gap, st, dur))
+    if inside:
+        c, gap, st, dur = min(inside, key=lambda x: x[1])
+        best, covers = (c, gap, st), True
+    elif before:
+        c, gap, st, dur = min(before, key=lambda x: x[1] - x[3])
+        best, covers = (c, gap, st), False
+    else:
+        best, covers = None, False
     if not best:
         sys.exit(f"no clip covers the minutes before {stem} was shot ({shot_at})")
     clip, gap, started = best
-    print(f"photo   : {stem} at {shot_at}\nclip    : {clip.name} started {started} "
-          f"({gap:.0f}s before the shutter)")
+    ends = started + timedelta(seconds=duration(clip))
+    print(f"photo   : {stem} at {shot_at} (phone clock)\n"
+          f"clip    : {clip.name}  {started:%H:%M:%S}-{ends:%H:%M:%S}  "
+          f"shutter {gap:.0f}s in — "
+          f"{'covers the moment' if covers else 'ENDS BEFORE the shot; run-up only'}")
 
     segs, flagged = pick_segments(clip, shot_at, started, args.want)
     print(f"segments: {[round(s,1) for s in segs]} "
@@ -261,14 +277,26 @@ def main():
     flags = [sfw_note, "BTS: confirm the photographer is not in shot"]
     if flagged:
         flags.append("some segments rejected for extra faces")
+    if not covers:
+        flags.append("clip ended before the shutter — footage is the run-up, "
+                     "not the moment itself")
+    cam_time = shot_at - timedelta(seconds=off)
+    timing = [f"photo {stem}: {cam_time:%H:%M:%S} camera clock / "
+              f"{shot_at:%H:%M:%S} phone clock (camera {off/60:+.1f} min)",
+              f"clip {clip.name}: {started:%H:%M:%S}-{ends:%H:%M:%S}"]
+    for t in segs:
+        w = started + timedelta(seconds=t)
+        timing.append(f"  segment @{t:.1f}s -> {w:%H:%M:%S}  "
+                      f"({(shot_at - w).total_seconds():.0f}s before the shutter)")
     R.write_txt(out_dir / f"{tag}.txt", model, sd, "D",
                 [str(clip), str(final_path)], "see DB",
                 "this is what it was for", meta["hooks"], meta["caption"],
-                meta["keywords"], flags)
+                meta["keywords"], flags, timing=timing)
     ig_meta.write_sidecar(mp4, {"model": model, "session_date": sd.name[:10], "format": "D",
                                 "hooks": meta["hooks"], "caption": meta["caption"],
                                 "skin_ratio": round(ratio, 3), "sfw": sfw_note,
                                 "clip": clip.name, "segments": [round(s, 1) for s in segs],
+                                "timing": timing, "covers_moment": covers,
                                 "status": "candidate"})
     ig_meta.write_log({"date": stamp, "model": model, "session": sd.name, "format": "D",
                        "set": stem, "files": mp4.name, "skin_ratio": round(ratio, 3),

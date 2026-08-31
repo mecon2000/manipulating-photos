@@ -280,6 +280,9 @@ def main():
     if not covers:
         flags.append("clip ended before the shutter — footage is the run-up, "
                      "not the moment itself")
+    if "PROVISIONAL" in note:
+        flags.append("clock offset was inherited from another session, not measured "
+                     "here — check the footage matches the shot")
     cam_time = shot_at - timedelta(seconds=off)
     timing = [f"photo {stem}: {cam_time:%H:%M:%S} camera clock / "
               f"{shot_at:%H:%M:%S} phone clock (camera {off/60:+.1f} min)",

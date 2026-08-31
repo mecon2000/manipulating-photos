@@ -161,12 +161,14 @@ def session_date(session_dir):
     return datetime(*[int(x) for x in m.groups()]) if m else None
 
 
-def drift_from_siblings(session_dir, window_days=400):
+def drift_from_siblings(session_dir, window_days=45):
     """Borrow the drift measured on another session from the SAME camera.
 
-    A camera's clock error changes slowly, so a session solved once calibrates its
-    neighbours. This is what stops the manual step from recurring: measure a body's
-    drift a couple of times and every other session it shot inherits it.
+    Measured, not assumed: the same Canon R6 drifted 7.2 min in June 2025 and 2.6 min
+    that October — the clock had evidently been corrected in between. Borrowing across
+    that gap put the BTS footage two minutes off the shot it was supposed to accompany.
+    So the window is short, and anything inherited is marked provisional and flagged on
+    the candidate rather than trusted silently.
     """
     cam, when = camera_of(session_dir), session_date(session_dir)
     if not cam or not when or not CACHE.exists():
@@ -255,7 +257,8 @@ def cached_offset(session_dir, refresh=False):
             # does. So the whole-hour part is simply the difference between the phone's
             # zone today and the zone the camera was set in — computed, not guessed.
             off = (tz - cam_tz) * 3600 + drift
-            note = f"inherited: {why}, phone UTC+{tz} vs camera set at UTC+{cam_tz}"
+            note = (f"PROVISIONAL inherited: {why}, phone UTC+{tz} vs camera set at "
+                    f"UTC+{cam_tz} — verify before trusting the cut")
             note = f"inherited: {why}"
     if off is not None:
         hour = round(off / 3600) * 3600

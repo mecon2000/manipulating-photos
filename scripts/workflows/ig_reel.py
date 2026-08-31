@@ -169,6 +169,22 @@ def blue_labelled(session_dir):
     return {Path(r[0]).stem for r in rows}
 
 
+def set_count(session_dir, stem):
+    """How many frames are in THIS set. The session total was the wrong number: it spans
+    several setups and outfits, so "615 frames, one gets published" describes a day, not
+    the run of near-identical attempts the reel actually shows."""
+    import sqlite3
+    con = sqlite3.connect(str(CATALOG))
+    row = con.execute(
+        """SELECT s2.photo_count FROM photos p
+           JOIN sessions s ON s.id = p.session_id
+           JOIN sets s2 ON s2.id = p.set_id
+           WHERE s.folder_path LIKE ? AND p.filename LIKE ?""",
+        (f"%{session_dir.name}%", f"{stem}.%")).fetchone()
+    con.close()
+    return row[0] if row else None
+
+
 def session_count(session_dir):
     import sqlite3
     con = sqlite3.connect(str(CATALOG))
@@ -281,7 +297,7 @@ def main():
 
     finals = find_finals(sd)
     blue = blue_labelled(sd)
-    total = session_count(sd)
+    total = session_count(sd)          # kept for context in the txt
     print(f"finals  : {len(finals)} candidates, {len(blue)} blue-labelled, session has {total} frames")
     if args.final:
         stem = re.match(r"(BLD_\d+)", Path(args.final).stem).group(1)
@@ -328,7 +344,8 @@ def main():
                 im.save(base); im.save(frames_dir / f"{rp.stem}_{mode}.jpg", quality=93)
                 tl = frames_dir / f"lab_{i}.png"
                 if i == 0:
-                    text_layer([f"{total} frames.", "One gets published."], 220, 72).save(tl)
+                    n = set_count(sd, stem) or total
+                    text_layer([f"{n} frames.", "One gets published."], 220, 72).save(tl)
                     segs.append((base, tl, 1.4, None, ("out", 1.0, 0.4)))
                 else:
                     text_layer([f"frame {re.search(r'(\d+)', rp.stem).group(1)}"], 1720, 44, bold=False).save(tl)
@@ -337,7 +354,7 @@ def main():
             text_layer(["this one."], 220, 72).save(frames_dir / "t_final.png")
             segs.append((frames_dir / f"{stem}_final.png", frames_dir / "t_final.png",
                          4.5, 1.06, ("in", 1.5, 0.5)))
-            hook = f"{total} frames. One gets published. / this one."
+            hook = f"{set_count(sd, stem) or total} frames. One gets published. / this one."
         mp4 = out_dir / f"{tag}{'' if len(modes) == 1 else '_' + mode}.mp4"
         render_video(segs, mp4)
         made.append(mp4)
@@ -350,7 +367,8 @@ def main():
     faces = ig_meta.face_count(frames_dir / f"{stem}_final.jpg")
     flags = [sfw_note] + ([f"{faces} faces detected — is anyone else in frame?"]
                           if faces > 1 else [])
-    meta = ig_meta.caption_and_hooks(model, sd.name, args.format, total)
+    meta = ig_meta.caption_and_hooks(model, sd.name, args.format,
+                                     set_count(sd, stem) or total)
     write_txt(out_dir / f"{tag}.txt", model, sd, args.format, sources,
               "see DB", hook, meta["hooks"], meta["caption"], meta["keywords"], flags)
     for m in made:

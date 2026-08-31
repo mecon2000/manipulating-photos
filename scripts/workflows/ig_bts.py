@@ -23,6 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ig_reel as R                                   # helpers, paths, render_video
 import ig_meta
+import ig_sync
 
 LOOKBACK_S = 180          # how far before the shutter press to consider
 SEG_S = 2.5               # length of one stitched segment
@@ -172,6 +173,15 @@ def main():
     vd = video_dir(sd)
     if not shot_at or not vd:
         sys.exit(f"need both a shot time ({shot_at}) and a video folder ({vd})")
+
+    # Camera and phone clocks disagree — in this archive by nearly an hour — so a photo
+    # time must be converted to video time before any clip can be matched to it.
+    off, note = ig_sync.cached_offset(sd)
+    if off is None:
+        sys.exit(f"clock offset between camera and phone is unknown ({note}).\n"
+                 f"Measure it once:  ig_sync.py --session {sd.name!r} --set-minutes <N>")
+    shot_at = shot_at + timedelta(seconds=off)
+    print(f"clock   : camera {off/60:+.1f} min vs phone — {note}")
 
     clips = sorted(p for p in vd.iterdir() if p.suffix.lower() in (".mp4", ".mov"))
     best = None

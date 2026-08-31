@@ -29,6 +29,10 @@ content:
       dir: ~/.openclaw/workspace/shared/faces-candidates/reels
       media: [photo]
       group_by: dir          # one card per reel; fav applies to the whole set
+    ig-reels:
+      dir: ~/.openclaw/workspace/shared/ig-reels
+      media: [photo, video]
+      group_by: dir          # one card per candidate; fav = approved for posting
     depth-planes:
       dir: ~/.openclaw/workspace/shared/faces-candidates/depth-planes
       media: [photo]
@@ -77,6 +81,18 @@ actions:
     flags:
       "--prefer-full-body": "Prefer full-body shots"
     wall_time_estimate_sec: 60
+  ig-reel:
+    label: "IG reels v2: render a candidate from the RAW archive"
+    script: ~/gitrep/manipulating-photos/scripts/workflows/ig_reel.py
+    params:
+      session: {type: str, flag: "--session", description: "session folder name or glob under _archive"}
+      format: {type: str, flag: "--format", description: "A = raw2final, B = contactsheet"}
+      final: {type: str, flag: "--final", description: "final filename, e.g. BLD_7071E.tif", advanced: true}
+      raw-mode: {type: str, flag: "--raw-mode", default: "flat", description: "flat | camera | both", advanced: true}
+      frames: {type: int, min: 3, max: 10, default: 6, flag: "--frames", advanced: true}
+    flags:
+      "--dry-run": "Show the session, consent verdict and chosen frames without rendering"
+    wall_time_estimate_sec: 240
   auto-gen-tick:
     label: "Auto-generate (weighted by favorites; replaces the old auto loop)"
     script: ~/gitrep/manipulating-photos/scripts/workflows/auto_gen_tick.py

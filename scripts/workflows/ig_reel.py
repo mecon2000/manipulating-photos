@@ -44,6 +44,13 @@ def ffmpeg():
     return shutil.which("ffmpeg")
 
 
+def ffprobe():
+    """Never derive this from the ffmpeg path by string replacement — the binary lives
+    under .../static_ffmpeg/bin/, so replacing "ffmpeg" rewrites the directory too."""
+    ffmpeg()
+    return shutil.which("ffprobe")
+
+
 def model_from_session(name):
     """'2025-06-09 Elly (Eleanora) at Yogev's house' -> 'Elly (Eleanora)'."""
     s = re.sub(r"^\d{4}-\d{2}-\d{2}\s*", "", name)
@@ -119,12 +126,15 @@ def text_layer(lines, y, size, bold=True, ss=SS):
     return layer
 
 
-def find_finals(session_dir):
+def find_finals(session_dir, blue=None):
     """Finals are E-siblings, files under a processed/ folder, or Blue-labelled.
 
-    Most edits never leave Lightroom, so an E suffix is the exception; treating it
-    as the only signal would miss the majority of published frames.
+    Most edits never leave Lightroom, so an E suffix is the exception; treating it as
+    the only signal would miss the majority of published frames. But a POSITIVE signal
+    is required: without it the fallback accepted any jpg in the session, including
+    "... - UNPROCESSED.jpg" watermarked exports, and offered them as finished work.
     """
+    blue = blue if blue is not None else blue_labelled(session_dir)
     out = {}
     for p in session_dir.rglob("*"):
         if p.suffix.lower() not in (".jpg", ".jpeg", ".tif", ".tiff"):
@@ -136,8 +146,13 @@ def find_finals(session_dir):
         if not m:
             continue
         stem = m.group(1)
+        if "UNPROCESSED" in p.stem.upper():
+            continue                                  # watermarked export, never a final
         edited = bool(re.search(r"E(-\d)?E?$", p.stem))
-        rank = (2 if edited else 0) + (1 if "processed" in rel.lower() else 0)
+        in_processed = re.search(r"(^|/)processed", rel.lower()) is not None
+        rank = (2 if edited else 0) + (1 if in_processed else 0) + (1 if stem in blue else 0)
+        if rank == 0:
+            continue                                  # no signal that this is finished
         if stem not in out or rank > out[stem][0]:
             out[stem] = (rank, p)
     return {k: v[1] for k, v in out.items()}
@@ -330,15 +345,24 @@ def main():
 
     sources = [str(final_path)] + ([str(raw_path)] if args.format == "A"
                                    else [str(r) for r in set_frames(sd, stem, args.frames)])
-    alts = ["before the edit / after the edit", "one frame, two hours apart",
-            "straight out of camera / what she got"] if args.format == "A" else \
-           [f"{total} frames, one keeper", "how many did it take?", "the one that survived"]
-    caption = (f"Shot {total} frames that day. This is the one I sent her — "
-               f"and what it looked like before I touched it. Which would you have picked?")
+    import ig_meta
+    ratio, sfw_note = ig_meta.sfw_flags(frames_dir / f"{stem}_final.jpg")
+    faces = ig_meta.face_count(frames_dir / f"{stem}_final.jpg")
+    flags = [sfw_note] + ([f"{faces} faces detected — is anyone else in frame?"]
+                          if faces > 1 else [])
+    meta = ig_meta.caption_and_hooks(model, sd.name, args.format, total)
     write_txt(out_dir / f"{tag}.txt", model, sd, args.format, sources,
-              "see DB", hook, alts, caption,
-              ["portrait", "before and after", "photography", "editing"],
-              ["SFW: confirm visually before posting"])
+              "see DB", hook, meta["hooks"], meta["caption"], meta["keywords"], flags)
+    for m in made:
+        ig_meta.write_sidecar(m, {"model": model, "session_date": sd.name[:10],
+                                  "format": args.format, "hooks": meta["hooks"],
+                                  "caption": meta["caption"], "skin_ratio": round(ratio, 3),
+                                  "faces": faces, "sfw": sfw_note,
+                                  "caption_source": meta["source"], "status": "candidate"})
+        ig_meta.write_log({"date": stamp, "model": model, "session": sd.name,
+                           "format": args.format, "set": stem, "files": m.name,
+                           "skin_ratio": round(ratio, 3), "faces": faces,
+                           "status": "candidate"})
     for m in made:
         flat = Path(args.out_root) / "_flat"
         flat.mkdir(parents=True, exist_ok=True)
@@ -348,52 +372,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# --- feeding judgements back -------------------------------------------------
-
-def tag_boldness(session_dir, stem, value, source="ronnie-review"):
-    """Record an SFW/NSFW judgement on a frame as a catalog boldness tag.
-
-    The dimension exists but covers 511 of 130,760 photos, so the automatic gate has
-    almost nothing to read. Every call you make during review widens it, and a frame
-    judged once never has to be judged again.
-    """
-    import sqlite3
-    con = sqlite3.connect(str(CATALOG))
-    row = con.execute(
-        """SELECT p.id FROM photos p JOIN sessions s ON s.id = p.session_id
-           WHERE s.folder_path LIKE ? AND p.filename LIKE ?""",
-        (f"%{session_dir.name}%", f"{stem}.%")).fetchone()
-    if not row:
-        con.close()
-        return False
-    pid = row[0]
-    prior = con.execute(
-        "SELECT value, source FROM photo_tags WHERE photo_id=? AND dimension='boldness'",
-        (pid,)).fetchone()
-    if prior and prior[0] != value and prior[1] not in (None, "", source):
-        con.close()                      # never silently overwrite a human's earlier call
-        print(f"  boldness already set to {prior[0]!r} by {prior[1]!r} — leaving it")
-        return False
-    con.execute("DELETE FROM photo_tags WHERE photo_id=? AND dimension='boldness'", (pid,))
-    con.execute("INSERT INTO photo_tags (photo_id, dimension, value, source) VALUES (?,?,?,?)",
-                (pid, "boldness", value, source))
-    con.commit(); con.close()
-    return True
-
-
-def propose(session_dir, stem, final_path, out_png):
-    """A proposal you can actually judge: the frame itself, not just a filename."""
-    im = Image.open(final_path).convert("RGB")
-    im.thumbnail((900, 1600))
-    im.save(out_png, quality=90)
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from notify import push_image
-        push_image(str(out_png), title=f"IG reel candidate — {session_dir.name}",
-                   body=f"{stem} · confirm SFW and consent before rendering")
-        return True
-    except Exception as e:
-        print(f"  (no push: {e})")
-        return False

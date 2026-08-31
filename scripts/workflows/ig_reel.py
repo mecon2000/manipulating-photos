@@ -283,9 +283,9 @@ def main():
     stamp = datetime.now().strftime("%Y-%m-%d")
     tag = f"{stamp}_{re.sub(r'[^A-Za-z0-9]+','',model)}_{'raw2final' if args.format=='A' else 'contactsheet'}_{stem}"
     out_dir = Path(args.out_root) / tag
-    # "_" prefix: project-hub's scanner skips these, so a candidate is ONE card
-    # (the mp4) instead of one per subfolder. Drive/phone still see them normally.
-    frames_dir = out_dir / "_frames"
+    # Visible: the scanner groups by top-level directory, so the mp4 and these stills
+    # are one card — the video plays first, the frames step behind it.
+    frames_dir = out_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     final_img = to_reel(np.asarray(Image.open(final_path).convert("RGB")))

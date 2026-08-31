@@ -25,11 +25,11 @@ content:
       link_template: {url: "/studio/new?src={path}", label: "Tweak"}
       dir: ~/.openclaw/workspace/shared/candidates
       media: [photo]
-    reels:
+    reels-v1:
       dir: ~/.openclaw/workspace/shared/faces-candidates/reels
       media: [photo]
       group_by: dir          # one card per reel; fav applies to the whole set
-    ig-reels:
+    reels-v2:
       dir: ~/.openclaw/workspace/shared/ig-reels
       media: [photo, video]
       group_by: dir          # one card per candidate; fav = approved for posting

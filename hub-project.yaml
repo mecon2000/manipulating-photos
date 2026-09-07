@@ -25,6 +25,22 @@ content:
       link_template: {url: "/studio/new?src={path}", label: "Tweak"}
       dir: ~/.openclaw/workspace/shared/candidates
       media: [photo]
+    review:
+      dir: ~/.openclaw/workspace/shared/faces-candidates/review
+      media: [photo]
+      # contact sheets and A/B comparisons — written here, not to a scratchpad,
+      # because scratchpads live on ext4 and are invisible from Windows and the hub
+    style-tests:
+      dir: ~/.openclaw/workspace/shared/faces-candidates
+      glob: ["output_*/*__final.jpg"]
+      media: [photo]
+      group_by: dir          # one card per photo x reference batch
+    param-sweeps:
+      dir: ~/.openclaw/workspace/shared/faces-candidates
+      glob: ["masksweep_*/*.jpg", "seedtest_*/*/*__final.jpg"]
+      media: [photo]
+      group_by: dir          # one card per sweep; frames are the ladder
+      hidden_by_default: true
     reels-v1:
       dir: ~/.openclaw/workspace/shared/faces-candidates/reels
       media: [photo]
@@ -93,6 +109,14 @@ actions:
     flags:
       "--dry-run": "Show the session, consent verdict and chosen frames without rendering"
     wall_time_estimate_sec: 240
+  tidy-shared:
+    label: "Tidy: report on shared/ and sweep reproducible intermediates"
+    script: ~/gitrep/manipulating-photos/scripts/workflows/tidy_shared.py
+    serialize: true
+    params:
+      sweep: {type: bool, flag: "--sweep", default: false, description: "move reproducible intermediates to trash/ (never rm)"}
+      notify: {type: bool, flag: "--notify", default: true, description: "push the summary via ntfy"}
+    wall_time_estimate_sec: 90
   auto-gen-tick:
     label: "Auto-generate (weighted by favorites; replaces the old auto loop)"
     script: ~/gitrep/manipulating-photos/scripts/workflows/auto_gen_tick.py

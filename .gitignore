@@ -6,3 +6,10 @@ studio/state/
 __pycache__/
 __pycache__/
 *.pyc
+
+# HyperFrames: source compositions are code and belong here; the media they
+# reference does NOT. This repo is public — model photos must never enter it.
+hyperframes/*/assets/
+hyperframes/*/renders/
+hyperframes/*/node_modules/
+hyperframes/**/.hyperframes/

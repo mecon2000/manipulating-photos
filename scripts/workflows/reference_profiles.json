@@ -1,0 +1,21 @@
+{
+  "_doc": "Per-reference defaults. A reference that already renders a convincing, recognisable face makes the identity overlay counter-productive: it drops a photographic head into an illustration and flattens the idiom. Flat-vector and posterised references behave this way; painterly and texture-led ones still need the overlay to hold the likeness. surreal_with_face.py reads this and applies no_face_overlay unless the flag is given explicitly on the command line.",
+  "references": {
+    "posterizing.jpg": {
+      "no_face_overlay": true,
+      "note": "flat vector planes; keeps the face readable on its own"
+    },
+    "posterizing2.jpg": {
+      "no_face_overlay": true,
+      "note": "continuous-line figure; overlay buries the linework"
+    },
+    "red-roses-blue-water.jpg": {
+      "no_face_overlay": true,
+      "note": "screen-print shapes; face survives the stylisation"
+    },
+    "underwater.jpg": {
+      "no_face_overlay": true,
+      "note": "flat vector scene; overlay breaks the graphic read"
+    }
+  }
+}

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en" data-resolution="portrait">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 1080px; height: 1920px; overflow: hidden; background: #000;
+        font-family: "Inter", system-ui, sans-serif;
+      }
+      .layer { position: absolute; inset: 0; }
+      .layer img {
+        position: absolute; inset: 0;
+        width: 100%; height: 100%; object-fit: cover;
+        transform-origin: 50% 31%;          /* the eye line, so scale pivots there */
+      }
+      /* the before/after pair are the same pixel-aligned frame, so a clip-path
+         wipe between them reads as a real slider rather than a dissolve */
+      #edited  { clip-path: inset(0 0 0 0); z-index: 3; }
+      #unedit  { z-index: 2; }
+      #bursts  { z-index: 1; }
+      #bursts img { opacity: 0; }
+
+      .chip {
+        position: absolute; left: 50%; top: 82%;
+        transform: translate(-50%, 0);
+        padding: 18px 40px; border-radius: 999px;
+        background: rgba(255,255,255,.93); color: #000;
+        font-size: 40px; font-weight: 800; letter-spacing: .14em;
+        text-transform: uppercase; white-space: nowrap;
+        z-index: 12; opacity: 0;
+      }
+      .chip.dark { background: rgba(10,10,12,.88); color: #fff; }
+
+      /* the seam that travels with the wipe */
+      #seam {
+        position: absolute; top: 0; bottom: 0; width: 5px;
+        background: #fff; z-index: 6; opacity: 0; left: 0;
+        will-change: transform;
+        box-shadow: 0 0 26px rgba(255,255,255,.85);
+      }
+      #flash { position: absolute; inset: 0; background: #fff; opacity: 0; z-index: 9; }
+      #vig {
+        position: absolute; inset: 0; z-index: 5; pointer-events: none;
+        background: radial-gradient(ellipse at 50% 38%,
+                    rgba(0,0,0,0) 44%, rgba(0,0,0,.55) 100%);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="6"
+         data-width="1080" data-height="1920">
+
+      <div class="layer" id="bursts">
+        <img id="b1" src="./assets/burst1.jpg" />
+        <img id="b2" src="./assets/burst2.jpg" />
+        <img id="b3" src="./assets/burst3.jpg" />
+        <img id="b4" src="./assets/burst4.jpg" />
+        <img id="b5" src="./assets/burst5.jpg" />
+        <img id="b6" src="./assets/burst6.jpg" />
+      </div>
+
+      <div class="layer" id="unedit"><img src="./assets/unedited.jpg" /></div>
+      <div class="layer" id="edited"><img src="./assets/edited.jpg" /></div>
+
+      <div id="seam"></div>
+      <div id="vig"></div>
+      <div id="flash"></div>
+
+      <div class="chip" id="chipEdited">edited</div>
+      <div class="chip dark" id="chipUnedited">unedited</div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      const B = ["#b1","#b2","#b3","#b4","#b5","#b6"];
+
+      // ---- 0.00  open on the payoff: the edited frame, full, settling in
+      tl.set("#edited img", { scale: 1.14 }, 0);
+      tl.set("#edited",     { clipPath: "inset(0 0 0 0)" }, 0);
+      tl.to("#edited img",  { scale: 1.0, duration: 0.95, ease: "power3.out" }, 0);
+      tl.fromTo("#chipEdited", { opacity: 0, y: 40, scale: .85 },
+                { opacity: 1, y: 0, scale: 1, duration: .42, ease: "back.out(2.6)",
+                  immediateRender: false }, 0.10);
+      tl.to("#chipEdited", { opacity: 0, duration: .18 }, 0.92);
+
+      // ---- 0.95  the slider: wipe the edited layer away to reveal the raw file
+      tl.set("#seam", { opacity: 1, x: 1080 }, 0.95);
+      tl.to("#edited", { clipPath: "inset(0 100% 0 0)", duration: .55,
+                         ease: "power2.inOut" }, 0.95);
+      tl.to("#seam",   { x: 0, duration: .55, ease: "power2.inOut" }, 0.95);
+      tl.to("#seam",   { opacity: 0, duration: .12 }, 1.50);
+      tl.fromTo("#chipUnedited", { opacity: 0, y: 40, scale: .85 },
+                { opacity: 1, y: 0, scale: 1, duration: .34, ease: "back.out(2.6)",
+                  immediateRender: false }, 1.18);
+      tl.to("#chipUnedited", { opacity: 0, duration: .14 }, 1.72);
+
+      // ---- 1.85  burst: flick backwards through the frames it came from
+      let t = 1.85, step = 0.135;
+      for (let i = B.length - 1; i >= 0; i--) {
+        tl.set(B[i], { opacity: 1 }, t);
+        tl.fromTo(B[i], { scale: 1.10 }, { scale: 1.0, duration: step,
+                  ease: "power2.out", immediateRender: false }, t);
+        if (i !== B.length - 1) tl.set(B[i + 1], { opacity: 0 }, t);
+        t += step;
+      }
+      tl.set("#b1", { opacity: 0 }, t);
+
+      // ---- ~2.7  snap back: flash, then the edited frame returns and holds
+      tl.set("#edited", { clipPath: "inset(0 0 0 0)" }, t);
+      tl.fromTo("#flash", { opacity: .92 }, { opacity: 0, duration: .22,
+                ease: "power2.out", immediateRender: false }, t);
+      tl.fromTo("#edited img", { scale: 1.11 }, { scale: 1.0, duration: 1.5,
+                ease: "power3.out", immediateRender: false }, t);
+      tl.fromTo("#chipEdited", { opacity: 0, y: 30, scale: .9 },
+                { opacity: 1, y: 0, scale: 1, duration: .38,
+                  ease: "back.out(2.4)", immediateRender: false }, t + 0.12);
+
+      // ---- close on the same image the reel opened on, so the loop is invisible
+      tl.to("#chipEdited", { opacity: 0, duration: .2 }, 5.55);
+      tl.to("#edited img", { scale: 1.14, duration: .3, ease: "power2.in" }, 5.7);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

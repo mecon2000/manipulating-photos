@@ -23,6 +23,8 @@ from PIL import Image
 import cv2
 from skimage.exposure import match_histograms
 
+HERE = Path(__file__).resolve().parent
+
 OUT_DIR = Path("~/.openclaw/workspace/shared/surreal-with-face").expanduser()
 POSE_MODEL = Path("~/openclaw-venv/mediapipe_models/pose_landmarker.task").expanduser()
 BECOME_MODEL = "fofr/become-image:8d0b076a2aff3904dfcec3253c778e0310a68f78483c4699c7fd800f3051d2b3"
@@ -251,6 +253,9 @@ def main():
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--save-intermediates", action="store_true",
                    help="save bw_relit, surreal_gray, mask, matched, alongside final")
+    p.add_argument("--no-psd", action="store_true",
+                   help="skip the layered PSD (stylized + masked photo layer) "
+                        "written next to the final")
     p.add_argument("--save-stack", action="store_true",
                    help="export each pipeline step as a layer in a multi-page TIFF "
                         "(saved alongside final as <tag>__stack.tif)")
@@ -283,6 +288,21 @@ def main():
                    help='warm-cool | split | wash:<color> | off')
     p.add_argument("--grade-strength", type=float, default=0.25)
     args = p.parse_args()
+
+    # Some references render a convincing face by themselves; compositing the real
+    # one back over them flattens the illustration into a photograph on a painted
+    # backdrop. That is a property of the reference, so it belongs beside the
+    # reference rather than in whoever happens to be typing the command.
+    if not args.no_face_overlay:
+        try:
+            prof = json.loads((HERE / "reference_profiles.json").read_text())
+            entry = prof.get("references", {}).get(Path(args.style).name, {})
+            if entry.get("no_face_overlay"):
+                args.no_face_overlay = True
+                print(f"  reference profile: no face overlay "
+                      f"({entry.get('note','')})")
+        except Exception:
+            pass
     if args.instant_id_strength > 1.0:      # become-image 422s above 1
         print(f"  instant-id-strength {args.instant_id_strength} > 1, clamping to 1.0")
         args.instant_id_strength = 1.0
@@ -428,6 +448,25 @@ def main():
     final = surreal_work.astype(np.float32) * (1 - m) \
             + bw_matched.astype(np.float32) * m
     final_u8 = np.clip(final, 0, 255).astype(np.uint8)
+
+    # Layered PSD alongside the flat JPEG. The composite bakes in one answer to
+    # "how much of the real face comes back"; a radial mask cannot know that the
+    # gaze differs between photo and generation, so the eyes are exactly where a
+    # per-image hand correction is worth having. Shipping the mask live makes that
+    # a paint job rather than another full re-render.
+    if not args.no_psd and args.color:
+        try:
+            from psd_layers import write_psd
+            psd_path = out_dir / f"{tag}__layers.psd"
+            write_psd(str(psd_path),
+                      [dict(name="stylized", rgb=surreal_work.astype(np.uint8), mask=None),
+                       dict(name="photo (aligned + colour-matched)",
+                            rgb=bw_matched.astype(np.uint8),
+                            mask=(mask * 255).astype(np.uint8))],
+                      bw_relit.size, final_u8)
+            print(f"  layered psd → {psd_path.name}")
+        except Exception as e:
+            print(f"  psd FAIL: {e}")
     if args.grain > 0:
         # Build a larger ellipse mask for grain attenuation: mask=1 inside (low grain),
         # 0 outside (full grain), linear lerp in the falloff ring.
@@ -524,6 +563,12 @@ def main():
         },
         "tool": "surreal_with_face",
     }
+    # Point at the layered original. The flat JPEG is the deliverable, but the PSD
+    # is what you reopen to revise the face locally, and nothing else records where
+    # it went — a filename convention is not a link.
+    psd_sidecar = out_dir / f"{tag}__layers.psd"
+    if psd_sidecar.exists():
+        meta["psd"] = str(psd_sidecar)
     final_path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
 
     if args.save_intermediates:

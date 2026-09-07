@@ -153,6 +153,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--session", required=True)
     p.add_argument("--final", required=True)
+    p.add_argument("--from-raw", action="store_true",
+                   help="develop the payoff from the CR3 instead of using an edited "
+                        "final — the RAW is clean, whereas the '- UNPROCESSED.jpg' "
+                        "export carries a burned-in watermark")
     p.add_argument("--want", type=float, default=WANT_S)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--out-root", default=str(R.OUT_ROOT))
@@ -169,6 +173,7 @@ def main():
         sys.exit("consent gate: stopping")
 
     stem = re.match(r"(BLD_\d+)", Path(args.final).stem).group(1)
+    tag_suffix = "_raw" if args.from_raw else ""
     shot_at = shot_time(sd, stem)
     vd = video_dir(sd)
     if not shot_at or not vd:
@@ -222,7 +227,7 @@ def main():
         return
 
     stamp = datetime.now().strftime("%Y-%m-%d")
-    tag = f"{stamp}_{re.sub(r'[^A-Za-z0-9]+','',model)}_bts2shot_{stem}"
+    tag = f"{stamp}_{re.sub(r'[^A-Za-z0-9]+','',model)}_bts2shot_{stem}{tag_suffix}"
     out_dir = Path(args.out_root) / tag
     (out_dir / "frames").mkdir(parents=True, exist_ok=True)
     exe = R.ffmpeg()
@@ -237,10 +242,19 @@ def main():
                         str(seg_path)], capture_output=True)
         parts.append(seg_path)
 
-    finals = R.find_finals(sd)
-    final_path = finals.get(stem, sd / args.final)
     from PIL import Image
-    still = R.to_reel(np.asarray(Image.open(final_path).convert("RGB")))
+    if args.from_raw:
+        # sessions span several camera bodies, so the RAW extension varies
+        cands = [q for ext in ("CR3", "CR2", "cr3", "cr2")
+                 for q in sd.glob(f"**/{stem}.{ext}")]
+        if not cands:
+            sys.exit(f"no RAW found for {stem} under {sd}")
+        final_path = cands[0]
+        still = R.to_reel(R.lift(R.develop(final_path, "camera"), 1.35))
+    else:
+        finals = R.find_finals(sd)
+        final_path = finals.get(stem, sd / args.final)
+        still = R.to_reel(np.asarray(Image.open(final_path).convert("RGB")))
     still.save(out_dir / "frames" / f"{stem}_final.png")
     still.save(out_dir / "frames" / f"{stem}_final.jpg", quality=95)
     R.text_layer(["this is what it was for"], 220, 64).save(out_dir / "frames" / "t_final.png")

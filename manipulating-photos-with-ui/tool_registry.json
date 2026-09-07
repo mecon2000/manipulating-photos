@@ -51,6 +51,11 @@
         "max": 0.2,
         "default": 0.03,
         "description": "Film grain outside ellipse, 0=off (0.02-0.04 typical)"
+      },
+      "no-psd": {
+        "type": "bool",
+        "default": false,
+        "description": "skip the layered PSD (stylized + masked photo layer) written next to the final"
       }
     },
     "flags": [

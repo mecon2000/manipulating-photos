@@ -637,14 +637,17 @@ def main():
     # Generate options
     options = generate_crop_options(w, h, mask_binary, landmarks, face_bbox)
 
-    os.makedirs(FINALS, exist_ok=True)
+    # --local-output-dir was declared but never read, so every crop landed in
+    # shared/finals regardless — 633 files deep by the time anyone noticed.
+    out_dir = os.path.expanduser(args.local_output_dir) if args.local_output_dir else FINALS
+    os.makedirs(out_dir, exist_ok=True)
     src_name = os.path.splitext(os.path.basename(source))[0]
 
     # Show options mode — draw overlay, get renumbered list
     renumbered = None
     if args.show_options:
         combined, renumbered = draw_options_overlay(img, options)
-        out_path = os.path.join(FINALS, f"{src_name}_crop_options.jpg")
+        out_path = os.path.join(out_dir, f"{src_name}_crop_options.jpg")
         combined.save(out_path, quality=95)
         print(f"\nGenerated {len(options)} crop options (sorted top→bottom):")
         for num, (name, x1, y1, x2, y2) in renumbered:
@@ -725,12 +728,12 @@ def main():
         # Outpaint if needed and requested
         needs_outpaint = x1 < 0 or y1 < 0 or x2 > w or y2 > h
         if needs_outpaint and args.outpaint:
-            cropped = outpaint_fill(cropped, img, crop_coords, FINALS, prompt=args.outpaint_prompt)
+            cropped = outpaint_fill(cropped, img, crop_coords, out_dir, prompt=args.outpaint_prompt)
         elif needs_outpaint:
             print("  Note: crop extends beyond image. Use --outpaint to fill.")
 
         safe_name = crop_name.replace(" ", "_").replace("(", "").replace(")", "")
-        out_path = os.path.join(FINALS, f"{src_name}_crop_{safe_name}.jpg")
+        out_path = os.path.join(out_dir, f"{src_name}_crop_{safe_name}.jpg")
         cropped.save(out_path, quality=95)
         print(f"Cropped: {cropped.size[0]}x{cropped.size[1]} → {out_path}")
         try:

@@ -1,0 +1,560 @@
+<title>Instinct Review Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* One visual world on purpose: photos are judged on a dark neutral ground,
+     as in any darkroom or Lightroom review. Every colour is painted here. */
+  :root{
+    --ground:#0D0D10; --surface:#16161B; --surface-2:#1E1E25; --line:#2B2B34;
+    --ink:#EDE9E2; --muted:#9591A0; --accent:#E2632A;
+    --pass:#4FB27A; --check:#E0AC3A; --fail:#E0604F;
+    --display:"Bricolage Grotesque","Trebuchet MS",sans-serif;
+    --body:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--body);
+       font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1320px;margin:0 auto;padding-inline:20px;padding-block:22px 80px}
+
+  header.top{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px 28px;
+             padding-bottom:18px;border-bottom:1px solid var(--line)}
+  h1{font-family:var(--display);font-weight:700;font-size:clamp(26px,4.4vw,36px);
+     letter-spacing:-.02em;margin:0;text-wrap:balance}
+  .lede{margin:4px 0 0;color:var(--muted);max-width:62ch}
+  .tally{display:flex;flex-wrap:wrap;gap:10px;margin-left:auto}
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+        padding:8px 14px;min-width:118px}
+  .tile b{display:block;font-family:var(--display);font-size:22px;font-weight:700;
+          font-variant-numeric:tabular-nums}
+  .tile span{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+  .sync{font-size:12px;color:var(--muted);width:100%;text-align:right}
+  .sync.on{color:var(--pass)}
+
+  .filters{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 6px}
+  .filters button{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+                  border-radius:999px;padding:6px 14px;font:inherit;font-size:13px;cursor:pointer}
+  .filters button[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+
+  section.pack{margin-top:30px;padding-top:22px;border-top:1px solid var(--line)}
+  .pack-head{display:grid;grid-template-columns:1fr auto;gap:10px 24px;align-items:start}
+  .kind{display:inline-block;font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+        text-transform:uppercase;padding:3px 8px;border-radius:5px;background:var(--surface-2);
+        border:1px solid var(--line);color:var(--muted)}
+  .pack h2{font-family:var(--display);font-weight:600;font-size:22px;letter-spacing:-.01em;
+           margin:8px 0 2px;text-wrap:balance}
+  .why{margin:0;color:var(--muted);max-width:70ch}
+  .facts{margin:8px 0 0;display:flex;flex-wrap:wrap;gap:4px 18px;font-size:12.5px;color:var(--muted)}
+  .facts dt{display:inline;color:var(--muted)} .facts dd{display:inline;margin:0 0 0 4px;color:var(--ink)}
+
+  /* pipeline: where this pack is. Order is real, so the steps are numbered by position. */
+  .steps{display:flex;list-style:none;margin:0;padding:0;gap:0;align-self:center}
+  .steps li{font-size:12px;color:var(--muted);padding:6px 12px 6px 22px;position:relative;
+            border:1px solid var(--line);border-left:0;background:var(--surface);white-space:nowrap}
+  .steps li:first-child{border-left:1px solid var(--line);border-radius:8px 0 0 8px;padding-left:12px}
+  .steps li:last-child{border-radius:0 8px 8px 0}
+  .steps li.done{color:var(--ink)}
+  .steps li.now{background:var(--accent);border-color:var(--accent);color:#1a0a02;font-weight:600}
+
+  .consent{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .approve{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+  .approve button{font:inherit;font-weight:600;font-size:13px;border-radius:9px;padding:8px 14px;
+                  cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--ink)}
+  .approve button.on{background:var(--pass);border-color:var(--pass);color:#06180d}
+  .approve button:disabled{opacity:.45;cursor:not-allowed}
+  .approve small{color:var(--muted)}
+
+  .strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;padding:14px 0 10px}
+  .frame{scroll-snap-align:start;background:var(--surface);border:1px solid var(--line);
+         border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+  .frame.flag{border-color:var(--check)}
+  .frame.undecided{outline:2px dashed var(--accent);outline-offset:2px}
+  .todo{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);font-size:10.5px;font-weight:600;
+        letter-spacing:.05em;text-transform:uppercase;background:var(--accent);color:#1a0a02;
+        padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .shot{position:relative;background:#000;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center}
+  .shot img{max-width:100%;max-height:100%;display:block}
+  .order{position:absolute;left:8px;top:8px;font-family:var(--mono);font-size:11px;
+         background:rgba(0,0,0,.66);padding:2px 7px;border-radius:5px}
+  .role{position:absolute;right:8px;top:8px;font-size:10.5px;letter-spacing:.06em;
+        text-transform:uppercase;background:rgba(0,0,0,.66);padding:2px 7px;border-radius:5px}
+  .role.edited{color:var(--accent)}
+  .meta{padding:9px 10px 10px;display:grid;gap:7px}
+  .id{font-family:var(--mono);font-size:12px;color:var(--ink);overflow-wrap:anywhere}
+  .sub{font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
+  .row{display:grid;grid-template-columns:auto 1fr;gap:6px 8px;align-items:center}
+  .pill{font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+        padding:2px 7px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
+  .pill.pass{color:var(--pass)} .pill.check{color:var(--check)} .pill.fail{color:var(--fail)}
+  .reason{font-size:11.5px;color:var(--check)}
+  label.mine{display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer;
+             grid-column:1 / -1;padding:5px 7px;border-radius:7px;background:var(--surface-2)}
+  label.mine input{width:16px;height:16px;accent-color:var(--pass);margin:0}
+  label.mine.no input{accent-color:var(--fail)}
+  label.mine .tri{margin-left:auto;font-size:11px;color:var(--muted)}
+  input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .empty{color:var(--muted);padding:20px 0}
+  /* phones: packs collapse to a header; open one to get a dense 3-up grid, details live in the lightbox */
+  .toggle{display:none}
+  @media (max-width:720px){
+    section.pack{margin-top:14px;padding-top:12px}
+    .pack h2{font-size:18px}
+    .toggle{display:inline-block;margin-top:6px}
+    section.pack:not(.open) .strip, section.pack:not(.open) .why, section.pack:not(.open) .facts,
+    section.pack:not(.open) .approve, section.pack:not(.open) .hint, section.pack:not(.open) .steps{display:none}
+    .strip{grid-template-columns:repeat(3,1fr);gap:4px}
+    .strip .meta .id, .strip .meta .sub, .strip .meta .reason{display:none}
+    .strip .meta{padding:4px;gap:4px}
+  }
+  @media (max-width:720px){.pack-head{grid-template-columns:1fr}.steps{overflow-x:auto}.tally{margin-left:0}}
+
+  .shot{border:0;padding:0;cursor:zoom-in;width:100%}
+  .frame.out .shot img{opacity:.35}
+  .frame.dragging{opacity:.4}
+  .frame[draggable]{cursor:grab}
+  .mv{display:flex;gap:6px}
+  .mv button{flex:1;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:7px;
+             padding:4px 0;font:inherit;cursor:pointer}
+  .mv button:disabled{opacity:.3;cursor:default}
+  .approve button.ghost{background:transparent}
+  .warn{margin:8px 0 0;color:var(--check);font-size:12.5px}
+  .hint{margin:6px 0 0;color:var(--muted);font-size:12px}
+  dialog#lb{border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);
+            padding:0;width:min(96vw,1400px);max-height:94vh}
+  dialog#lb::backdrop{background:rgba(5,5,7,.86)}
+  .lb-top,.lb-foot{display:flex;align-items:center;gap:12px;padding:10px 14px;flex-wrap:wrap}
+  .lb-top{border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12.5px}
+  #lb-pos{color:var(--muted)}
+  #lb-close{margin-left:auto;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);
+            border-radius:8px;padding:5px 10px;font:inherit;cursor:pointer}
+  .lb-foot{border-top:1px solid var(--line)}
+  .lb-foot label.mine{grid-column:auto;margin-left:auto}
+  .lb-body{display:grid;grid-template-columns:48px 1fr 48px;align-items:center;background:#000}
+  #lb-img{max-width:100%;max-height:calc(94vh - 120px);margin:0 auto;display:block;object-fit:contain}
+  .lb-nav{height:100%;background:transparent;border:0;color:var(--ink);font-size:34px;cursor:pointer}
+  .lb-nav:disabled{opacity:.2;cursor:default}
+
+  .frame{position:relative}
+  .rm{position:absolute;right:6px;top:34px;z-index:2;width:26px;height:26px;border-radius:50%;
+      border:1px solid var(--line);background:rgba(13,13,16,.82);color:var(--ink);cursor:pointer;font-size:13px;line-height:1}
+  .rm:hover{background:var(--fail);border-color:var(--fail);color:#1a0503}
+  .approve button.danger{color:var(--fail);border-color:color-mix(in srgb, var(--fail) 55%, var(--line))}
+  .linkish{background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer;text-decoration:underline}
+  #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:50;display:flex;gap:14px;align-items:center;
+         background:var(--ink);color:var(--ground);padding:10px 14px;border-radius:10px;font-size:13.5px;
+         box-shadow:0 8px 30px rgba(0,0,0,.45);max-width:calc(100vw - 32px)}
+  #toast button{background:var(--ground);color:var(--ink);border:0;border-radius:7px;padding:5px 12px;font:inherit;font-weight:600;cursor:pointer}
+
+  .row.compact{display:flex;align-items:center;gap:8px}
+  .info{position:relative;margin-left:auto}
+  button.i{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);background:var(--surface-2);
+           color:var(--muted);font:600 12px/1 var(--mono);cursor:pointer;padding:0}
+  button.i:hover,button.i[aria-expanded="true"]{color:var(--ink);border-color:var(--muted)}
+  .tip{display:none;position:absolute;right:0;bottom:calc(100% + 8px);z-index:20;width:max-content;max-width:240px;
+       background:var(--ink);color:var(--ground);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.45;
+       box-shadow:0 6px 24px rgba(0,0,0,.5)}
+  .tip b{font-family:var(--mono);font-weight:500;display:block;overflow-wrap:anywhere}
+  .tip span{display:block;overflow-wrap:anywhere}
+  .tip .reason{color:#8a5a00}
+  .info:hover .tip, button.i:focus-visible + .tip, button.i[aria-expanded="true"] + .tip{display:block}
+  @media (hover:none){ .info:hover .tip{display:none} button.i[aria-expanded="true"] + .tip{display:block} }
+
+  .approve .count{font-weight:400;color:var(--muted);margin-left:4px}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Instinct Review Desk</h1>
+      <p class="lede">Reel proposals. Nothing is exported or cropped until you approve the pack — then it's prepared and dropped in <code>shared\send-to-instinct\</code>.
+        Consent comes from your allowlist automatically. The tool already removed anything it was sure wasn't SFW;
+        only the photos it flagged need your decision.</p>
+    </div>
+    <div class="tally" id="tally"></div>
+    <div class="sync" id="sync">Opening your saved checks…</div>
+  </header>
+
+  <div class="filters" role="group" aria-label="Show">
+    <button type="button" id="f-all" aria-pressed="true">All packs</button>
+    <button type="button" id="f-open" aria-pressed="false">Needs my check</button>
+    <button type="button" id="f-ok" aria-pressed="false">Approved</button>
+    <button type="button" id="f-gone" aria-pressed="false">Removed batches</button>
+  </div>
+  <main id="packs"></main>
+</div>
+
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="lb" aria-label="Photo">
+  <div class="lb-top"><span id="lb-id"></span><span id="lb-pos"></span>
+    <button type="button" id="lb-close" aria-label="Close">Close ✕</button></div>
+  <div class="lb-body">
+    <button type="button" class="lb-nav" id="lb-prev" aria-label="Previous photo">‹</button>
+    <img id="lb-img" alt="">
+    <button type="button" class="lb-nav" id="lb-next" aria-label="Next photo">›</button>
+  </div>
+  <div class="lb-foot" id="lb-foot"></div>
+</dialog>
+<script>
+const PACKS = /*PACKS*/[];
+const PREP = {"burst+finished": "Prepared (RAW burst, eye-locked crop)",
+              "set-vibe": "Prepared (subject-fit crop)",
+              "themed-photos": "Prepared (subject-fit crop)",
+              "model-years": "Prepared (subject-fit crop)"};
+const LS = "instinct-review-v2";
+const mine = {};                 // name -> {files:{file:{sfw}}, models:{m:bool}, order:[file], approved}
+let db = null, filter = "all", lb = null, dragFrom = null;
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const slug = s => s.replace(/[^A-Za-z0-9_\-.~:@+]/g, "_").slice(0, 190);
+const byName = n => PACKS.find(x => x.name === n);
+const state = p => mine[p.name] ||= {files:{}, models:{}, order:null, approved:false, removed:[], dismissed:false,
+                                     added:[], wantMore:false};
+const reserveOf = p => p.reserve || [];
+// every photo the pack can use right now: its own, plus reserve photos Ron added
+const allFiles = p => p.files.concat((state(p).added || []).map(n => reserveOf(p).find(r => r.file === n)).filter(Boolean));
+const nextReserve = p => reserveOf(p).find(r => !(state(p).added || []).includes(r.file));
+const isRemoved = (p, f) => (state(p).removed || []).includes(f.file);
+const visible = p => ordered(p).filter(f => !isRemoved(p, f));
+let undoStack = [];
+const fileState = (p, f) => state(p).files[f.file] ||= {};
+const done = p => p.status === "at shared" || p.status === "reel received";
+// bursts are capture order and model-years is the timeline itself: neither reorders
+const reorderable = p => !["burst+finished", "model-years"].includes(p.type) && !done(p);
+const stemNum = f => Number(((f.stem || f.file).match(/\d{3,}/) || ["0"])[0]);
+function ordered(p){
+  const all = allFiles(p);
+  if (p.type === "burst+finished"){     // capture order, the finished pair last
+    const tail = f => /^(80|90)_/.test(f.file);
+    return all.filter(f => !tail(f)).sort((a, b) => stemNum(a) - stemNum(b)).concat(all.filter(tail));
+  }
+  const o = state(p).order;
+  if (!o || !o.length){                 // added photos go in just before the closing photo
+    const own = p.files.slice(), extra = all.slice(own.length);
+    return own.length ? own.slice(0, -1).concat(extra, own.slice(-1)) : extra;
+  }
+  const pos = new Map(o.map((f, i) => [f, i]));
+  return all.sort((a, b) => (pos.get(a.file) ?? 1e9) - (pos.get(b.file) ?? 1e9));
+}
+function steps(p){ return ["Proposed", "Your OK", PREP[p.type] || "Prepared", "At shared — awaiting instinct", "Reel back"]; }
+function stage(p){ return p.status === "reel received" ? 4 : p.status === "at shared" ? 3 : state(p).approved ? 1 : 0; }
+function title(p){
+  const x = Object.fromEntries(p.extra || []);
+  if (p.type === "themed-photos") return `Theme: ${x.Theme}`;
+  if (p.type === "model-years") return `${x.Model} through the years · ${x.Years}`;
+  if (p.type === "set-vibe") return `${x.Model} — ${(x.Set || "set").replace("(unnamed) ", "")}`;
+  return `${x.Model} — ${x.Hero}`;
+}
+// Only photos the tool FLAGGED need an explicit decision. Tool-passed photos
+// count as "use it" unless Ron unticks them — approving writes that down.
+const needsDecision = (p, f) => !isRemoved(p, f) && f.sfw !== "pass" && fileState(p, f).sfw === undefined;
+function missing(p){
+  const st = state(p), out = [];
+  const fs = visible(p), todo = fs.map((f, i) => needsDecision(p, f) ? `#${i + 1}` : null).filter(Boolean);
+  if (todo.length) out.push(`decide flagged photo${todo.length > 1 ? "s" : ""} ${todo.join(", ")}`);
+  if (!visible(p).some(f => fileState(p, f).sfw !== false)) out.push("keep at least one photo");
+  return out;
+}
+function warn(p){
+  if (p.type === "burst+finished") return "";
+  const keep = visible(p).filter(f => fileState(p, f).sfw !== false);
+  if (!keep.length) return "";
+  const bad = [keep[0], keep[keep.length - 1]].some(f => f.role !== "edited");
+  return bad ? "The first and last photo should be edited ones — the pack won't build otherwise." : "";
+}
+
+function tally(){
+  const photos = PACKS.reduce((n, p) => n + allFiles(p).length, 0);
+  let seen = 0, approved = 0;
+  for (const p of PACKS){ for (const f of allFiles(p)) if (!needsDecision(p, f)) seen++;
+                         if (state(p).approved) approved++; }
+  const flagged = PACKS.reduce((n, p) => n + p.files.filter(f => f.sfw !== "pass").length, 0);
+  document.getElementById("tally").innerHTML = [
+    [PACKS.length, "proposals"], [flagged, "photos tool flagged"],
+    [`${seen}/${photos}`, "photos cleared"], [approved, "packs approved"]
+  ].map(([v, l]) => `<div class="tile"><b>${v}</b><span>${l}</span></div>`).join("");
+}
+
+function tri(v, yes, no, dflt){ return v === true ? yes : v === false ? no : (dflt || "not decided"); }
+function sfwBox(p, f, where){
+  const v = fileState(p, f).sfw;
+  return `<label class="mine ${v === false ? "no" : ""}">
+    <input type="checkbox" id="${where}-${slug(p.name)}-${slug(f.file)}" data-pack="${esc(p.name)}"
+      data-file="${esc(f.file)}" ${v === true || (v === undefined && f.sfw === "pass") ? "checked" : ""} ${done(p) ? "disabled" : ""}>
+    SFW — use it<span class="tri">${tri(v, "yes", "no — leave out", f.sfw === "pass" ? "yes (tool passed)" : "")}</span></label>`;
+}
+function frameCard(p, f, i, n){
+  const facts = ["model", "session", "shot", "rating"].filter(k => f[k]).map(k => esc(f[k])).join(" · ");
+  const mv = reorderable(p) ? `<div class="mv">
+      <button type="button" data-move="-1" data-pack="${esc(p.name)}" data-file="${esc(f.file)}" ${i ? "" : "disabled"} aria-label="Move earlier">◀</button>
+      <button type="button" data-move="1" data-pack="${esc(p.name)}" data-file="${esc(f.file)}" ${i < n - 1 ? "" : "disabled"} aria-label="Move later">▶</button></div>` : "";
+  return `<article class="frame ${f.sfw !== "pass" ? "flag" : ""} ${fileState(p, f).sfw === false ? "out" : ""} ${needsDecision(p, f) ? "undecided" : ""}"
+      ${reorderable(p) ? `draggable="true"` : ""} data-pack="${esc(p.name)}" data-file="${esc(f.file)}">
+    ${done(p) ? "" : `<button type="button" class="rm" data-remove="${esc(p.name)}" data-file="${esc(f.file)}" aria-label="Remove ${esc(f.file)} from this batch" title="Remove from batch">✕</button>`}
+    <button type="button" class="shot" data-open="${esc(p.name)}" data-file="${esc(f.file)}" aria-label="Open ${esc(f.file)}">
+      <img src="${f.thumb}" alt="" loading="lazy">
+      <span class="order">${String(i + 1).padStart(2, "0")}</span>
+      <span class="role ${f.role === "edited" ? "edited" : ""}">${esc(f.role)}</span>
+      ${needsDecision(p, f) ? `<span class="todo">not decided</span>` : ""}</button>
+    <div class="meta">
+      <div class="row compact"><span class="pill ${f.sfw}" title="SFW, tool opinion">${f.sfw}</span>
+        <span class="info">
+          <button type="button" class="i" data-info aria-expanded="false" aria-label="Details for ${esc(f.file)}">i</button>
+          <span class="tip" role="tooltip">
+            <b>${esc(f.file.replace(/\.jpg$/, ""))}</b>
+            ${facts ? `<span>${facts}</span>` : ""}
+            <span class="${f.reasons.length ? "reason" : ""}">${f.reasons.length ? esc(f.reasons.join("; ")) : "SFW — tool found nothing"}</span>
+          </span></span></div>
+      ${sfwBox(p, f, "c")}${mv}
+    </div></article>`;
+}
+
+const openPacks = new Set();
+function render(){
+  const root = document.getElementById("packs");
+  const list = PACKS.filter(p => filter === "gone" ? state(p).dismissed : state(p).dismissed ? false
+    : filter === "all" ? true : filter === "ok" ? state(p).approved : !state(p).approved);
+  if (!list.length){ root.innerHTML = `<p class="empty">Nothing here.</p>`; tally(); return; }
+  root.innerHTML = list.map(p => {
+    const st = state(p), stps = steps(p), cur = stage(p), need = missing(p), w = warn(p);
+    const ready = !need.length && !w, locked = done(p);
+    const consent = (p.models || []).map(m => `<label class="mine ${st.models[m] === false ? "no" : ""}">
+        <input type="checkbox" id="m-${slug(p.name)}-${slug(m)}" data-pack="${esc(p.name)}" data-model="${esc(m)}"
+          ${st.models[m] === true ? "checked" : ""} ${locked ? "disabled" : ""}>
+        Consent OK: <b>${esc(m)}</b><span class="tri">${tri(st.models[m], "yes", "no")}</span></label>`).join("");
+    const files = visible(p), nRemoved = (st.removed || []).length;
+    return `<section class="pack ${openPacks.has(p.name) ? "open" : ""}" aria-labelledby="h-${slug(p.name)}">
+      <div class="pack-head">
+        <div>
+          <span class="kind">${esc(p.type)}</span>
+          <h2 id="h-${slug(p.name)}">${esc(title(p))}</h2>
+          <button type="button" class="ghost toggle" data-toggle="${esc(p.name)}">${openPacks.has(p.name) ? "Close" : `Open · ${files.length} photos`}</button>
+          <p class="why">${esc(p.why)}</p>
+          <dl class="facts">${(p.extra || []).map(([k, v]) => `<span><dt>${esc(k)}</dt><dd>${esc(v)}</dd></span>`).join("")}
+            <span><dt>Proposed</dt><dd>${esc(p.proposed_at)}</dd></span></dl>
+          <div class="approve">
+            <button type="button" class="ghost" data-allsfw="${esc(p.name)}" ${locked ? "disabled" : ""}>Mark flagged ones SFW too</button>
+            ${locked ? "" : nextReserve(p)
+              ? `<button type="button" class="ghost" data-addmore="${esc(p.name)}">Add photo ＋ <span class="count">${reserveOf(p).length - (st.added || []).length} ready</span></button>`
+              : st.wantMore
+                ? `<button type="button" class="ghost" data-cancelmore="${esc(p.name)}" title="Claude looks for more on its next pass">More requested ✓</button>`
+                : `<button type="button" class="ghost" data-askmore="${esc(p.name)}">Ask for more photos</button>`}
+            ${st.dismissed
+              ? `<button type="button" class="ghost" data-restorebatch="${esc(p.name)}">Restore batch</button>`
+              : `<button type="button" class="ghost danger" data-removebatch="${esc(p.name)}"
+                  title="${locked ? "Hides it from this page; files already in shared stay where they are" : "Remove batch"}">${locked ? "Hide batch ✕" : "Remove batch ✕"}</button>`}
+            <button type="button" data-approve="${esc(p.name)}" class="${st.approved ? "on" : ""}"
+              ${locked || (!ready && !st.approved) ? "disabled" : ""}>${st.approved ? "Approved for instinct" : "Approve pack"}</button>
+            <small>${p.status === "reel received" ? `reel is back — ${esc(p.reel || "")}` : locked ? "prepared and waiting in shared" : st.approved ? "Claude prepares approved packs next"
+              : ready ? "ready to approve" : "to approve: " + need.concat(w ? ["fix the order"] : []).join(" · ")}</small>
+          </div>
+          ${w ? `<p class="warn">${esc(w)}</p>` : ""}
+          ${nRemoved ? `<p class="hint">${nRemoved} photo${nRemoved > 1 ? "s" : ""} removed from this batch ·
+            <button type="button" class="linkish" data-restoreall="${esc(p.name)}">put them back</button></p>` : ""}
+          ${reorderable(p) ? `<p class="hint">Drag photos, or use ◀ ▶, to change the order.</p>`
+            : `<p class="hint">${p.type === "model-years" ? "Oldest shoot to newest — the order is the story." : "Burst order is the capture order."}</p>`}
+        </div>
+        <ol class="steps" aria-label="Pipeline">
+          ${stps.map((s, i) => `<li class="${i < cur ? "done" : i === cur ? "now" : ""}">${esc(s)}</li>`).join("")}
+        </ol>
+      </div>
+      <div class="strip">${files.map((f, i) => frameCard(p, f, i, files.length)).join("")}</div>
+    </section>`;
+  }).join("");
+  tally();
+}
+
+// ---- saving: the artifact's store when available, this browser otherwise
+async function save(p){
+  const st = state(p);
+  if (!missing(p).length && !warn(p)) {} else st.approved = false;
+  try { localStorage.setItem(LS, JSON.stringify(mine)); } catch {}
+  if (!db) return;
+  // Lists, never objects keyed by filename: a key like "01_burst_BLD_7270.jpg"
+  // contains a dot, which the store treats as a nested path, so the saved check
+  // came back under a different key and every tick snapped back.
+  const doc = {
+    files: Object.entries(st.files).filter(([, v]) => v.sfw !== undefined).map(([file, v]) => ({file, sfw: v.sfw})),
+    models: Object.entries(st.models).map(([name, ok]) => ({name, ok})),
+    order: st.order || [], approved: !!st.approved, removed: st.removed || [],
+    dismissed: !!st.dismissed, added: st.added || [], wantMore: !!st.wantMore,
+    updatedAt: new Date().toISOString(),
+  };
+  try { await db.doc("review/" + slug(p.name)).set(doc); }
+  catch (e) { setSync(`Couldn't save to Claude (${e.code || e.message}) — kept in this browser`, false); }
+}
+function setSync(text, ok){ const s = document.getElementById("sync"); s.textContent = text; s.classList.toggle("on", !!ok); }
+function cycle(v){ return v === undefined ? true : v === true ? false : undefined; }
+function setOrder(p, files){
+  const shown = files.map(f => f.file), hidden = ordered(p).map(f => f.file).filter(x => !shown.includes(x));
+  state(p).order = shown.concat(hidden);
+}
+
+document.addEventListener("change", e => {
+  const el = e.target, p = el.dataset.pack && byName(el.dataset.pack);
+  if (!p) return;
+  remember(p, el.dataset.file ? `Changed ${el.dataset.file.replace(/\.jpg$/, "")}` : "Changed");
+  if (el.dataset.model){
+    // consent belongs to the model, not the pack: apply it everywhere she appears
+    const m = el.dataset.model, v = cycle(state(p).models[m]);
+    for (const q of PACKS) if ((q.models || []).includes(m) && !done(q)){
+      const sq = state(q);
+      if (v === undefined) delete sq.models[m]; else sq.models[m] = v;
+      if (q !== p) save(q);
+    }
+  } else if (el.dataset.file){
+    const f = allFiles(p).find(x => x.file === el.dataset.file), s = fileState(p, f);
+    // tool-passed photos start as "yes", so a click on them means "no"
+    const cur = s.sfw === undefined && f.sfw === "pass" ? true : s.sfw;
+    const v = f.sfw === "pass" ? (cur === true ? false : true) : cycle(s.sfw);
+    if (v === undefined) delete s.sfw; else s.sfw = v;
+  } else return;
+  save(p); render(); if (lb) openLb(lb.pack, lb.file);
+});
+
+document.addEventListener("click", e => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.info !== undefined){                // tap-to-show for touch screens
+    const open = t.getAttribute("aria-expanded") !== "true";
+    document.querySelectorAll("button[data-info][aria-expanded='true']").forEach(x => x.setAttribute("aria-expanded", "false"));
+    t.setAttribute("aria-expanded", String(open)); return; }
+  if (t.dataset.remove){ const p = byName(t.dataset.remove), st = state(p);
+    remember(p, `Removed ${t.dataset.file.replace(/\.jpg$/, "")}`);
+    st.removed = [...new Set([...(st.removed || []), t.dataset.file])]; st.approved = false;
+    save(p); render(); if (lb) openLb(lb.pack, lb.file); return; }
+  if (t.dataset.removebatch){ const p = byName(t.dataset.removebatch);
+    remember(p, `${done(p) ? "Hid" : "Removed"} batch “${title(p)}”`); state(p).dismissed = true;
+    if (!done(p)) state(p).approved = false;
+    save(p); render(); return; }
+  if (t.dataset.restorebatch){ const p = byName(t.dataset.restorebatch);
+    remember(p, `Restored batch “${title(p)}”`); state(p).dismissed = false; save(p); render(); return; }
+  if (t.dataset.restoreall){ const p = byName(t.dataset.restoreall);
+    remember(p, "Put photos back"); state(p).removed = []; save(p); render(); return; }
+  if (t.id === "toast-undo"){ undo(); return; }
+  if (t.dataset.addmore){ const p = byName(t.dataset.addmore), r = nextReserve(p);
+    if (r){ remember(p, `Added ${r.file.replace(/\.jpg$/, "").replace(/^r\d+_/, "")}`);
+      const st = state(p); st.added = [...(st.added || []), r.file]; st.approved = false;
+      if (st.order && st.order.length) st.order = st.order.slice(0, -1).concat(r.file, st.order.slice(-1));
+      save(p); render(); }
+    return; }
+  if (t.dataset.toggle){ const n = t.dataset.toggle; openPacks.has(n) ? openPacks.delete(n) : openPacks.add(n); render(); return; }
+  if (t.dataset.askmore){ const p = byName(t.dataset.askmore); remember(p, "Asked Claude for more photos");
+    state(p).wantMore = true; save(p); render(); return; }
+  if (t.dataset.cancelmore){ const p = byName(t.dataset.cancelmore); remember(p, "Cancelled the request");
+    state(p).wantMore = false; save(p); render(); return; }
+  if (t.dataset.approve){ const p = byName(t.dataset.approve), st = state(p);
+    st.approved = !st.approved;
+    if (st.approved) for (const f of allFiles(p)) if (!isRemoved(p, f) && fileState(p, f).sfw === undefined && f.sfw === "pass") fileState(p, f).sfw = true;
+    save(p); render(); }
+  else if (t.dataset.allsfw){ const p = byName(t.dataset.allsfw); remember(p, "Marked flagged photos SFW");
+    for (const f of allFiles(p)) if (fileState(p, f).sfw === undefined) fileState(p, f).sfw = true;   // flagged ones too
+    save(p); render(); }
+  else if (t.dataset.move){ const p = byName(t.dataset.pack), fs = visible(p);
+    const i = fs.findIndex(f => f.file === t.dataset.file), j = i + Number(t.dataset.move);
+    if (j >= 0 && j < fs.length){ remember(p, "Moved a photo"); [fs[i], fs[j]] = [fs[j], fs[i]]; setOrder(p, fs); save(p); render(); } }
+  else if (t.dataset.open){ openLb(t.dataset.open, t.dataset.file); }
+  else if (t.closest(".filters")){ filter = t.id.slice(2);
+    document.querySelectorAll(".filters button").forEach(x => x.setAttribute("aria-pressed", String(x === t))); render(); }
+});
+
+// ---- undo: every change to a pack snapshots it first; Undo (or Ctrl/Cmd+Z) restores
+function remember(p, label){
+  undoStack.push({name: p.name, before: JSON.parse(JSON.stringify(state(p))), label});
+  if (undoStack.length > 50) undoStack.shift();
+  toast(label);
+}
+function undo(){
+  const u = undoStack.pop(); if (!u) return;
+  mine[u.name] = u.before; save(byName(u.name)); render();
+  toast(undoStack.length ? `Undone — ${undoStack[undoStack.length - 1].label} can be undone next` : "Undone", false);
+}
+let toastTimer;
+function toast(text, withUndo = true){
+  const el = document.getElementById("toast");
+  el.innerHTML = `<span>${esc(text)}</span>` + (withUndo ? `<button type="button" id="toast-undo">Undo</button>` : "");
+  el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 8000);
+}
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !dlg.open){ e.preventDefault(); undo(); }
+});
+
+// ---- drag to reorder
+document.addEventListener("dragstart", e => {
+  const c = e.target.closest?.(".frame[draggable]"); if (!c) return;
+  dragFrom = {pack: c.dataset.pack, file: c.dataset.file}; c.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+});
+document.addEventListener("dragover", e => {
+  const c = e.target.closest?.(".frame[draggable]");
+  if (c && dragFrom && c.dataset.pack === dragFrom.pack){ e.preventDefault(); }
+});
+document.addEventListener("drop", e => {
+  const c = e.target.closest?.(".frame[draggable]");
+  if (!c || !dragFrom || c.dataset.pack !== dragFrom.pack) return;
+  e.preventDefault();
+  const p = byName(c.dataset.pack), fs = visible(p);
+  const from = fs.findIndex(f => f.file === dragFrom.file), to = fs.findIndex(f => f.file === c.dataset.file);
+  remember(p, "Reordered"); const [m] = fs.splice(from, 1); fs.splice(to, 0, m);
+  setOrder(p, fs); save(p); dragFrom = null; render();
+});
+document.addEventListener("dragend", () => { dragFrom = null; document.querySelectorAll(".dragging").forEach(x => x.classList.remove("dragging")); });
+
+// ---- lightbox
+const dlg = document.getElementById("lb");
+function openLb(packName, file){
+  const p = byName(packName), fs = visible(p), i = fs.findIndex(f => f.file === file), f = fs[i];
+  if (!f){ dlg.close(); return; }
+  lb = {pack: packName, file};
+  document.getElementById("lb-img").src = f.thumb;
+  document.getElementById("lb-img").alt = f.file;
+  document.getElementById("lb-id").textContent = `${title(p)} · ${f.file.replace(/\.jpg$/, "")} · ${f.role}`;
+  document.getElementById("lb-pos").textContent = `${i + 1} / ${fs.length}`;
+  document.getElementById("lb-foot").innerHTML = `<span class="pill ${f.sfw}">${f.sfw}</span>
+    <span class="${f.reasons.length ? "reason" : "sub"}">${f.reasons.length ? esc(f.reasons.join("; ")) : "tool opinion"}</span>
+    ${sfwBox(p, f, "lb")}`;
+  document.getElementById("lb-prev").disabled = i === 0;
+  document.getElementById("lb-next").disabled = i === fs.length - 1;
+  if (!dlg.open) dlg.showModal();
+}
+function stepLb(d){ if (!lb) return; const fs = visible(byName(lb.pack));
+  const i = fs.findIndex(f => f.file === lb.file) + d; if (i >= 0 && i < fs.length) openLb(lb.pack, fs[i].file); }
+document.getElementById("lb-prev").onclick = () => stepLb(-1);
+document.getElementById("lb-next").onclick = () => stepLb(1);
+document.getElementById("lb-close").onclick = () => dlg.close();
+dlg.addEventListener("close", () => { lb = null; });
+dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });
+document.addEventListener("keydown", e => {
+  if (!dlg.open) return;
+  if (e.key === "ArrowLeft") stepLb(-1);
+  if (e.key === "ArrowRight") stepLb(1);
+});
+
+// ---- boot: render at once from this browser, then light up the shared store
+try { Object.assign(mine, JSON.parse(localStorage.getItem(LS) || "{}")); } catch {}
+render();
+setSync("Saving in this browser — connecting to Claude…", false);
+(async () => {
+  for (let i = 0; i < 40 && !window.claude?.use; i++) await new Promise(r => setTimeout(r, 250));
+  db = window.claude?.use ? await window.claude.use("db") : null;
+  if (!db){ setSync("Saved in this browser only — Claude can't read these checks from here", false); return; }
+  setSync("Saving to Claude", true);
+  db.collection("review").onSnapshot(snap => {
+    for (const d of snap.docs){
+      const data = d.data(), p = PACKS.find(x => slug(x.name) === d.id);
+      if (!p || !data) continue;
+      const files = {}, models = {};
+      for (const x of (Array.isArray(data.files) ? data.files : [])) files[x.file] = {sfw: x.sfw};
+      for (const x of (Array.isArray(data.models) ? data.models : [])) models[x.name] = x.ok;
+      mine[p.name] = {files, models, order: (data.order && data.order.length) ? data.order : null,
+                      approved: !!data.approved, removed: Array.isArray(data.removed) ? data.removed : [],
+                      dismissed: !!data.dismissed, added: Array.isArray(data.added) ? data.added : [],
+                      wantMore: !!data.wantMore};
+    }
+    render(); if (lb) openLb(lb.pack, lb.file);
+  }, err => setSync("Claude store unavailable (" + (err.code || err.message) + ") — saving in this browser", false));
+  // push anything decided before the store connected
+  for (const p of PACKS) if (Object.keys(state(p).files).length || Object.keys(state(p).models).length) save(p);
+})();
+</script>

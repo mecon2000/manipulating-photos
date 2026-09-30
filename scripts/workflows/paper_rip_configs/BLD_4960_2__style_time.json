@@ -1,0 +1,25 @@
+{
+  "start": "/home/rong/.openclaw/workspace/shared/surreal-with-face/BLD_4960_2__style_time__final.jpg",
+  "end": "/home/rong/.openclaw/workspace/shared/surreal-with-face/BLD_4960_2__style_time__src.jpg",
+  "crop": [81, 0, 1886],
+  "face": [517, 419, 90, 142],
+  "regions": {"default": 4, "rules": [
+    {"label": 5, "rect": [517, -9999, 9999, 9999], "band": [517, 419, 763, 861, -9999, 170]},
+    {"label": 3, "band": [517, 419, 763, 861, 170, 400]},
+    {"label": 2, "band": [517, 419, 763, 861, 400, 640]},
+    {"label": 1, "band": [517, 419, 763, 861, 640, 880]},
+    {"label": 0, "band": [517, 419, 763, 861, 880, 9999]}
+  ]},
+  "sliver": [[425,330],[470,270],[560,255],[620,300],[1280,165],[1280,240],[655,420],[628,520],[580,585],[500,605],[438,545],[412,440]],
+  "sliver_pivot": [1280, 200],
+  "sliver_lift": 1.35,
+  "tears": [[144.014,40,-1,1.0],[144.803,70,1,1.0],[145.616,20,-1,1.0],[146.011,55,1,1.0],
+            [146.406,170,1,1.0],[146.85,-60,-1,0.45],[148.76,15,1,3.2]],
+  "music": {"file": "meganeko_storm.wav", "artist": "meganeko", "title": "Storm (Vivaldi)",
+            "t0": 143.3, "t1": 150.3, "drop": 148.78, "break": 146.45},
+  "camera": {"zoom": 1.3, "from": [1280, 1280], "to": [0, 0]},
+  "text": [
+    {"text": "THEY PAINTED A STORM.", "t": 143.4, "size": 120, "color": [255,255,255], "row": 0, "pop": 0.25, "dur": 0.18},
+    {"text": "SHE WAS THE CALM.", "t": 148.78, "size": 140, "color": [255,120,30], "row": 1, "pop": 0.5, "dur": 0.12}
+  ]
+}

@@ -49,6 +49,12 @@ content:
       dir: ~/.openclaw/workspace/shared/ig-reels
       media: [photo, video]
       group_by: dir          # one card per candidate; fav = approved for posting
+      review: {contract: "Would you post it? Bad/unsure + a note on what's wrong (tears, timing, text, music, crop) — Claude reads the notes."}
+    stylized:
+      # the pick-list for paper-rip reels: one card per stylized final
+      dir: ~/.openclaw/workspace/shared/surreal-with-face
+      glob: ["*__final.jpg"]
+      media: [photo]
     depth-planes:
       dir: ~/.openclaw/workspace/shared/faces-candidates/depth-planes
       media: [photo]
@@ -109,6 +115,22 @@ actions:
     flags:
       "--dry-run": "Show the session, consent verdict and chosen frames without rendering"
     wall_time_estimate_sec: 240
+  paper-rip-reel:
+    label: "Paper-rip reel: stylized image tears away to the original, on the beat"
+    script: ~/gitrep/manipulating-photos/scripts/workflows/paper_rip_auto.py
+    source_arg: "--source"
+    output_dir_arg: "--local-output-dir"
+    output_area: reels-v2      # one folder per reel: .mp4 (review), _silent.mp4 (upload), _music.json
+    keep_subdirs: true
+    params:
+      music: {type: choice, options: [auto, lacrimosa, lacrimosa-b, storm, storm-b, majesty], default: auto, flag: "--music"}
+      layout: {type: choice, options: [auto, blocks, diagonal, sweep-h, sweep-v], default: auto, flag: "--layout"}
+      text-top: {type: str, flag: "--text-top", description: "line shown from the start (blank = pick one)"}
+      text-drop: {type: str, flag: "--text-drop", description: "line that slams in on the drop (blank = pick one)"}
+      seed: {type: int, min: 0, max: 99999, flag: "--seed", advanced: true, description: "varies layout/music/text when on auto"}
+    flags:
+      "--dry-run": "Contact sheet only (fast), no video"
+    wall_time_estimate_sec: 90
   tidy-shared:
     label: "Tidy: report on shared/ and sweep reproducible intermediates"
     script: ~/gitrep/manipulating-photos/scripts/workflows/tidy_shared.py

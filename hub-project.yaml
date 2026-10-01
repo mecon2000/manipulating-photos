@@ -124,7 +124,9 @@ actions:
     keep_subdirs: true
     params:
       music: {type: choice, options: [auto, lacrimosa, lacrimosa-b, storm, storm-b, majesty], default: auto, flag: "--music"}
-      layout: {type: choice, options: [auto, blocks, diagonal, sweep-h, sweep-v], default: auto, flag: "--layout"}
+      layout: {type: choice, options: [auto, shards, strips, wedges, blocks, diagonal, sweep-h, sweep-v], default: auto, flag: "--layout", description: "rip shapes"}
+      camera: {type: choice, options: [auto, cuts, whip, drift, pan], default: auto, flag: "--camera", description: "cuts = jump cuts to legs/hands/head on the beat"}
+      aspect: {type: choice, options: [auto, "9:16", "4:5", "1:1"], default: auto, flag: "--aspect", description: "auto = tallest frame that keeps the whole pose"}
       text-top: {type: str, flag: "--text-top", description: "line shown from the start (blank = pick one)"}
       text-drop: {type: str, flag: "--text-drop", description: "line that slams in on the drop (blank = pick one)"}
       seed: {type: int, min: 0, max: 99999, flag: "--seed", advanced: true, description: "varies layout/music/text when on auto"}

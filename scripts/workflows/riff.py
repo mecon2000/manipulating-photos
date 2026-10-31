@@ -92,7 +92,8 @@ Layer kinds the compositor can render: {kinds}.
   real words around the ring, params.center = real word). Any Russian must be correct Russian.
 - "glyph_rain": columns of characters (params.charset: "katakana|latin|cyrillic|digits|ascii").
 - "scribbles": params.subject = what is doodled, params.medium.
-- "paper_scraps": params.content = what is printed on the scraps.
+- "paper_scraps": params.content = what KIND of printed matter (texture only — it renders as
+  unreadable small print; never name specific words, they come out misspelled).
 Regions: {regions}. z: under (behind her) | over (on top of her).
 Colors must stay inside the recipe palette unless wildness > 0.8.
 

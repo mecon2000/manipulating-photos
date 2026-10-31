@@ -97,3 +97,4 @@ Tools: `compose_get` (stack, base/background, open questions, open pinned notes 
 - House rules hold here too: eyes never covered (`base.protect_eyes` stays on), no red pen
   gestures across the head, subject stays the focal point; prefer re-seeding a layer over
   deleting it when only its layout is wrong.
+- paper_scraps renders unreadable print only (Flux misspells: 'safeword' → 'Sefeworu'). Any real words go in kind=print or rendered text; quoted words in params.content are stripped.

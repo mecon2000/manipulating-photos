@@ -85,13 +85,11 @@ def compact(piece: str) -> str:
                      f"{', riff' if L['riff'] else ''}] region={L['region']} "
                      f"seed={L['seed']} params={json.dumps(L['params'])}")
     try:   # face landmarks, normalized to final.jpg (the cropped source), for placing boxes
-        from PIL import Image as _I
-        d = compose.piece_dir(piece)
-        W0, H0 = _I.open(d / "source.jpg").size
-        f = json.loads((d / "face.json").read_text())
+        pts, lit = _face_geo(piece)
         lines.append("face (normalized x,y): " + ", ".join(
-            f"{k}=({v[0] / W0:.3f},{v[1] / H0:.3f})" for k, v in f.items()) +
-            "  — image-left/right; her right cheek is image-LEFT")
+            f"{k}=({v[0]:.3f},{v[1]:.3f})" for k, v in pts.items()) +
+            "  — her right cheek is image-LEFT. "
+            + (f"Lit (brighter) side of her face: {lit}." if lit else "Face lit evenly."))
     except Exception:
         pass
     oq = [q for q in s["questions"] if q.get("status") == "open"]
@@ -109,8 +107,62 @@ def compact(piece: str) -> str:
     return "\n".join(lines)
 
 
+def _face_geo(piece: str):
+    """Face landmarks normalized to final.jpg + which side of the face is lit.
+    Returns (pts, lit) where lit is 'image-left' / 'image-right' / ''."""
+    from PIL import Image as _I
+    import numpy as _np
+    d = compose.piece_dir(piece)
+    src = _I.open(d / "source.jpg").convert("L")
+    W0, H0 = src.size
+    f = json.loads((d / "face.json").read_text())
+    pts = {k: (v[0] / W0, v[1] / H0) for k, v in f.items()}
+    a = _np.asarray(src, dtype=_np.float32)
+    nx, ny = f["nose"]
+    r = max(8, int(abs(f["eye_r"][0] - f["eye_l"][0]) * 0.18))
+
+    def patch(cx):
+        cx, cy = int(cx), int(ny)
+        return float(a[max(0, cy - r):cy + r, max(0, cx - r):cx + r].mean())
+    left = patch((f["eye_l"][0] + f["mouth_l"][0]) / 2)
+    right = patch((f["eye_r"][0] + nx) / 2 + (f["eye_r"][0] - nx) * 0.3)
+    lit = "" if abs(left - right) < 12 else ("image-left" if left > right else "image-right")
+    return pts, lit
+
+
+def face_label(piece: str, x: float, y: float) -> str:
+    """Deterministic label when the pin is on the face — the VLM misnames face spots."""
+    try:
+        pts, lit = _face_geo(piece)
+    except Exception:
+        return ""
+    xs = [v[0] for v in pts.values()]
+    ys = [v[1] for v in pts.values()]
+    pad = (max(xs) - min(xs)) * 0.08
+    if not (min(xs) - pad <= x <= max(xs) + pad and pts["forehead"][1] - pad <= y <= pts["chin"][1] + pad):
+        return ""
+    ey = (pts["eye_l"][1] + pts["eye_r"][1]) / 2
+    side = "image-left" if x < pts["nose"][0] else "image-right"
+    her = "her right" if side == "image-left" else "her left"
+    if y < ey - 0.02:
+        part = "forehead"
+    elif abs(y - ey) <= 0.02:
+        part = "eye area"
+    elif y > pts["mouth_l"][1] + 0.03:
+        part = "chin/jaw"
+    elif y > pts["nose"][1]:
+        part = "mouth/lower cheek"
+    else:
+        part = "cheek"
+    lit_s = "" if not lit else (", the LIT/brighter side" if lit == side else ", the SHADOWED/darker side")
+    return f"her face — {side} {part} ({her} {part.split('/')[-1]}{lit_s})"
+
+
 def region_label(piece: str, x: float, y: float) -> str:
     """'near her left cheek' — local-VLM look at a crop around the pin."""
+    fl = face_label(piece, x, y)
+    if fl:
+        return fl
     d = compose.piece_dir(piece)
     w = 0.22
     region = [max(0.0, x - w / 2), max(0.0, y - w / 2), w, w]
@@ -149,6 +201,8 @@ async def _with_pin_label(piece: str, message: str, pin_id: str, wait: float = 2
 
 
 def _server(piece: str, events: asyncio.Queue):
+    gate = {"dirty": False}   # a compose_set happened and nobody looked since
+
     async def emit(ev):
         await events.put(ev)
 
@@ -178,6 +232,7 @@ def _server(piece: str, events: asyncio.Queue):
         await emit({"type": "tool_start", "name": "compose_set", "detail": ", ".join(map(str, kv))[:80]})
         try:
             await asyncio.to_thread(compose.do_set, _p(args), kv, args.get("note") or "")
+            gate["dirty"] = True
             await emit({"type": "graph_changed"})
             await emit({"type": "tool_end", "name": "compose_set", "detail": "rendered"})
             return _ok(f"set {kv} and re-rendered final.jpg (now on Ronnie's canvas).")
@@ -222,6 +277,10 @@ def _server(piece: str, events: asyncio.Queue):
     @tool("resolve_comment", "Mark a pinned comment done (after you acted on it) or "
           "'wontfix' (say why in chat).", {"id": str, "status": str})
     async def resolve_comment(args):
+        if (args.get("status") or "done") == "done" and gate["dirty"]:
+            return _err("not resolved: you changed the piece but haven't looked. Call look "
+                        "with a region around the pin, confirm the change is visible THERE "
+                        "and matches what he asked, then resolve.")
         try:
             await asyncio.to_thread(compose.set_comment_status, piece, args["id"],
                                     args.get("status") or "done")
@@ -242,6 +301,7 @@ def _server(piece: str, events: asyncio.Queue):
                                      region=args.get("region") or None,
                                      source_path=compose.load_piece(piece).get("photo"))["text"]
             txt = await asyncio.to_thread(_w)
+            gate["dirty"] = False
             await emit({"type": "tool_end", "name": "look", "detail": "done"})
             return _ok(txt)
         except Exception as e:

@@ -468,7 +468,28 @@ def gen_dot_rows(L, ctx):
                 x += cell
         img = cv2.resize(big, (ctx.W, ctx.H), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
         return solid(ctx, p.get("color", "#d4001e"), img * float(p.get("opacity", 1.0)))
-    for i in range(len(lines) or int(p.get("rows", 3))):
+    if lines:
+        # a readable block: lines stacked top→bottom in the order given, left-aligned.
+        # params.at = "x,y" (normalized top-left of the block), else random inside the region
+        widest = max(len(braille_cells(t)) for t in lines) * cell
+        at = p.get("at")
+        if at:
+            ax, ay = [float(v) for v in str(at).split(",")[:2]]
+            bx, by = ax * ctx.W, ay * ctx.H
+        else:
+            bx = rng.uniform(x0, max(x0 + 1, x1 - widest))
+            by = rng.uniform(y0 + 0.1 * (y1 - y0), max(y0 + 1, y1 - len(lines) * line * 1.5))
+        for i, t in enumerate(lines):
+            x, y = bx, by + i * line * 1.5
+            for c in braille_cells(t):
+                for kk in (c or ""):
+                    dx, dy = DOT_POS[kk]
+                    cv2.circle(big, (int((x + dx * d) * k), int((y + dy * d) * k)),
+                               max(1, int(r * k)), 255, -1, cv2.LINE_AA)
+                x += cell
+        img = cv2.resize(big, (ctx.W, ctx.H), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+        return solid(ctx, p.get("color", "#d4001e"), img * float(p.get("opacity", 1.0)))
+    for i in range(int(p.get("rows", 3))):
         y = rng.uniform(y0 + 0.1 * (y1 - y0), y1 - 0.1 * (y1 - y0))
         if lines:
             cells = braille_cells(lines[i])

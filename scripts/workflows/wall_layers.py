@@ -1135,8 +1135,9 @@ def gen_ghost(L, ctx):
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     ph, m = _photo(ctx), ctx.mask
     ang = np.deg2rad(_deg(p, "direction", rng.uniform(-180, 180)))
-    n = int(p.get("count", 2))
-    dist = s * float(p.get("offset", 0.06))
+    st = float(p.get("strength", 1.0))       # one dial: more copies, further apart, more opaque
+    n = int(round(int(p.get("count", 2)) * max(1.0, st ** 0.5)))
+    dist = s * float(p.get("offset", 0.06)) * st ** 0.5
     blur = s * float(p.get("blur", 0.012))
     acc_rgb = np.zeros_like(ph)
     acc_a = np.zeros_like(m)
@@ -1150,7 +1151,7 @@ def gen_ghost(L, ctx):
         acc_rgb += c * w
         acc_a += a * w
     rgb = acc_rgb / np.maximum(acc_a[..., None], 1e-3)
-    alpha = np.clip(acc_a, 0, 1) * float(p.get("opacity", 0.5))
+    alpha = np.clip(acc_a * st ** 0.5, 0, 1) * min(1.0, float(p.get("opacity", 0.5)) * st ** 0.5)
     return Layer(np.clip(rgb, 0, 1).astype(np.float32), alpha.astype(np.float32))
 
 
@@ -1160,8 +1161,9 @@ def gen_motion_smear(L, ctx):
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     ph, m = _photo(ctx), ctx.mask
     ang = np.deg2rad(_deg(p, "direction", rng.uniform(-60, 60)))
-    length = s * float(p.get("length", 0.12))
-    steps = 28
+    st = float(p.get("strength", 1.0))       # one dial: longer, denser, more of the body
+    length = s * float(p.get("length", 0.12)) * st ** 0.5
+    steps = int(28 * max(1.0, st ** 0.5))
     acc_rgb = np.zeros_like(ph)
     acc_a = np.zeros_like(m)
     src = ph * m[..., None]
@@ -1183,8 +1185,8 @@ def gen_motion_smear(L, ctx):
     a = a * (1 - float(p.get("keep_body", 0.6)) * m)
     # only part of the body smears (an arm, a shoulder) — a soft blob picks where
     cov = float(p.get("coverage", 0.5))
-    pick = np.clip(0.5 + 1.6 * fbm((ctx.H, ctx.W), rng, s * 0.25, 2) + (cov - 0.5), 0, 1)
-    a = a * pick * float(p.get("opacity", 0.85))
+    pick = np.clip(0.5 + 1.6 * fbm((ctx.H, ctx.W), rng, s * 0.25, 2) + (cov - 0.5) + 0.25 * (st - 1), 0, 1)
+    a = np.clip(a * st, 0, 1) * pick * float(p.get("opacity", 0.85))
     return Layer(np.clip(rgb, 0, 1).astype(np.float32), np.clip(a, 0, 1).astype(np.float32))
 
 

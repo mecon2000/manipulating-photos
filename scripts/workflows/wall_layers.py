@@ -357,10 +357,26 @@ def gen_runes(L, ctx, mode):
             if text:
                 if i:
                     continue
-                blk = text_block(text, g * float(p.get("text_scale", 0.8)))
-                if vertical:
-                    blk = np.rot90(blk, -1)
-                blk = rotate(blk, ang)
+                gt = g * float(p.get("text_scale", 0.8))
+                la = [float(v) for v in str(p.get("line_angles") or "").replace(";", ",").split(",") if v.strip()]
+                if la:                                # each '/' line gets its own tilt, stacked
+                    parts = [t.strip() for t in text.split("/") if t.strip()]
+                    rows = [rotate(text_block(t, gt), la[min(k, len(la) - 1)]) for k, t in enumerate(parts)]
+                    W_ = max(r.shape[1] for r in rows)
+                    H_ = sum(int(r.shape[0] * 0.8) for r in rows) + rows[-1].shape[0]
+                    blk = np.zeros((H_, W_), np.float32)
+                    y_ = 0
+                    for k, r in enumerate(rows):
+                        x_ = int(W_ * 0.12 * k) if k else 0      # later lines step right a little
+                        x_ = min(x_, W_ - r.shape[1])
+                        sub = blk[y_:y_ + r.shape[0], x_:x_ + r.shape[1]]
+                        np.maximum(sub, r[:sub.shape[0], :sub.shape[1]], out=sub)
+                        y_ += int(r.shape[0] * 0.8)
+                else:
+                    blk = text_block(text, gt)
+                    if vertical:
+                        blk = np.rot90(blk, -1)
+                    blk = rotate(blk, float(p["angle"]) if p.get("angle") not in (None, "") else ang)
                 if p.get("at"):                       # pin the words to a spot (normalized centre)
                     ax, ay = [float(v) for v in str(p["at"]).split(",")[:2]]
                     cx, cy = ax * ctx.W, ay * ctx.H

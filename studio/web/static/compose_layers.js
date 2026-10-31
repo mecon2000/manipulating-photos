@@ -24,15 +24,27 @@ export function loadImg(url) {
 // layers: manifest-shaped rows in bottom→top order, each with .url (resolved src).
 // compare: null | {img, mode: "hold"|"side", showing: bool}
 //   hold: the canvas shows the savepoint only while the hold button/space is down
-export async function composite(W, H, layers, compare) {
+export const isLoaded = (url) => loadedUrls.has(url);
+const loadedUrls = new Set();
+
+export async function composite(W, H, layers, compare, onProgress) {
   if (compare && compare.mode === "hold" && compare.showing && compare.img) {
     if (out.width !== W || out.height !== H) { out.width = W; out.height = H; }
     ctx.globalCompositeOperation = "source-over";
     ctx.drawImage(compare.img, 0, 0, W, H);
     return out;
   }
-  const imgs = await Promise.all(layers.map((L) =>
-    L.enabled && !L.removed ? loadImg(L.url).catch(() => null) : Promise.resolve(null)));
+  const want = layers.filter((L) => L.enabled && !L.removed);
+  let done = want.filter((L) => loadedUrls.has(L.url)).length;
+  if (onProgress && done < want.length) onProgress(done, want.length);
+  const imgs = await Promise.all(layers.map((L) => {
+    if (!(L.enabled && !L.removed)) return Promise.resolve(null);
+    const had = loadedUrls.has(L.url);
+    return loadImg(L.url).then((im) => {
+      if (!had) { loadedUrls.add(L.url); done++; if (onProgress) onProgress(done, want.length); }
+      return im;
+    }).catch(() => null);
+  }));
   const side = compare && compare.mode === "side";
   const cw = side ? W * 2 + Math.round(W * 0.02) : W;
   if (out.width !== cw || out.height !== H) { out.width = cw; out.height = H; }

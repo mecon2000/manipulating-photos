@@ -100,14 +100,27 @@ function layerSrc(L) {
   return fileUrl(f.startsWith("layers/") ? f : `layers/${f}`, man.rev);
 }
 
-let drawing = false, redrawAgain = false;
+let drawing = false, redrawAgain = false, firstPainted = false, layersShown = false;
 async function redraw() {
   if (!man) return;
   if (drawing) { redrawAgain = true; return; }
   drawing = true;
   try {
     const layers = man.layers.map((L) => ({ ...L, url: layerSrc(L) }));
-    const c = await composite(man.W, man.H, layers, compare);
+    // first paint: the finished render (one JPEG) while the ~20 layer PNGs download
+    if (!firstPainted) {
+      firstPainted = true;
+      const fin = new Image();
+      fin.onload = () => { if (!layersShown) canvas.setImageSource(fin); };
+      fin.src = fileUrl("final.jpg", man.rev);
+    }
+    const chip = $("busy-chip"), txt = $("busy-text");
+    const c = await composite(man.W, man.H, layers, compare, (n, total) => {
+      if (n < total) { chip.classList.remove("hidden"); txt.textContent = `loading layers ${n}/${total}…`; }
+      else if (txt.textContent.startsWith("loading layers")) chip.classList.add("hidden");
+    });
+    if (txt.textContent.startsWith("loading layers")) chip.classList.add("hidden");
+    layersShown = true;
     canvas.setImageSource(c);
   } catch (e) {
     toast(`draw: ${e.message}`);
@@ -177,7 +190,9 @@ const contentLayers = () => (man ? man.layers.filter((L) => (L.z === "under" || 
 function syncCleanBtn() {
   const b = $("clean-btn");
   if (!b) return;
-  b.textContent = cleanSaved ? `↩ Previous layers (${cleanSaved.length})` : "Only model + paper";
+  const bare = !cleanSaved && man && !contentLayers().some((L) => L.enabled);
+  b.textContent = cleanSaved ? `↩ Previous layers (${cleanSaved.length})`
+    : bare ? "All layers on" : "Only model + paper";
   b.classList.toggle("btn-accent", !!cleanSaved);
 }
 
@@ -193,7 +208,13 @@ function onCleanClick() {
     cleanSaved = null;
   } else {
     cleanSaved = contentLayers().filter((L) => L.enabled).map((L) => L.id);
-    if (!cleanSaved.length) { cleanSaved = null; toast("Already just model + paper"); return; }
+    if (!cleanSaved.length) {          // already bare and nothing to go back to: everything on
+      cleanSaved = null;
+      for (const L of contentLayers()) { L.enabled = true; kv.push(`${L.id}.enabled=true`); }
+      syncCleanBtn(); redraw(); renderAll();
+      if (kv.length) persist("/quick-set", { kv, note: "all layers on" });
+      return;
+    }
     for (const L of contentLayers()) {
       if (L.enabled) { L.enabled = false; kv.push(`${L.id}.enabled=false`); }
     }
@@ -293,6 +314,7 @@ function renderAll() {
       const top = sc.scrollTop;                   // keep the scroll position across rebuilds
       renderPanel(lb, panelCtx());
       sc.scrollTop = top;
+      syncCleanBtn();
       panelStale = false;
     }
   } else $("layers-body").innerHTML = '<div class="empty-hint">Building layers… (first render after the update)</div>';

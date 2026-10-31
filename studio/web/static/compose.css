@@ -123,3 +123,19 @@
 .chat-hint { font-size: 12px; color: var(--fg-dim); padding: 8px 14px 0; }
 .sp-bar { display: flex; gap: 6px; align-items: center; }
 .sp-bar .sp-select { flex: 1; max-width: none; }
+
+/* side panel: Layers takes the room; collapsed sections dock at the bottom (VS Code style) */
+.compose-side #questions { order: 0; }
+.compose-side #layers-sec { order: 1; }
+.compose-side .collapsible:not(.docked) { order: 2; }
+.compose-side .chat-col { order: 3; }
+.compose-side .docked { order: 4; border-top: 1px solid var(--border); }
+.compose-side .docked .collapsible-toggle { padding: 8px 14px; font-size: 13px; color: var(--fg-dim); }
+.compose-side #layers-sec .collapsible-body { max-height: none; }
+@media (min-width: 900px) {
+  .compose-side { overflow: hidden; }
+  .compose-side #layers-sec:not(.docked) { flex: 1 1 auto; min-height: 140px; display: flex; flex-direction: column; }
+  .compose-side #layers-sec:not(.docked) .collapsible-body { flex: 1; min-height: 0; overflow-y: auto; }
+  .compose-side .collapsible:not(.docked):not(#layers-sec) .collapsible-body { max-height: 28vh; }
+  .compose-side .chat-col { flex: 0 0 30vh; min-height: 200px; }
+}

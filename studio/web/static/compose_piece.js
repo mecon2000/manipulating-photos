@@ -386,6 +386,8 @@ function wireCollapsible(btnId, bodyId, label) {
   $(btnId).onclick = () => {
     const b = $(bodyId);
     b.classList.toggle("hidden");
+    // collapsed sections dock at the bottom of the panel (VS Code style) so Layers gets the room
+    b.parentElement.classList.toggle("docked", b.classList.contains("hidden"));
     $(btnId).textContent = `${label()} ${b.classList.contains("hidden") ? "▸" : "▾"}`;
   };
 }

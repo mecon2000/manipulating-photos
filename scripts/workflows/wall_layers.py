@@ -771,10 +771,16 @@ def gen_paper_scraps(L, ctx):
     content = p.get("content", "vintage newspaper page, dense columns of small print, headlines")
     # Flux can't spell: never ask it for specific words (quoted words came out as
     # 'Sefeworu' for 'safeword'). Strip them and keep all print tiny and unreadable.
-    content = re.sub(r"[\'\"‘’“”][^\'\"‘’“”]{1,40}[\'\"‘’“”]", "", content)
-    content = re.sub(r"\s+,", ",", content).strip(" ,")
-    src = asset_image(f"{content}, black and white print, all text tiny and unreadable, "
-                      "no headlines, no large words, flat scan of the full page",
+    # params.unreadable (set on pieces made after this fix) — older pieces keep their
+    # original prompt so a re-render reproduces the same scraps.
+    stripped = re.sub(r"[\'\"‘’“”][^\'\"‘’“”]{1,40}[\'\"‘’“”]", "", content)
+    if stripped != content or p.get("unreadable"):
+        content = re.sub(r"\s+,", ",", stripped).strip(" ,")
+        prompt = (f"{content}, black and white print, all text tiny and unreadable, "
+                  "no headlines, no large words, flat scan of the full page")
+    else:
+        prompt = f"{content}, black and white print, flat scan of the full page"
+    src = asset_image(prompt,
                       L.get("seed", 1))
     rgb_o, a_o = paper_object(src)
     ys, xs = np.nonzero(a_o > 0.99)

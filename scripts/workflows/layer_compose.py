@@ -140,6 +140,8 @@ def cmd_init(a):
     P["base"]["edge_dissolve"] = 0   # Ronnie: no torn-edge effect — clean cut-out
     for i, L in enumerate(P["layers"]):
         L.setdefault("seed", seed + 101 * (i + 1))
+        if L.get("kind") == "paper_scraps":
+            L.setdefault("params", {})["unreadable"] = True
         if L.get("kind") == "ink_smear":      # own set of Flux brush strokes per piece
             L.setdefault("params", {}).setdefault("brush_seed", 1000 + (seed % 9000) * 4)
     for lid in filter(None, (a.disable or "").split(",")):
@@ -248,8 +250,13 @@ def focus_map(mask, s):
     return np.exp(-(out / (s * 0.22)) ** 2).astype(np.float32)
 
 
-def edge_dissolve(mask, amt, s, rng):
+def edge_dissolve(mask, amt, s, rng, keep_layout=False):
+    """keep_layout: a piece built WITH the dissolve drew its noise from the shared rng, so
+    every later layer's placement depends on it. Turning the effect off must still draw
+    the same noise, or the whole layout reshuffles (base.edge_keep_layout)."""
     if amt <= 0:
+        if keep_layout:
+            wl.fbm(mask.shape, rng, s * 0.006, 3)
         return mask
     inside = distance_transform_edt(mask > 0.5)
     band = s * 0.035 * amt
@@ -380,7 +387,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
             emit(L, lay)
 
     # subject: B&W, highlights fall to paper (multiply onto paper colour), ragged edge
-    m = edge_dissolve(mask, float(base.get("edge_dissolve", 0)), s, rng0)
+    m = edge_dissolve(mask, float(base.get("edge_dissolve", 0)), s, rng0,
+                      keep_layout=bool(base.get("edge_keep_layout", False)))
     subj_rgb = (lum[..., None] * paper) if lum is not None else rgb
     cut = next((L for L in live if L["kind"] == "subject_cut"), None)
     if cut is not None:

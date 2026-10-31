@@ -20,7 +20,9 @@ A *piece* = one photo x one recipe, in shared/deconstruct/pieces/<photo>__<recip
   layer_compose.py variant PIECE <layer-id> [--seed N]     one layer, another seed → layers/variants/
   layer_compose.py order  PIECE id,id,subject,id,...       bottom→top; left of subject = under
   layer_compose.py save   PIECE --name "..."               savepoint (piece.json + final.jpg)
-  layer_compose.py restore PIECE --savepoint N
+  layer_compose.py restore PIECE --savepoint N             (savepoint 0 = start, always there)
+  layer_compose.py fav    PIECE [--name "..."]             full-res + <photo>__<recipe>.psd →
+                                                           shared/favorites + favorites.json
   set/order take --no-render (fast client edits; render later). Every render writes
   layers/manifest.json + one RGBA PNG per layer (disabled ones too, + paper and finish).
 
@@ -149,6 +151,7 @@ def cmd_init(a):
         print(f"  {'✓' if L.get('enabled', True) else '·'} {L['id']:<32} {L['kind']:<13} "
               f"{L['z']:<5} {'riff' if L.get('riff') else ''}")
     render(d, P, event="init")
+    ensure_start(d)
     return d
 
 
@@ -397,6 +400,11 @@ def to_img(a):
     return Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8))
 
 
+def psd_path(d, P):
+    """<original photo>__<recipe>.psd — named after what it is, not 'piece'."""
+    return d / f"{Path(P['photo']).stem}__{P['recipe']}.psd"
+
+
 def save_rgba(path, L):
     rgba = np.dstack([L.rgb, L.alpha])
     Image.fromarray((np.clip(rgba, 0, 1) * 255).astype(np.uint8), "RGBA").save(path)
@@ -433,7 +441,7 @@ def render(d, P, full=False, event="render", **meta):
             L = e["layer"]
             layers.append({"name": e["id"], "rgb": (np.clip(L.rgb, 0, 1) * 255).astype(np.uint8),
                            "mask": (np.clip(L.alpha, 0, 1) * 255).astype(np.uint8)})
-        write_psd(str(d / "piece.psd"), layers, (W, H), np.asarray(img))
+        write_psd(str(psd_path(d, P)), layers, (W, H), np.asarray(img))
     n = hist(d, P, event, full=full, **meta)
     if not full:
         (d / "layers" / "manifest.json").write_text(json.dumps(
@@ -541,24 +549,81 @@ def cmd_order(a):
     render(d, P, event="order", order=ids)
 
 
-def cmd_save(a):
-    d, P = load(a.piece)
+def make_savepoint(d, P, name, n=None, final=None, kind="manual"):
+    """savepoints/<NN>_<slug>/{piece.json, final.jpg} + index.json. n=0 is the start."""
+    import shutil
     sd = d / "savepoints"
     sd.mkdir(exist_ok=True)
     idx_f = sd / "index.json"
     idx = json.loads(idx_f.read_text()) if idx_f.exists() else []
-    n = max([e["n"] for e in idx] + [0]) + 1
-    slug = re.sub(r"[^\w-]+", "-", a.name.lower()).strip("-")[:40] or "save"
+    if n is None:
+        n = max([e["n"] for e in idx] + [0]) + 1
+    if any(e["n"] == n for e in idx):
+        return None
+    slug = re.sub(r"[^\w-]+", "-", name.lower()).strip("-")[:40] or "save"
     out = sd / f"{n:02d}_{slug}"
-    out.mkdir()
+    out.mkdir(exist_ok=True)
     (out / "piece.json").write_text(json.dumps(P, indent=2, ensure_ascii=False))
-    import shutil
-    if (d / "final.jpg").exists():
-        shutil.copyfile(d / "final.jpg", out / "final.jpg")
-    idx.append({"n": n, "name": a.name, "t": time.strftime("%F %T"), "dir": out.name})
+    src = Path(final) if final else d / "final.jpg"
+    if src.exists():
+        shutil.copyfile(src, out / "final.jpg")
+    idx.append({"n": n, "name": name, "t": time.strftime("%F %T"), "dir": out.name, "kind": kind})
+    idx.sort(key=lambda e: e["n"])
     idx_f.write_text(json.dumps(idx, indent=2, ensure_ascii=False))
-    hist_event(d, "savepoint", n=n, name=a.name)
+    hist_event(d, "savepoint", n=n, name=name, kind=kind)
     print(f"Savepoint {n}: {out}")
+    return n
+
+
+def ensure_start(d):
+    """Savepoint 0 = the piece as first rendered (rebuilt from history/000 for old pieces)."""
+    h0j, h0i = d / "history" / "000.json", d / "history" / "000.jpg"
+    if h0j.exists():
+        make_savepoint(d, json.loads(h0j.read_text()), "start", n=0, final=h0i, kind="start")
+
+
+def cmd_save(a):
+    d, P = load(a.piece)
+    ensure_start(d)
+    make_savepoint(d, P, a.name)
+
+
+def cmd_fav(a):
+    """Final: full-res render + PSD, copy into shared/favorites with a favorites.json
+    entry (reconstruction = restore this savepoint + render --full)."""
+    import shutil, subprocess as sp
+    d, P = load(a.piece)
+    ensure_start(d)
+    render(d, P, full=True, event="fav")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    name = f"{Path(P['photo']).stem}__{P['recipe']}__{stamp}"
+    n = make_savepoint(d, P, a.name or f"fav {stamp}", kind="fav")
+    fav_dir = Path("~/.openclaw/workspace/shared/favorites").expanduser()
+    shutil.copyfile(d / "final_full.jpg", fav_dir / f"{name}.jpg")   # copyfile: 9p rejects copy2
+    try:
+        commit = sp.run(["git", "-C", str(HERE), "rev-parse", "--short", "HEAD"],
+                        capture_output=True, text=True).stdout.strip()
+    except Exception:
+        commit = None
+    fj = fav_dir / "favorites.json"
+    favs = json.loads(fj.read_text()) if fj.exists() else {"favorites": []}
+    model = None
+    try:
+        model = Path(P["photo"]).resolve().relative_to(
+            Path("~/.openclaw/workspace/_photos").expanduser().resolve()).parts[0]
+    except ValueError:
+        pass
+    favs["favorites"].append({
+        "file": f"{name}.jpg", "source": P["photo"], "model": model,
+        "style": f"compose: {P['recipe']} (wildness {P.get('wildness')})",
+        "tool": "layer_compose", "score": None, "git_commit": commit,
+        "favorited_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "command": (f"cd ~/gitrep/manipulating-photos && ./scripts/workflows/layer_compose.py "
+                    f"restore '{d}' --savepoint {n} && ./scripts/workflows/layer_compose.py "
+                    f"render '{d}' --full"),
+        "piece": str(d), "savepoint": n, "psd": str(psd_path(d, P)), "project": "photo-tools"})
+    fj.write_text(json.dumps(favs, indent=2, ensure_ascii=False))
+    print(f"Fav: {fav_dir / (name + '.jpg')}\nPSD: {psd_path(d, P)}")
 
 
 def cmd_restore(a):
@@ -660,6 +725,7 @@ def main():
     v = sub.add_parser("variant"); v.add_argument("piece"); v.add_argument("id"); v.add_argument("--seed", type=int)
     od = sub.add_parser("order"); od.add_argument("piece"); od.add_argument("ids"); od.add_argument("--no-render", action="store_true")
     sv = sub.add_parser("save"); sv.add_argument("piece"); sv.add_argument("--name", required=True)
+    fv = sub.add_parser("fav"); fv.add_argument("piece"); fv.add_argument("--name", default="")
     rs = sub.add_parser("restore"); rs.add_argument("piece"); rs.add_argument("--savepoint", required=True)
     o = sub.add_parser("options"); o.add_argument("piece"); o.add_argument("--question", required=True); o.add_argument("--vary", required=True)
     p = sub.add_parser("pick"); p.add_argument("piece"); p.add_argument("--question", required=True)
@@ -667,7 +733,7 @@ def main():
     a = ap.parse_args()
     {"init": cmd_init, "render": cmd_render, "set": cmd_set, "options": cmd_options,
      "pick": cmd_pick, "variant": cmd_variant, "order": cmd_order, "save": cmd_save,
-     "restore": cmd_restore}[a.cmd](a)
+     "restore": cmd_restore, "fav": cmd_fav}[a.cmd](a)
 
 
 if __name__ == "__main__":

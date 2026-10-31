@@ -2,6 +2,7 @@ name: photo-tools
 label: "Photo tools"
 links:
   studio: {url: "/studio/", label: "Studio"}
+  compose: {url: "/studio/compose", label: "Compose"}
 content:
   root: ~/.openclaw/workspace/shared/photo-tools
   areas:

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Compose — {{ piece }}</title>
+<link rel="stylesheet" href="{{ base }}/static/app.css">
+<link rel="stylesheet" href="{{ base }}/static/compose.css">
+</head>
+<body>
+<div class="topbar studio-topbar">
+  <a class="back-link" href="{{ base }}/compose">‹</a>
+  <div class="source-name" title="{{ piece }}">{{ piece }}</div>
+  <div class="topbar-actions">
+    <a id="psd-link" class="chip hidden" href="#">PSD</a>
+    <button id="full-btn" class="btn btn-small" title="Full-res render + PSD">Full + PSD</button>
+  </div>
+</div>
+
+<main class="studio-layout">
+  <section class="canvas-col">
+    <div id="canvas-wrap" class="canvas-wrap">
+      <span id="busy-chip" class="chip busy-chip hidden"><span class="spin"></span><span id="busy-text">rendering…</span></span>
+      <div id="stage-container" class="stage-container"></div>
+    </div>
+    <div class="mode-bar">
+      <div class="mode-toggle" id="mode-toggle">
+        <button class="mode-btn active" data-mode="pan">Pan</button>
+        <button class="mode-btn" data-mode="markers">Pin a note</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="side-col">
+    <div id="questions"></div>
+
+    <div class="collapsible">
+      <button class="collapsible-toggle" id="layers-toggle">Layers ▾</button>
+      <div class="collapsible-body" id="layers-body"></div>
+    </div>
+
+    <div class="collapsible">
+      <button class="collapsible-toggle" id="pins-toggle">Notes (0) ▸</button>
+      <div class="collapsible-body hidden" id="pins-body"></div>
+    </div>
+
+    <div class="collapsible">
+      <button class="collapsible-toggle" id="hist-toggle">History ▸</button>
+      <div class="collapsible-body hidden" id="hist-body"></div>
+    </div>
+
+    <div class="chat-col">
+      <div id="chat-messages" class="chat-messages"></div>
+      <form id="chat-form" class="chat-input-row">
+        <input id="chat-input" type="text" placeholder="Talk to Studio about this piece…" autocomplete="off">
+        <button type="submit" class="btn btn-accent">Send</button>
+      </form>
+    </div>
+  </section>
+</main>
+
+<div id="pin-sheet" class="sheet hidden">
+  <textarea id="pin-text" placeholder="What should change here?"></textarea>
+  <div class="sheet-actions">
+    <button id="pin-cancel" class="btn">Cancel</button>
+    <button id="pin-send" class="btn btn-accent">Pin + send</button>
+  </div>
+</div>
+<div id="lightbox" class="lightbox hidden"><img id="lb-img" alt=""><div id="lb-cap" class="lb-cap"></div></div>
+<div id="toast" class="toast hidden"></div>
+
+<script>window.COMPOSE = { base: "{{ base }}", piece: {{ piece|tojson }} };</script>
+<script src="{{ base }}/static/vendor/konva.min.js"></script>
+<script type="module" src="{{ base }}/static/compose_piece.js"></script>
+</body>
+</html>

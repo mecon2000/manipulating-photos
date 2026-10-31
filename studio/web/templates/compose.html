@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Compose</title>
+<link rel="stylesheet" href="{{ base }}/static/app.css">
+<link rel="stylesheet" href="{{ base }}/static/compose.css">
+</head>
+<body>
+<div class="topbar">
+  <a class="back-link" href="{{ base }}/">‹</a>
+  <div class="title">Compose</div>
+  <div class="topbar-actions">
+    <button id="new-btn" class="btn btn-accent btn-small">+ New piece</button>
+  </div>
+</div>
+
+<main class="compose-main">
+  <section id="new-box" class="new-box hidden">
+    <h3>1 · Technique</h3>
+    <div id="recipe-pick" class="recipe-pick"></div>
+
+    <h3 style="margin-top:14px">2 · Photo</h3>
+    <div class="src-tabs" id="src-tabs">
+      <button class="mode-btn active" data-src="candidates">Candidates</button>
+      <button class="mode-btn" data-src="favorites">Favorites</button>
+      <button class="mode-btn" data-src="finals">Finals</button>
+    </div>
+    <div id="photo-grid" class="photo-grid"></div>
+    <input id="photo-path" class="text-in" type="text" placeholder="…or paste a photo path" autocomplete="off" value="{{ src }}">
+
+    <h3 style="margin-top:14px">3 · How far</h3>
+    <div class="wild-row">
+      <span>imitate</span>
+      <input id="wildness" type="range" min="0" max="1" step="0.05" value="0.5">
+      <span>go wild</span>
+      <span id="wild-val" class="wild-val">0.5</span>
+    </div>
+    <input id="crop" class="text-in" type="text" placeholder="crop x1,y1,x2,y2 (optional)" autocomplete="off">
+
+    <div class="new-actions">
+      <span id="sel-summary" class="sel-photo">pick a technique + photo</span>
+      <button id="start-btn" class="btn btn-accent" disabled>Start</button>
+    </div>
+  </section>
+
+  <div id="jobs"></div>
+  <h2 class="section-h">Pieces</h2>
+  <div id="pieces" class="piece-grid"></div>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script>window.COMPOSE = { base: "{{ base }}", src: {{ src|tojson }} };</script>
+<script type="module" src="{{ base }}/static/compose_home.js"></script>
+</body>
+</html>

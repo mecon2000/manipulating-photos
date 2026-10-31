@@ -74,5 +74,16 @@ trail (choice sheets flash, the picked option holds).
   `pieces/BLD_5611E__red-calligraffiti` (Elly). Knobs: `base.subject_mid` (subject midtone),
   `base.edge_dissolve`, `base.subject_scale` + `subject_dx` (shrink/reposition her on the paper —
   valid, unused so far), any `layer.param`.
-- Phase 3: next — Studio compose session (layer panel, choice cards from questions/, pinned
-  comments → `set`), hub entry.
+- Phase 3: **STATUS: DONE (2026-10-31).** Studio `/compose` (pieces grid + New piece: recipe
+  with breakdown thumb × photo from candidates/favorites/finals or pasted path × "imitate ↔ go
+  wild" slider → `init` in a background thread, activity + ntfy) and `/compose/p/<piece>` (canvas
+  on final.jpg, layer panel top→bottom with on/off · under/over · 🎲 re-seed · riff badge · note on
+  tap, choice cards with tap-to-enlarge + pick + comment, pinned notes, history, chat). Files:
+  `studio/compose.py` (CLI wrapper, per-piece lock, comments.jsonl append-only, thumbs on ext4),
+  `studio/compose_routes.py`, `studio/compose_agent.py` (tools compose_get/set/options/render +
+  resolve_comment/look/journal; transcript at `studio/state/compose/<piece>/chat.jsonl`),
+  `web/templates/compose*.html`, `web/static/compose*.{js,css}` (reuses canvas.js + chat.js).
+  Pins: VLM region label ("near her left cheek") runs in the background (cold Ollama ~60s) and the
+  agent waits ≤25s for it. Hub: `links.compose` chip in hub-project.yaml. Verified via curl on a
+  spare port: set (toggle + restore), options → q3 → pick, pin → agent compose_get +
+  resolve_comment, background init. Needs `systemctl --user restart studio` to go live on :8701.

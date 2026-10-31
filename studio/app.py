@@ -55,6 +55,12 @@ def _base(request: Request) -> str:
     return ""
 
 
+from . import compose_routes  # noqa: E402  (Compose sessions, plans/deconstruct.md)
+
+compose_routes.setup(templates, _base)
+app.include_router(compose_routes.router)
+
+
 def _load_session(session_id: str) -> Session:
     try:
         return Session.load(session_id)

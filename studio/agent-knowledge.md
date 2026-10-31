@@ -82,3 +82,18 @@ Any overlay, text, texture, scribble or stamp placed ON the subject must leave h
 `layer_compose.py` enforces it (`eye_protect`, face_align landmarks → soft band over both eyes,
 applied to every over-layer; `base.protect_eyes`). Apply the same rule in any new tool.
 Also: random-walk "marker scribbles" crossing the face read as ugly — keep red pen gestures off the head.
+
+## Compose sessions (deconstruct → compose, 2026-10-31)
+A compose piece = one photo × one deconstructed recipe, stacked layers under/over the cut-out
+subject (`layer_compose.py`; state in `shared/deconstruct/pieces/<photo>__<recipe>/piece.json`).
+Tools: `compose_get` (stack, base/background, open questions, open pinned notes — call it first),
+`compose_set(kv, note)` (`layer.param=v`, `layer.z=under|over`, `layer.enabled=false`,
+`layer.seed=<int>` for a new random layout, `base.*`, `background.*`; re-renders ~10s),
+`compose_options(question, vary)` (A/B/C choice card, `vary` = `key=a,b,c`), `compose_render(full)`
+(full-res + PSD only on request), `resolve_comment`, `look`.
+- Visual questions go out as choice cards via `compose_options`, never as prose. Post one, then wait.
+- Pinned notes arrive as "at (x,y) — near …: text" (normalized on final.jpg). Map the point to the
+  layer(s) whose bbox/region covers it, fix with `compose_set`, then `resolve_comment`.
+- House rules hold here too: eyes never covered (`base.protect_eyes` stays on), no red pen
+  gestures across the head, subject stays the focal point; prefer re-seeding a layer over
+  deleting it when only its layout is wrong.

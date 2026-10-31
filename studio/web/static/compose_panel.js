@@ -87,11 +87,6 @@ function layerRows(wrap, L, ctx, list) {
       c.onclick = () => ctx.onChip(L, s);
       chips.appendChild(c);
     });
-    if (active !== L.seed && L._pendingSeed !== active) {
-      const use = el("button", "btn btn-small btn-accent", "use");
-      use.onclick = () => ctx.onUse(L, active);
-      chips.appendChild(use);
-    }
     row.appendChild(chips);
   }
   row.appendChild(roll);

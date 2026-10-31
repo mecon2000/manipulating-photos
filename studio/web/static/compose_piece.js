@@ -245,9 +245,11 @@ const panelCtx = () => ({
     }
   },
   onChip(L, seed) {
-    if (seed === L.seed) delete overrides[L.id]; else overrides[L.id] = seed;
+    // picking a chip = using it (no separate "use" step)
+    const active = usedSeeds[L.id] ?? L._pendingSeed ?? L.seed;
+    if (seed === active) return;
+    this.onUse(L, seed);
     redraw();
-    renderAll();
   },
   onUse(L, seed) {
     // keep showing the variant PNG (override) until the background render

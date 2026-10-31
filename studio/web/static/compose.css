@@ -174,3 +174,13 @@
   body:has(.compose-side) .compose-side .layer-row { min-height: 40px; }
   body:has(.compose-side) .compose-side .chat-col { min-height: 50dvh; }
 }
+
+/* phone: divider between photo and panel */
+.split-handle { display: none; }
+@media (max-width: 899px) {
+  .split-handle { display: flex; flex: none; height: 22px; align-items: center; justify-content: center;
+    background: var(--bg-2); border-bottom: 1px solid var(--border); touch-action: none;
+    cursor: row-resize; user-select: none; -webkit-user-select: none; }
+  .split-handle span { width: 48px; height: 5px; border-radius: 3px; background: var(--fg-dim); opacity: 0.6; }
+  .split-handle.active span { background: var(--accent); opacity: 1; }
+}

@@ -467,8 +467,53 @@ function wireCollapsible(btnId, bodyId, label) {
   };
 }
 
+// Phone: a draggable divider between the photo and the panel. Height is remembered
+// per device; double-tap resets. Desktop keeps its side-by-side layout (hidden there).
+function wireSplit() {
+  const wrap = $("canvas-wrap");
+  const bar = document.createElement("div");
+  bar.className = "split-handle";
+  bar.title = "drag to resize the photo (double-tap to reset)";
+  bar.appendChild(document.createElement("span"));
+  document.querySelector(".canvas-col").after(bar);
+  const KEY = "compose.photoH";
+  const clamp = (h) => Math.max(window.innerHeight * 0.2, Math.min(window.innerHeight * 0.85, h));
+  const apply = (h) => {
+    if (h) wrap.style.height = `${Math.round(clamp(h))}px`;
+    else wrap.style.removeProperty("height");
+    window.dispatchEvent(new Event("resize"));      // canvas refits to the new box
+  };
+  try { const v = +localStorage.getItem(KEY); if (v) apply(v); } catch (e) { /* no storage */ }
+  bar.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    bar.setPointerCapture(e.pointerId);
+    bar.classList.add("active");
+    const y0 = e.clientY, h0 = wrap.getBoundingClientRect().height;
+    let raf = 0, y = y0;
+    const move = (ev) => {
+      y = ev.clientY;
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; apply(h0 + (y - y0)); });
+    };
+    const up = () => {
+      bar.removeEventListener("pointermove", move);
+      bar.removeEventListener("pointerup", up);
+      bar.removeEventListener("pointercancel", up);
+      bar.classList.remove("active");
+      try { localStorage.setItem(KEY, String(Math.round(wrap.getBoundingClientRect().height))); } catch (e) { /* */ }
+    };
+    bar.addEventListener("pointermove", move);
+    bar.addEventListener("pointerup", up);
+    bar.addEventListener("pointercancel", up);
+  });
+  bar.addEventListener("dblclick", () => {
+    try { localStorage.removeItem(KEY); } catch (e) { /* */ }
+    apply(0);
+  });
+}
+
 function boot() {
   canvas.init($("stage-container"));
+  wireSplit();
   canvas.on("markerAdded", onMarkerAdded);
   canvas.on("markersChanged", () => setTimeout(() => { if (!pendingPin && state && !compare) renderPins(); }, 0));
   $("mode-toggle").addEventListener("click", (e) => {

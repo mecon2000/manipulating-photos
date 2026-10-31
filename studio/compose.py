@@ -69,9 +69,13 @@ def piece_dir(piece: str) -> Path:
 
 
 def run_cli(piece: str | None, args: list[str], timeout: int = 900) -> str:
-    """Run layer_compose.py; serialized per piece. Returns stdout, raises on rc!=0."""
+    """Run layer_compose.py. Writers of piece.json (set/order/variant/pick/restore/
+    save/fav/options/init) serialize per piece; a plain `render` only reads
+    piece.json, so it takes a separate per-piece lock and never blocks edits.
+    Returns stdout, raises on rc!=0."""
     argv = [str(VENV_PYTHON), str(LC), *args]
-    lock = _lock(piece) if piece else threading.Lock()
+    key = f"{piece}#render" if args and args[0] == "render" else piece
+    lock = _lock(key) if piece else threading.Lock()
     with lock:
         proc = subprocess.run(argv, cwd=REPO, env=_env(), timeout=timeout,
                               capture_output=True, text=True)
@@ -164,7 +168,7 @@ def summary(piece: str) -> dict:
         "decisions": P.get("decisions", [])[-30:],
         "final_v": int(final.stat().st_mtime) if final.exists() else 0,
         "psd": _psd_info(d, P),
-        "busy": _lock(piece).locked(),
+        "busy": _lock(piece).locked() or _lock(f"{piece}#render").locked(),
     }
 
 

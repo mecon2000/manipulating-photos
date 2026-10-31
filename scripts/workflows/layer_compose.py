@@ -137,7 +137,7 @@ def cmd_init(a):
          "palette": recipe.get("palette", []), "base": copy.deepcopy(recipe["base"]),
          "background": copy.deepcopy(recipe["background"]),
          "layers": copy.deepcopy(recipe["layers"]), "themes": [], "decisions": []}
-    P["base"].setdefault("edge_dissolve", 0.45)
+    P["base"]["edge_dissolve"] = 0   # Ronnie: no torn-edge effect — clean cut-out
     for i, L in enumerate(P["layers"]):
         L.setdefault("seed", seed + 101 * (i + 1))
         if L.get("kind") == "ink_smear":      # own set of Flux brush strokes per piece
@@ -380,7 +380,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
             emit(L, lay)
 
     # subject: B&W, highlights fall to paper (multiply onto paper colour), ragged edge
-    m = edge_dissolve(mask, float(base.get("edge_dissolve", 0.45)), s, rng0)
+    m = edge_dissolve(mask, float(base.get("edge_dissolve", 0)), s, rng0)
     subj_rgb = (lum[..., None] * paper) if lum is not None else rgb
     cut = next((L for L in live if L["kind"] == "subject_cut"), None)
     if cut is not None:

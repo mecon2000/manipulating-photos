@@ -787,6 +787,8 @@ def gen_asset(L, ctx):
     C = cv2.resize(a, (w, h), interpolation=cv2.INTER_AREA)
     if p.get("tint"):
         C[:] = hex_rgb(p.get("color", "#111111"))
+    elif p.get("gray", True) not in (False, "false", 0, "0"):   # keep the palette: no brown moths
+        C[:] = C.mean(2, keepdims=True)
     cx, cy = rng.uniform(x0, max(x0 + 1, x1)), rng.uniform(y0, max(y0 + 1, y1))
     X, Y = int(cx - w / 2), int(cy - h / 2)
     X0, Y0, X1, Y1 = max(0, X), max(0, Y), min(ctx.W, X + w), min(ctx.H, Y + h)

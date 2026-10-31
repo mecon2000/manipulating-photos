@@ -105,8 +105,9 @@
   justify-content: center; font-size: 20px; color: var(--fg-dim); cursor: grab; touch-action: none; user-select: none; }
 .drag-handle.dim { cursor: default; }
 .fixed-row .layer-name { cursor: default; color: var(--fg-dim); }
-.seed-chips { display: flex; gap: 6px; align-items: center; padding: 0 0 8px 70px; flex-wrap: wrap; }
-.seed-chip { min-width: 34px; min-height: 32px; border-radius: 999px; background: var(--bg-3); color: var(--fg);
+.seed-chips { display: flex; gap: 4px; align-items: center; flex: none; }
+.seed-chips .btn-small { padding: 4px 8px; min-height: 28px; }
+.seed-chip { min-width: 28px; min-height: 28px; border-radius: 999px; background: var(--bg-3); color: var(--fg);
   border: 1px solid var(--border); font-size: 12px; cursor: pointer; }
 .seed-chip.current { border-color: var(--accent-dim); }
 .seed-chip.active { background: var(--accent); color: #06201c; border-color: var(--accent); font-weight: 700; }

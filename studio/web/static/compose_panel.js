@@ -38,11 +38,15 @@ export function renderPanel(body, ctx) {
   body.appendChild(el("div", "panel-legend", `top of the list = top of the stack · ${RIFF_TIP}`));
 }
 
+function pretty(id) {
+  return String(id).replace(/_/g, " ");
+}
+
 function fixedRow(L) {
   const row = el("div", "layer-row fixed-row");
   row.appendChild(el("span", "drag-handle dim", "·"));
-  const n = el("span", "layer-name", L.id);
-  n.appendChild(el("span", "layer-kind", L.z === "base" ? "paper" : `finish · ${L.blend || "normal"}`));
+  const n = el("span", "layer-name", L.z === "base" ? "paper" : "grain & scratches");
+  n.title = L.z === "base" ? "the paper background" : `finish (${L.blend || "normal"})`;
   row.appendChild(n);
   return row;
 }
@@ -56,9 +60,9 @@ function layerRows(wrap, L, ctx, list) {
   cb.type = "checkbox";
   cb.checked = !!L.enabled;
   cb.onchange = () => ctx.onToggle(L, cb.checked);
-  const name = el("button", "layer-name", L.id);
-  name.appendChild(el("span", "layer-kind", L.kind || ""));
-  if (L.blend && L.blend !== "normal") name.appendChild(el("span", "layer-kind", L.blend));
+  // one readable name; the generator type + blend live in the tooltip
+  const name = el("button", "layer-name", pretty(L.id));
+  name.title = `${L.id} · ${L.kind || ""}${L.blend && L.blend !== "normal" ? " · " + L.blend : ""} — tap for the note`;
   if (L.riff) {
     const b = el("span", "riff-badge", "riff");
     b.title = RIFF_TIP;
@@ -69,12 +73,12 @@ function layerRows(wrap, L, ctx, list) {
   roll.title = "roll a variant (new random layout)";
   if (ctx.rolling.has(L.id)) { roll.appendChild(el("span", "spin")); roll.disabled = true; }
   roll.onclick = () => ctx.onRoll(L);
-  row.append(handle, cb, name, roll);
+  row.append(handle, cb, name);
   wrap.appendChild(row);
 
   const seeds = [L.seed, ...(L.variants || []).filter((s) => s !== L.seed)];
   if (seeds.length > 1) {
-    const chips = el("div", "seed-chips");
+    const chips = el("span", "seed-chips");   // inline, on the layer's own line
     const active = ctx.overrides[L.id] ?? L.seed;
     seeds.forEach((s, i) => {
       const c = el("button", "seed-chip" + (s === active ? " active" : "") + (s === L.seed ? " current" : ""),
@@ -88,8 +92,9 @@ function layerRows(wrap, L, ctx, list) {
       use.onclick = () => ctx.onUse(L, active);
       chips.appendChild(use);
     }
-    wrap.appendChild(chips);
+    row.appendChild(chips);
   }
+  row.appendChild(roll);
   if (ctx.openNotes.has(L.id)) {
     wrap.appendChild(el("div", "layer-note", L.note || "(no note)"));
   }

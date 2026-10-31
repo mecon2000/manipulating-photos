@@ -504,14 +504,14 @@ def cmd_variant(a):
     vd = d / "layers" / "variants" / a.id
     vd.mkdir(parents=True, exist_ok=True)
     out = vd / f"s{seed}.png"
-    save_rgba(out, stack[0]["layer"])
+    save_rgba(out, next(e for e in stack if e["id"] == a.id)["layer"])
     cur = L.get("seed")
     if cur is not None and not (vd / f"s{cur}.png").exists():   # keep the current one comparable
         Q2 = copy.deepcopy(P)
         for x in Q2["layers"]:
             if x["id"] == a.id:
                 x["enabled"] = True
-        save_rgba(vd / f"s{cur}.png", build(d, Q2, only=a.id)[1][0]["layer"])
+        save_rgba(vd / f"s{cur}.png", next(e for e in build(d, Q2, only=a.id)[1] if e["id"] == a.id)["layer"])
     L.setdefault("variants", [])
     for sd in (cur, seed):
         if sd is not None and sd not in L["variants"]:

@@ -899,15 +899,17 @@ def render_typed(w, rng, title, lines, strike=(), sign="Подпись _________
                  ink=(30, 30, 34), red=(178, 34, 40)):
     """A typewritten sheet with REAL text (Flux can't spell): title, numbered lines,
     red strike-throughs on the `strike` indices, a signature line, uneven ribbon ink."""
-    n = len(lines) + 4
-    h = int(w * max(0.9, 0.16 + n * 0.085))
+    m = int(w * 0.09)
+    f0 = ImageFont.truetype(MONO, 100)
+    longest = max([f0.getlength(t) for t in lines + [sign or ""]] + [1])
+    fs = max(6, int(min(w * 0.042, (w - 2 * m) * 100 / longest)))   # every line fits the sheet
+    f = ImageFont.truetype(MONO, fs)
+    h = int(2 * m + fs * (3 if title else 0) + fs * 1.7 * len(lines) + (fs * 2.5 if sign else 0))
     paper_rgb, paper_a = paper_object(asset_image(PAPER_PROMPT, 31 + rng.integers(3)))
+    paper_rgb = np.repeat(paper_rgb.mean(2, keepdims=True), 3, 2)   # grey paper, red ink stays red
     paper = Image.fromarray((paper_rgb * 255).astype(np.uint8)).resize((w, h))
     alpha = Image.fromarray((paper_a * 255).astype(np.uint8)).resize((w, h))
     d = ImageDraw.Draw(paper)
-    m = int(w * 0.09)
-    fs = max(6, int(w * 0.042))
-    f = ImageFont.truetype(MONO, fs)
     y = m
     if title:
         _txt(d, (w / 2, y + fs), title, fs * 1.35, MONO, ink)
@@ -950,7 +952,7 @@ def gen_print(L, ctx):
         rgb_o, a_o = render_typed(size, rng, p.get("title", ""), [str(t) for t in _list(p.get("lines") or [])],
                                   tuple(int(i) for i in _list(p.get("strike", []))),
                                   p.get("sign", "Подпись ____________"))
-        return place_object(L, ctx, rgb_o, a_o, size / s, gray=bool(p.get("gray", True)))
+        return place_object(L, ctx, rgb_o, a_o, size / s)
     rgb_o, a_o = render_print(v, size, rng)
     return place_object(L, ctx, rgb_o, a_o, size / s)
 

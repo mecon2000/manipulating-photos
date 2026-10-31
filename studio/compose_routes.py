@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
-from . import activity, compose, compose_agent
+from . import activity, compose, compose_agent, compose_sync
 from .paths import safe_source
 
 router = APIRouter()
@@ -131,11 +131,59 @@ def api_job(job_id: str):
 
 # -- piece -------------------------------------------------------------------
 
+def _full(piece: str) -> dict:
+    s = compose.summary(piece)
+    s["manifest"] = compose_sync.manifest(piece)
+    s["savepoints"] = compose_sync.savepoints(piece)
+    s["sync"] = compose_sync.status(piece)
+    if s["manifest"] is None and not s["sync"]["pending"]:
+        compose_sync.kick_render(piece, 0.1)   # pre-manifest piece: catch up once
+    return s
+
+
 @router.get("/api/compose/piece/{piece}")
 def api_piece(piece: str):
     _dir(piece)
     activity.mark_seen(f"compose:{piece}")
-    return compose.summary(piece)
+    return _full(piece)
+
+
+@router.get("/api/compose/piece/{piece}/sync")
+def api_sync(piece: str):
+    _dir(piece)
+    m = compose_sync.manifest(piece)
+    return {**compose_sync.status(piece), "rev": m.get("rev") if m else None}
+
+
+@router.post("/api/compose/piece/{piece}/quick-set")
+def api_quick_set(piece: str, body: dict = Body(...)):
+    return _call(compose_sync.quick_set, piece, body.get("kv") or [], body.get("note") or "")
+
+
+@router.post("/api/compose/piece/{piece}/order")
+def api_order(piece: str, body: dict = Body(...)):
+    return _call(compose_sync.order, piece, body.get("ids") or [])
+
+
+@router.post("/api/compose/piece/{piece}/variant")
+def api_variant(piece: str, body: dict = Body(...)):
+    return _call(compose_sync.variant, piece, str(body.get("layer", "")), body.get("seed"))
+
+
+@router.post("/api/compose/piece/{piece}/save")
+def api_save(piece: str, body: dict = Body(default={})):
+    return {"savepoints": _call(compose_sync.save, piece, str(body.get("name") or ""))}
+
+
+@router.post("/api/compose/piece/{piece}/fav")
+def api_fav(piece: str, body: dict = Body(default={})):
+    return _call(compose_sync.start_fav, piece, str(body.get("name") or ""))
+
+
+@router.post("/api/compose/piece/{piece}/restore")
+def api_restore(piece: str, body: dict = Body(...)):
+    _call(compose_sync.restore, piece, body.get("n"))
+    return _full(piece)
 
 
 @router.get("/api/compose/piece/{piece}/file/{rel:path}")
@@ -155,17 +203,20 @@ def api_piece_file(piece: str, rel: str, w: int = 0):
 
 @router.post("/api/compose/piece/{piece}/set")
 def api_set(piece: str, body: dict = Body(...)):
-    return _call(compose.do_set, piece, body.get("kv") or [], body.get("note") or "")
+    _call(compose.do_set, piece, body.get("kv") or [], body.get("note") or "")
+    return _full(piece)
 
 
 @router.post("/api/compose/piece/{piece}/reseed")
 def api_reseed(piece: str, body: dict = Body(...)):
-    return _call(compose.reseed, piece, str(body["layer"]))
+    _call(compose.reseed, piece, str(body["layer"]))
+    return _full(piece)
 
 
 @router.post("/api/compose/piece/{piece}/render")
 def api_render(piece: str, body: dict = Body(default={})):
-    return _call(compose.do_render, piece, bool(body.get("full")))
+    _call(compose.do_render, piece, bool(body.get("full")))
+    return _full(piece)
 
 
 @router.post("/api/compose/piece/{piece}/options")
@@ -176,8 +227,9 @@ def api_options(piece: str, body: dict = Body(...)):
 
 @router.post("/api/compose/piece/{piece}/pick")
 def api_pick(piece: str, body: dict = Body(...)):
-    return _call(compose.do_pick, piece, str(body.get("question", "")),
-                 str(body.get("choice", "")), str(body.get("comment") or ""))
+    _call(compose.do_pick, piece, str(body.get("question", "")),
+          str(body.get("choice", "")), str(body.get("comment") or ""))
+    return _full(piece)
 
 
 @router.post("/api/compose/piece/{piece}/comments")

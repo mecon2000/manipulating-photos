@@ -12,8 +12,9 @@
   <a class="back-link" href="{{ base }}/compose">‹</a>
   <div class="source-name" title="{{ piece }}">{{ piece }}</div>
   <div class="topbar-actions">
+    <span id="sync-dot" class="sync-dot hidden" title="syncing…"></span>
     <a id="psd-link" class="chip hidden" href="#">PSD</a>
-    <button id="full-btn" class="btn btn-small" title="Full-res render + PSD">Full + PSD</button>
+    <button id="fav-btn" class="btn btn-small btn-accent" title="Fav: full-res + layered PSD + favorites">Fav ★</button>
   </div>
 </div>
 
@@ -27,6 +28,20 @@
       <div class="mode-toggle" id="mode-toggle">
         <button class="mode-btn active" data-mode="pan">Pan</button>
         <button class="mode-btn" data-mode="markers">Pin a note</button>
+      </div>
+      <div class="sp-bar">
+        <select id="sp-select" class="sp-select" title="Savepoints — pick one to compare"></select>
+        <button id="vs-start-btn" class="btn btn-small" title="Compare with the start">vs start</button>
+        <button id="save-btn" class="btn btn-small" title="Save point">Save point</button>
+      </div>
+      <div id="compare-bar" class="compare-bar hidden">
+        <div class="cmp-top"><span id="cmp-label" class="cmp-label"></span>
+          <button id="cmp-close" class="btn btn-small">✕</button></div>
+        <input id="cmp-pos" type="range" min="0" max="1" step="0.005" value="0.5" title="drag the divider">
+        <div class="cmp-actions">
+          <button id="cmp-mode" class="btn btn-small">Side by side</button>
+          <button id="cmp-restore" class="btn btn-small btn-danger">Restore this</button>
+        </div>
       </div>
     </div>
   </section>
@@ -50,6 +65,7 @@
     </div>
 
     <div class="chat-col">
+      <div class="chat-hint">Pin a note to point at a spot; chat for anything else.</div>
       <div id="chat-messages" class="chat-messages"></div>
       <form id="chat-form" class="chat-input-row">
         <input id="chat-input" type="text" placeholder="Talk to Studio about this piece…" autocomplete="off">

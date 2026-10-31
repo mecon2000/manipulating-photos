@@ -163,9 +163,18 @@ def summary(piece: str) -> dict:
         "comments": comments(piece),
         "decisions": P.get("decisions", [])[-30:],
         "final_v": int(final.stat().st_mtime) if final.exists() else 0,
-        "has_psd": (d / "piece.psd").exists(),
+        "psd": _psd_info(d, P),
         "busy": _lock(piece).locked(),
     }
+
+
+def _psd_info(d: Path, P: dict) -> dict | None:
+    """Layered PSD written by `fav`: <photo-stem>__<recipe>.psd (older pieces: piece.psd)."""
+    for name in (f"{Path(P.get('photo', '')).stem}__{P.get('recipe')}.psd", "piece.psd"):
+        p = d / name
+        if p.is_file():
+            return {"rel": name, "path": str(p), "mb": round(p.stat().st_size / 1e6, 1)}
+    return None
 
 
 def list_pieces() -> list[dict]:

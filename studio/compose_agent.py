@@ -36,7 +36,8 @@ How you work:
   final.jpg). Find the layer(s) that live there (bbox/region in compose_get), act with
   compose_set, then mark it done with resolve_comment.
 - look re-examines final.jpg (optionally a region) — check your edit actually landed.
-- compose_render(full=true) only when he asks for the full-res/PSD export.
+- compose_render(full=true) only when he asks for a full-res render; the finished piece goes
+  through his Fav ★ button (full-res + PSD + favorites entry + savepoint).
 
 House rules: decorations NEVER cover her eyes (the engine protects them — never disable
 base.protect_eyes); red pen gestures stay off the head; preserve anatomy; the subject stays
@@ -190,7 +191,8 @@ def _server(piece: str, events: asyncio.Queue):
             return _err(f"compose_options failed: {e}")
 
     @tool("compose_render", "Re-render the piece. full=true writes full-res final_full.jpg "
-          "+ piece.psd (slower; only on request).", {"piece": str, "full": bool})
+          "+ the layered PSD (slower; only on request). The real finish is Ronnie's Fav "
+          "button (full-res + PSD + favorites + savepoint).", {"piece": str, "full": bool})
     async def compose_render(args):
         await emit({"type": "tool_start", "name": "compose_render",
                     "detail": "full" if args.get("full") else "preview"})

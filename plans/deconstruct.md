@@ -87,3 +87,10 @@ trail (choice sheets flash, the picked option holds).
   agent waits ≤25s for it. Hub: `links.compose` chip in hub-project.yaml. Verified via curl on a
   spare port: set (toggle + restore), options → q3 → pick, pin → agent compose_get +
   resolve_comment, background init. Needs `systemctl --user restart studio` to go live on :8701.
+  **Round 2 (2026-10-31):** hands-on + fast — the browser composites `layers/manifest.json`
+  (per-layer blend), so on/off, drag-reorder (subject = drag-through divider) and 🎲 variant
+  chips redraw instantly; edits persist via `--no-render` and `studio/compose_sync.py` debounces
+  a background render (2s idle; "syncing" dot). Savepoints (start first, ★ favs) with wipe /
+  side-by-side compare + restore; "vs start" one tap; **Fav ★** = `fav` in the background (PSD
+  path + size shown). Files: `compose_sync.py`, `web/static/compose_{layers,panel,side}.js`,
+  `canvas.js` (`setImageSource`). Client composite vs final.jpg: mean diff 4.8/255.

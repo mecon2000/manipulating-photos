@@ -108,6 +108,24 @@ export async function loadImage(refOrUrl) {
   });
 }
 
+// Show an in-memory canvas/image (Compose composites layers client-side).
+// Same size → swap pixels only, keeping the user's zoom/pan; new size → refit.
+export function setImageSource(el) {
+  const w = el.width, h = el.height;
+  if (konvaImage && w === natW && h === natH) {
+    konvaImage.image(el);
+    imgLayer.batchDraw();
+    return;
+  }
+  imgEl = el;
+  natW = w;
+  natH = h;
+  if (konvaImage) konvaImage.destroy();
+  konvaImage = new Konva.Image({ image: el, x: 0, y: 0, width: natW, height: natH });
+  imgLayer.add(konvaImage);
+  refit();
+}
+
 function refit() {
   if (!container) return;
   const w = container.clientWidth || stage.width();

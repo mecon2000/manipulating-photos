@@ -1,7 +1,13 @@
-// compose_piece.js — one piece: canvas (final.jpg), layer panel, choice cards,
-// pinned notes (→ agent), history, chat. Reuses canvas.js + chat.js.
+// compose_piece.js — one piece, hands-on: the browser composites layers/manifest.json
+// so toggles / reorders / variant previews are instant; edits persist with no-render
+// calls and the server re-renders in the background (debounced) — a "syncing" dot
+// shows until final.jpg/history catch up. Plus choice cards, pinned notes → agent,
+// savepoints with wipe/side-by-side compare, chat. Reuses canvas.js + chat.js.
 import * as canvas from "./canvas.js";
 import { init as initChat } from "./chat.js";
+import { composite, loadImg } from "./compose_layers.js";
+import { renderPanel } from "./compose_panel.js";
+import { openPins, renderHistory, renderPinList, renderQuestions } from "./compose_side.js";
 
 const BASE = window.COMPOSE.base || "";
 const PIECE = window.COMPOSE.piece;
@@ -9,12 +15,20 @@ const API = `${BASE}/api/compose`;
 const P_API = `${API}/piece/${encodeURIComponent(PIECE)}`;
 const $ = (id) => document.getElementById(id);
 
-let state = null;      // last /piece summary
-let busy = 0;          // in-flight mutations from this page
-let pendingPin = null; // marker awaiting text
-let pinContext = null; // one-shot chat context for the next (pin) message
+let state = null;           // last full summary from the server
+let man = null;             // working manifest (optimistic local edits applied)
+const overrides = {};       // layer id -> previewed variant seed
+const rolling = new Set();  // layer ids with a variant render in flight
 const openNotes = new Set();
+const usedSeeds = {};       // layer id -> seed chosen with "use", until the manifest catches up
+const localVariants = {};   // layer id -> seeds rolled here (manifest only learns them on render)
+let inflight = 0;           // local requests not yet acknowledged
+let serverPending = false;
+let compare = null;         // {sp, img, mode: "wipe"|"side", pos}
+let pendingPin = null;
+let pinContext = null;
 
+// ---- plumbing ----
 let toastTimer = null;
 function toast(msg, ms = 3500) {
   const t = $("toast");
@@ -34,196 +48,218 @@ async function api(url, opts) {
   return res.json();
 }
 const post = (path, body) => api(`${P_API}${path}`, {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body || {}),
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}),
 });
-const fileUrl = (rel, w) => `${P_API}/file/${rel}?v=${state ? state.final_v : 0}${w ? `&w=${w}` : ""}`;
 
-function setBusy(on, text = "rendering…") {
-  busy = Math.max(0, busy + (on ? 1 : -1));
-  const show = busy > 0 || (state && state.busy);
-  $("busy-chip").classList.toggle("hidden", !show);
-  $("busy-text").textContent = text;
-  $("layers-body").classList.toggle("panel-disabled", busy > 0);
+function updateDots() {
+  const syncing = inflight > 0 || serverPending;
+  $("sync-dot").classList.toggle("hidden", !syncing);
+  $("sync-dot").title = state && state.sync && state.sync.error ? `render error: ${state.sync.error}` : "syncing…";
 }
 
-// Run a mutation that returns a fresh summary (set/pick/reseed/render).
+// Fire-and-forget persistence: the UI never waits on it.
+async function persist(path, body, failMsg) {
+  inflight++;
+  updateDots();
+  try {
+    const r = await post(path, body);
+    if (r && "pending" in r) serverPending = r.pending;
+    return r;
+  } catch (e) {
+    toast(`${failMsg || "Save failed"}: ${e.message}`, 6000);
+    load(true);
+  } finally {
+    inflight--;
+    updateDots();
+    pollSoon();
+  }
+}
+
+// Blocking mutation (full-render endpoints: pick, full render, restore).
 async function mutate(path, body, label) {
-  setBusy(true, label);
+  $("busy-chip").classList.remove("hidden");
+  $("busy-text").textContent = label || "rendering…";
   try {
     const res = await post(path, body);
-    await apply(res.summary || res);
+    await apply(res.summary || res, true);
     return res;
   } catch (e) {
     toast(`Error: ${e.message}`, 6000);
   } finally {
-    setBusy(false);
+    $("busy-chip").classList.add("hidden");
   }
 }
 
-// ---- state → UI ----
-let lastFinal = -1;
+// ---- compositing ----
+const fileUrl = (rel, v) => `${P_API}/file/${rel}${v != null ? `?v=${v}` : ""}`;
+
+function layerSrc(L) {
+  const ov = overrides[L.id];
+  if (ov != null && ov !== L.seed) return fileUrl(`layers/variants/${L.id}/s${ov}.png`, ov);
+  const f = String(L.file || "");
+  return fileUrl(f.startsWith("layers/") ? f : `layers/${f}`, man.rev);
+}
+
+let drawing = false, redrawAgain = false;
+async function redraw() {
+  if (!man) return;
+  if (drawing) { redrawAgain = true; return; }
+  drawing = true;
+  try {
+    const layers = man.layers.map((L) => ({ ...L, url: layerSrc(L) }));
+    const c = await composite(man.W, man.H, layers, compare);
+    canvas.setImageSource(c);
+  } catch (e) {
+    toast(`draw: ${e.message}`);
+  } finally {
+    drawing = false;
+    if (redrawAgain) { redrawAgain = false; redraw(); }
+  }
+}
+
+// ---- state ----
 let lastKey = "";
-async function apply(s) {
-  const key = JSON.stringify({ ...s, busy: null });
-  const same = key === lastKey;
-  lastKey = key;
+async function apply(s, force = false) {
   state = s;
-  $("busy-chip").classList.toggle("hidden", !(busy > 0 || s.busy));
-  if (same) return; // poll with no change: don't clobber half-typed comments
-  if (s.final_v !== lastFinal) {
-    lastFinal = s.final_v;
-    try { await canvas.loadImage(fileUrl("final.jpg")); } catch (e) { /* no render yet */ }
+  serverPending = !!(s.sync && s.sync.pending);
+  updateDots();
+  const key = JSON.stringify({ ...s, busy: null, sync: null });
+  if (key === lastKey && !force) return;
+  lastKey = key;
+  if (s.manifest) {
+    man = JSON.parse(JSON.stringify(s.manifest));
+    for (const L of man.layers) {
+      if (overrides[L.id] === L.seed) delete overrides[L.id];
+      const extra = (localVariants[L.id] || []).filter((x) => !(L.variants || []).includes(x));
+      if (extra.length) L.variants = [...(L.variants || []), ...extra];
+      if (usedSeeds[L.id] != null && usedSeeds[L.id] !== L.seed) L._pendingSeed = usedSeeds[L.id];
+    }
+    redraw();
+  } else {
+    man = null;
+    try { await canvas.loadImage(fileUrl("final.jpg", s.final_v)); } catch (e) {}
   }
-  renderLayers();
-  renderQuestions();
+  renderAll();
+}
+
+async function load(force = false) {
+  try { await apply(await api(P_API), force); } catch (e) { toast(`Error: ${e.message}`); }
+}
+
+// Poll the cheap /sync until the background render is done, then reload once.
+let pollT = null;
+function pollSoon(ms = 1500) {
+  clearTimeout(pollT);
+  pollT = setTimeout(poll, ms);
+}
+async function poll() {
+  try {
+    const s = await api(`${P_API}/sync`);
+    serverPending = s.pending;
+    updateDots();
+    if (!s.pending && inflight === 0) {
+      if (man && s.rev !== man.rev) await load(true);
+      else if (s.error) toast(`render error: ${s.error.slice(-200)}`, 8000);
+      return;
+    }
+  } catch (e) { /* transient */ }
+  pollSoon();
+}
+
+// ---- panel handlers ----
+const panelCtx = () => ({
+  layers: man ? man.layers : [], overrides, rolling, openNotes,
+  onToggle(L, on) {
+    L.enabled = on;
+    redraw();
+    renderAll();
+    persist("/quick-set", { kv: [`${L.id}.enabled=${on}`], note: `${on ? "on" : "off"}: ${L.id}` });
+  },
+  onReorder(ids) {
+    const byId = new Map(man.layers.map((L) => [L.z === "subject" ? "subject" : L.id, L]));
+    const content = ids.map((id) => byId.get(id)).filter(Boolean);
+    let z = "under";
+    for (const L of content) {
+      if (L.id === "subject" || L.z === "subject") { z = "over"; continue; }
+      L.z = z;
+    }
+    man.layers = [...man.layers.filter((L) => L.z === "base"), ...content,
+                  ...man.layers.filter((L) => L.z === "finish")];
+    redraw();
+    renderAll();
+    persist("/order", { ids: content.map((L) => (L.z === "subject" ? "subject" : L.id)) },
+            "Reorder failed");
+  },
+  async onRoll(L) {
+    rolling.add(L.id);
+    renderAll();
+    try {
+      const r = await post("/variant", { layer: L.id });
+      localVariants[L.id] = [...(localVariants[L.id] || []), r.seed];
+      L.variants = [...(L.variants || []).filter((s) => s !== r.seed), r.seed];
+      overrides[L.id] = r.seed;
+      await loadImg(layerSrc(L));
+      redraw();
+    } catch (e) {
+      toast(`Roll failed: ${e.message}`, 6000);
+    } finally {
+      rolling.delete(L.id);
+      renderAll();
+    }
+  },
+  onChip(L, seed) {
+    if (seed === L.seed) delete overrides[L.id]; else overrides[L.id] = seed;
+    redraw();
+    renderAll();
+  },
+  onUse(L, seed) {
+    // keep showing the variant PNG (override) until the background render
+    // refreshes layers/ and the manifest's seed catches up
+    overrides[L.id] = seed;
+    L._pendingSeed = seed;
+    usedSeeds[L.id] = seed;
+    renderAll();
+    persist("/quick-set", { kv: [`${L.id}.seed=${seed}`], note: `use variant seed ${seed} for ${L.id}` });
+  },
+  onNote(id) {
+    openNotes.has(id) ? openNotes.delete(id) : openNotes.add(id);
+    renderAll();
+  },
+});
+
+// ---- render the side UI ----
+function renderAll() {
+  if (!state) return;
+  if (man) renderPanel($("layers-body"), panelCtx());
+  else $("layers-body").innerHTML = '<div class="empty-hint">Building layers… (first render after the update)</div>';
+  const lb = (src, cap) => lightbox(src, cap);
+  renderQuestions($("questions"), state, {
+    api: P_API, lightbox: lb,
+    onPick: (q, letter, comment) => mutate("/pick", { question: q.id, choice: letter, comment }, `picking ${letter}…`),
+  });
   renderPins();
-  renderHistory();
-  $("psd-link").classList.toggle("hidden", !s.has_psd);
-  $("psd-link").href = `${P_API}/file/piece.psd`;
-  $("busy-chip").classList.toggle("hidden", !(busy > 0 || s.busy));
-}
-
-async function load() {
-  try { await apply(await api(P_API)); } catch (e) { toast(`Error: ${e.message}`); }
-}
-
-function el(tag, cls, text) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text != null) e.textContent = text;
-  return e;
-}
-
-function renderLayers() {
-  const body = $("layers-body");
-  body.innerHTML = "";
-  // top of the stack first reads like Photoshop's layer panel
-  for (const L of state.layers.slice().reverse()) {
-    if (L.id === "subject") {
-      body.appendChild(el("div", "layer-row subject-row", "— SUBJECT —"));
-      continue;
-    }
-    const row = el("div", "layer-row" + (L.enabled ? "" : " off"));
-    const cb = el("input");
-    cb.type = "checkbox";
-    cb.checked = L.enabled;
-    cb.title = "on / off";
-    cb.onchange = () => mutate("/set", { kv: [`${L.id}.enabled=${cb.checked}`],
-                                         note: `${cb.checked ? "on" : "off"}: ${L.id}` },
-                               cb.checked ? "adding…" : "removing…");
-    const name = el("button", "layer-name", L.id);
-    name.appendChild(el("span", "layer-kind", L.kind));
-    if (L.riff) name.appendChild(el("span", "riff-badge", "riff"));
-    name.onclick = () => {
-      openNotes.has(L.id) ? openNotes.delete(L.id) : openNotes.add(L.id);
-      renderLayers();
-    };
-    const z = el("button", "zbtn", L.z === "over" ? "over ↑" : "under ↓");
-    z.title = "move over / under her";
-    z.onclick = () => mutate("/set", { kv: [`${L.id}.z=${L.z === "over" ? "under" : "over"}`],
-                                       note: `move ${L.id} ${L.z === "over" ? "under" : "over"}` });
-    const seed = el("button", "seedbtn", "🎲");
-    seed.title = "re-seed (new random layout)";
-    seed.onclick = () => mutate("/reseed", { layer: L.id }, "re-rolling…");
-    row.append(cb, name, z, seed);
-    body.appendChild(row);
-    if (openNotes.has(L.id)) {
-      body.appendChild(el("div", "layer-note",
-        (L.note || "(no note)") + (L.region ? `  · region: ${L.region}` : "")));
-    }
+  renderHistory($("hist-body"), state, { api: P_API, lightbox: lb });
+  renderSavepoints();
+  const psd = state.psd;
+  $("psd-link").classList.toggle("hidden", !psd);
+  if (psd) {
+    $("psd-link").href = `${P_API}/file/${encodeURIComponent(psd.rel)}`;
+    $("psd-link").textContent = `PSD ${psd.mb}MB`;
+    $("psd-link").title = psd.path;
   }
 }
-
-function renderQuestions() {
-  const box = $("questions");
-  box.innerHTML = "";
-  for (const q of state.questions.filter((x) => x.status === "open")) {
-    const card = el("div", "qcard");
-    card.appendChild(el("div", "q-text", q.question));
-    card.appendChild(el("div", "q-key", q.key));
-    const opts = el("div", "q-opts");
-    const comment = el("input", "text-in");
-    comment.placeholder = "comment (optional)";
-    for (const o of q.options) {
-      const col = el("div", "q-opt");
-      const img = el("img");
-      img.loading = "lazy";
-      img.src = `${P_API}/file/questions/${o.file}?w=600`;
-      img.onclick = () => lightbox(`${P_API}/file/questions/${o.file}`, `${o.letter} — ${o.value}`);
-      const btn = el("button", "btn btn-accent", o.letter);
-      btn.onclick = () => mutate("/pick", { question: q.id, choice: o.letter,
-                                            comment: comment.value.trim() }, `picking ${o.letter}…`);
-      col.append(img, btn, el("div", "q-val", String(o.value)));
-      opts.appendChild(col);
-    }
-    card.append(opts, comment);
-    box.appendChild(card);
-  }
-}
-
-function openPins() { return state.comments.filter((c) => c.status === "open"); }
 
 function renderPins() {
-  const pins = openPins();
-  if (!pendingPin) {
+  const pins = openPins(state);
+  if (!pendingPin && !compare) {
     canvas.setMarkers(pins.map((c, i) => ({ n: i + 1, x: c.x, y: c.y, label: c.text.slice(0, 40) })));
   }
   $("pins-toggle").textContent = `Notes (${pins.length}) ${$("pins-body").classList.contains("hidden") ? "▸" : "▾"}`;
-  const body = $("pins-body");
-  body.innerHTML = "";
-  const all = state.comments.slice().reverse();
-  if (!all.length) body.appendChild(el("div", "empty-hint", "Tap “Pin a note”, then the canvas."));
-  for (const c of all) {
-    const row = el("div", "pin-row" + (c.status === "open" ? "" : " done"));
-    const idx = pins.indexOf(c);
-    row.appendChild(el("span", "pin-n", idx >= 0 ? String(idx + 1) : "✓"));
-    const t = el("div", "pin-text", c.text);
-    if (c.label) t.appendChild(el("div", "pin-label", `near ${c.label}`));
-    row.appendChild(t);
-    const b = el("button", "btn btn-small", c.status === "open" ? "done" : "reopen");
-    b.onclick = async () => {
-      try {
-        await post(`/comments/${c.id}`, { status: c.status === "open" ? "done" : "open" });
-        load();
-      } catch (e) { toast(e.message); }
-    };
-    row.appendChild(b);
-    body.appendChild(row);
-  }
-}
-
-function describeDecision(d) {
-  if (d.init) return ["init", `wildness ${d.init.wildness}`];
-  if (d.question) return [d.question, `→ ${d.choice}${d.comment ? ` (“${d.comment}”)` : ""}`];
-  if (d.set) return [d.note || "set", Object.entries(d.set).map(([k, v]) => `${k}=${v}`).join(", ")];
-  return ["", JSON.stringify(d)];
-}
-
-function renderHistory() {
-  const body = $("hist-body");
-  body.innerHTML = "";
-  const answered = new Map(state.questions.filter((q) => q.status === "answered")
-                                         .map((q) => [q.question, q]));
-  for (const d of state.decisions.slice().reverse()) {
-    const row = el("div", "hist-row");
-    const [head, tail] = describeDecision(d);
-    const q = d.question && answered.get(d.question);
-    if (q) {
-      const o = q.options.find((x) => x.letter === q.choice);
-      if (o) {
-        const img = el("img");
-        img.loading = "lazy";
-        img.src = `${P_API}/file/questions/${o.file}?w=160`;
-        img.onclick = () => lightbox(`${P_API}/file/questions/${q.id}_sheet.jpg`, q.question);
-        row.appendChild(img);
-      }
-    }
-    row.appendChild(el("span", "", `${(d.t || "").slice(5, 16)} `));
-    row.appendChild(el("b", "", head));
-    row.appendChild(el("span", "", ` ${tail}`));
-    body.appendChild(row);
-  }
+  renderPinList($("pins-body"), state, {
+    onStatus: async (c, status) => {
+      try { await post(`/comments/${c.id}`, { status }); load(); } catch (e) { toast(e.message); }
+    },
+  });
 }
 
 function lightbox(src, cap) {
@@ -232,81 +268,182 @@ function lightbox(src, cap) {
   $("lightbox").classList.remove("hidden");
 }
 
+// ---- savepoints + compare ----
+function renderSavepoints() {
+  const sel = $("sp-select");
+  const cur = sel.value;
+  sel.innerHTML = "";
+  const sps = state.savepoints || [];
+  sel.appendChild(new Option(sps.length ? `Savepoints (${sps.length})` : "No savepoints", ""));
+  const start = sps.filter((s) => s.kind === "start" || s.n === 0);
+  const rest = sps.filter((s) => !start.includes(s)).reverse();
+  for (const s of [...start, ...rest]) {
+    const mark = s.kind === "fav" ? "★ " : s.kind === "start" ? "⏮ " : "";
+    sel.appendChild(new Option(`${mark}${s.n} · ${s.name}`, String(s.n)));
+  }
+  $("vs-start-btn").classList.toggle("hidden", !start.length);
+  sel.value = compare ? String(compare.sp.n) : (cur && sps.some((s) => String(s.n) === cur) ? cur : "");
+}
+
+async function openCompare(n) {
+  const sp = (state.savepoints || []).find((s) => String(s.n) === String(n));
+  if (!sp) return closeCompare();
+  try {
+    const img = await loadImg(fileUrl(`${sp.rel}/final.jpg`, sp.t));
+    compare = { sp, img, mode: compare ? compare.mode : "wipe", pos: compare ? compare.pos : 0.5 };
+  } catch (e) { toast(`no image for savepoint ${sp.n}`); return; }
+  setMode("pan");
+  canvas.setMarkers([]);
+  $("sp-select").value = String(sp.n);
+  $("compare-bar").classList.remove("hidden");
+  $("cmp-label").textContent = `← ${sp.name}  |  now →`;
+  syncCompareUi();
+  redraw();
+}
+
+function closeCompare() {
+  compare = null;
+  $("compare-bar").classList.add("hidden");
+  $("sp-select").value = "";
+  redraw();
+  renderPins();
+}
+
+function syncCompareUi() {
+  $("cmp-mode").textContent = compare.mode === "wipe" ? "Side by side" : "Wipe";
+  $("cmp-pos").classList.toggle("hidden", compare.mode !== "wipe");
+}
+
+// ---- fav (full-res + PSD + favorites, ~20s in the background) ----
+async function startFav() {
+  const btn = $("fav-btn");
+  btn.disabled = true;
+  try {
+    const f = await post("/fav", {});
+    if (f.state === "running") toast("Faving — full-res + PSD, ~20s (you'll get a ping)", 5000);
+    pollFav();
+  } catch (e) {
+    toast(`Fav failed: ${e.message}`, 6000);
+    btn.disabled = false;
+  }
+}
+
+async function pollFav() {
+  try {
+    const s = await api(`${P_API}/sync`);
+    const f = s.fav;
+    if (f && f.state === "running") { setTimeout(pollFav, 2000); return; }
+    $("fav-btn").disabled = false;
+    if (f && f.state === "done") {
+      toast(`★ Faved. PSD: ${f.psd}${f.psd_mb ? ` (${f.psd_mb}MB)` : ""}`, 12000);
+      load(true);
+    } else if (f && f.state === "failed") {
+      toast(`Fav failed: ${f.error.slice(-200)}`, 10000);
+    }
+  } catch (e) { setTimeout(pollFav, 4000); }
+}
+
 // ---- pins ----
 function onMarkerAdded(m) {
-  if (pendingPin) return;
+  if (pendingPin || compare) return;
   pendingPin = m;
   $("pin-text").value = "";
   $("pin-sheet").classList.remove("hidden");
   setTimeout(() => $("pin-text").focus(), 50);
 }
-
 function closePin() {
   pendingPin = null;
   $("pin-sheet").classList.add("hidden");
   renderPins();
 }
-
 async function sendPin() {
   const text = $("pin-text").value.trim();
   if (!text || !pendingPin) return;
   const { x, y } = pendingPin;
   $("pin-send").disabled = true;
-  setBusy(true, "pinning…");
   try {
     const c = await post("/comments", { x, y, text });
     closePin();
     await load();
     pinContext = { pin: c.id };
-    const input = $("chat-input");
-    input.value = c.note;
+    $("chat-input").value = c.note;
     $("chat-form").requestSubmit();
   } catch (e) {
     toast(`Error: ${e.message}`);
   } finally {
     $("pin-send").disabled = false;
-    setBusy(false);
   }
 }
 
 // ---- boot ----
+function setMode(m) {
+  $("mode-toggle").querySelectorAll(".mode-btn").forEach((x) => x.classList.toggle("active", x.dataset.mode === m));
+  canvas.setMode(m);
+}
+
 function wireCollapsible(btnId, bodyId, label) {
   $(btnId).onclick = () => {
     const b = $(bodyId);
     b.classList.toggle("hidden");
-    if (label) $(btnId).textContent = `${label()} ${b.classList.contains("hidden") ? "▸" : "▾"}`;
+    $(btnId).textContent = `${label()} ${b.classList.contains("hidden") ? "▸" : "▾"}`;
   };
 }
 
 function boot() {
   canvas.init($("stage-container"));
   canvas.on("markerAdded", onMarkerAdded);
-  // markers are server-owned: a local tap-to-delete just re-syncs from state
-  canvas.on("markersChanged", () => setTimeout(() => { if (!pendingPin && state) renderPins(); }, 0));
+  canvas.on("markersChanged", () => setTimeout(() => { if (!pendingPin && state && !compare) renderPins(); }, 0));
   $("mode-toggle").addEventListener("click", (e) => {
     const b = e.target.closest("[data-mode]");
     if (!b) return;
-    $("mode-toggle").querySelectorAll(".mode-btn").forEach((x) => x.classList.toggle("active", x === b));
-    canvas.setMode(b.dataset.mode);
+    if (compare && b.dataset.mode === "markers") { toast("Close compare to pin notes"); return; }
+    setMode(b.dataset.mode);
   });
   $("pin-cancel").onclick = closePin;
   $("pin-send").onclick = sendPin;
   $("lightbox").onclick = () => $("lightbox").classList.add("hidden");
-  $("full-btn").onclick = () => mutate("/render", { full: true }, "full-res + PSD…");
+  $("fav-btn").onclick = startFav;
+  $("vs-start-btn").onclick = () => {
+    const st = (state.savepoints || []).find((s) => s.kind === "start" || s.n === 0);
+    if (!st) return;
+    if (compare && compare.sp.n === st.n) closeCompare(); else openCompare(st.n);
+  };
+  $("save-btn").onclick = async () => {
+    const name = prompt("Name this save point", "");
+    if (name === null) return;
+    try {
+      const r = await post("/save", { name });
+      state.savepoints = r.savepoints;
+      renderSavepoints();
+      toast("Saved");
+    } catch (e) { toast(`Save failed: ${e.message}`, 6000); }
+  };
+  $("sp-select").onchange = (e) => (e.target.value ? openCompare(e.target.value) : closeCompare());
+  $("cmp-close").onclick = closeCompare;
+  $("cmp-mode").onclick = () => { compare.mode = compare.mode === "wipe" ? "side" : "wipe"; syncCompareUi(); redraw(); };
+  $("cmp-pos").oninput = (e) => { if (compare) { compare.pos = parseFloat(e.target.value); redraw(); } };
+  $("cmp-restore").onclick = async () => {
+    if (!compare || !confirm(`Restore “${compare.sp.name}”? (current state stays in history)`)) return;
+    const n = compare.sp.n;
+    closeCompare();
+    await mutate("/restore", { n }, "restoring…");
+  };
   wireCollapsible("layers-toggle", "layers-body", () => "Layers");
-  wireCollapsible("pins-toggle", "pins-body", () => `Notes (${state ? openPins().length : 0})`);
+  wireCollapsible("pins-toggle", "pins-body", () => `Notes (${state ? openPins(state).length : 0})`);
   wireCollapsible("hist-toggle", "hist-body", () => "History");
 
   initChat({
     messagesEl: $("chat-messages"), inputEl: $("chat-input"), formEl: $("chat-form"),
     apiBase: API, sessionId: encodeURIComponent(PIECE),
     getContext: () => { const c = pinContext || {}; pinContext = null; return c; },
-    onGraphChanged: load,
+    onGraphChanged: () => load(true),
   });
 
-  load();
-  // the agent (or another device) may change the piece — cheap poll while visible
-  setInterval(() => { if (!document.hidden && busy === 0) load(); }, 6000);
+  load(true).then(() => { if (serverPending) pollSoon(); });
+  // the agent (or another device) may change the piece — cheap poll while idle
+  setInterval(() => {
+    if (!document.hidden && inflight === 0 && !serverPending && rolling.size === 0) load();
+  }, 6000);
 }
 
 boot();

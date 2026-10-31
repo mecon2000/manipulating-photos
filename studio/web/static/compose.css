@@ -90,3 +90,34 @@
   align-items: center; justify-content: center; flex-direction: column; gap: 10px; }
 .lightbox img { max-width: 100%; max-height: 82dvh; object-fit: contain; }
 .lightbox .lb-cap { color: var(--fg); font-size: 14px; }
+
+/* round 2: live layers, drag, variants, savepoints */
+.sync-dot { width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; flex: none;
+  animation: cpulse 1s ease-in-out infinite; }
+@keyframes cpulse { 50% { opacity: 0.3; } }
+.sp-select { background: var(--bg-3); color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
+  min-height: 36px; max-width: 34vw; font-size: 13px; }
+.topbar-actions .btn-small { padding: 6px 10px; min-height: 36px; }
+.drag-list { touch-action: pan-y; }
+.drag-item { background: var(--bg-2); }
+.drag-item.dragging { opacity: 0.85; outline: 2px solid var(--accent); position: relative; z-index: 2; }
+.drag-handle { flex: none; width: 32px; min-height: 40px; display: inline-flex; align-items: center;
+  justify-content: center; font-size: 20px; color: var(--fg-dim); cursor: grab; touch-action: none; user-select: none; }
+.drag-handle.dim { cursor: default; }
+.fixed-row .layer-name { cursor: default; color: var(--fg-dim); }
+.seed-chips { display: flex; gap: 6px; align-items: center; padding: 0 0 8px 70px; flex-wrap: wrap; }
+.seed-chip { min-width: 34px; min-height: 32px; border-radius: 999px; background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--border); font-size: 12px; cursor: pointer; }
+.seed-chip.current { border-color: var(--accent-dim); }
+.seed-chip.active { background: var(--accent); color: #06201c; border-color: var(--accent); font-weight: 700; }
+.seedbtn .spin { display: inline-block; }
+.panel-legend { font-size: 11px; color: var(--fg-dim); padding: 8px 0 2px; line-height: 1.4; }
+.compare-bar { display: flex; flex-direction: column; gap: 6px; }
+.cmp-top, .cmp-actions { display: flex; gap: 8px; align-items: center; }
+.cmp-label { flex: 1; font-size: 12px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-actions .btn { flex: 1; }
+#cmp-pos { width: 100%; }
+.btn-danger { border-color: var(--danger); color: var(--danger); }
+.chat-hint { font-size: 12px; color: var(--fg-dim); padding: 8px 14px 0; }
+.sp-bar { display: flex; gap: 6px; align-items: center; }
+.sp-bar .sp-select { flex: 1; max-width: none; }

@@ -17,6 +17,12 @@ A *piece* = one photo x one recipe, in shared/deconstruct/pieces/<photo>__<recip
   layer_compose.py options PIECE --question "..." --vary id.param=a,b,c
          vary keys: id.<param> | id.z | id.enabled | id.seed | base.<k> | background.<k>
   layer_compose.py pick   PIECE --question qN --choice B
+  layer_compose.py variant PIECE <layer-id> [--seed N]     one layer, another seed → layers/variants/
+  layer_compose.py order  PIECE id,id,subject,id,...       bottom→top; left of subject = under
+  layer_compose.py save   PIECE --name "..."               savepoint (piece.json + final.jpg)
+  layer_compose.py restore PIECE --savepoint N
+  set/order take --no-render (fast client edits; render later). Every render writes
+  layers/manifest.json + one RGBA PNG per layer (disabled ones too, + paper and finish).
 
 Cropping is smart-crop.py's job (choose with `smart-crop.py --source P --show-options`).
 """
@@ -244,8 +250,11 @@ def composite(dst, L):
     return dst * (1 - a) + L.rgb * a
 
 
-def build(d, P, full=False):
-    """Returns (final HxWx3 float, [(name, Layer)] bottom→top) at preview or full res."""
+def build(d, P, full=False, all_layers=False, only=None):
+    """Returns (final HxWx3 float, stack) at preview or full res.
+    stack: bottom→top list of dicts {id, z, enabled, layer} — paper, under…, subject, over…, finish.
+    all_layers: also generate disabled layers (not composited) so a client can toggle them.
+    only: id of one layer — returns (None, [that entry]) without compositing (variants)."""
     src = Image.open(d / "source.jpg").convert("RGB")
     mask_im = subject_mask(d, src)
     src_full_size = src.size
@@ -290,7 +299,8 @@ def build(d, P, full=False):
     out *= (tone * vig)[..., None]
     if bgc.get("mode") == "keep":
         out = rgb.copy()
-    stack = []
+    stack = [{"id": "paper", "z": "base", "enabled": True,
+              "layer": wl.Layer(out.copy(), np.ones((H, W), np.float32))}]
 
     def run(L):
         ctx = wl.Ctx(rng=np.random.default_rng(int(L.get("seed", 1))), **ctx_args)
@@ -300,14 +310,24 @@ def build(d, P, full=False):
         return g(L, ctx)
 
     live = [L for L in P["layers"] if L.get("enabled", True)]
+    gen_set = P["layers"] if (all_layers or only) else live
+    if only:
+        gen_set = [L for L in P["layers"] if L["id"] == only]
+
+    def emit(L, lay):
+        nonlocal out
+        on = L.get("enabled", True)
+        if on and not only:
+            out = composite(out, lay)
+        stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay})
+
     # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
     ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
-    for L in [x for x in live if x["z"] == "under"]:
+    for L in [x for x in gen_set if x["z"] == "under"]:
         lay = run(L)
         if lay is not None:
             lay.alpha = lay.alpha * (1 - quiet + quiet * focus)
-            out = composite(out, lay)
-            stack.append((L["id"], lay))
+            emit(L, lay)
 
     # subject: B&W, highlights fall to paper (multiply onto paper colour), ragged edge
     m = edge_dissolve(mask, float(base.get("edge_dissolve", 0.45)), s, rng0)
@@ -316,18 +336,21 @@ def build(d, P, full=False):
     if cut is not None:
         subj_rgb, m = slice_subject(subj_rgb, m, sbox, np.random.default_rng(int(cut.get("seed", 1))), s)
     subj = wl.Layer(subj_rgb.astype(np.float32), m)
-    out = composite(out, subj)
-    stack.append(("subject", subj))
+    if not only:
+        out = composite(out, subj)
+        stack.append({"id": "subject", "z": "subject", "enabled": True, "layer": subj})
 
     ctx_args["focus"] = focus
-    for L in [x for x in live if x["z"] == "over"]:
+    for L in [x for x in gen_set if x["z"] == "over"]:
         lay = run(L)
         if lay is not None:
             fade = 1.0 if L["kind"] in ("dot_rows", "micro_text", "print") else \
                 (1 - quiet * 0.5 + quiet * 0.5 * focus)
             lay.alpha = lay.alpha * (1 - protect) * fade
-            out = composite(out, lay)
-            stack.append((L["id"], lay))
+            emit(L, lay)
+    if only:
+        return None, stack
+    before_finish = out.copy()
 
     # finish: grain + scratches (the 'grain' layer kind, else base.grain)
     gl = next((L for L in live if L["kind"] in ("grain", "scratches")), None)
@@ -346,6 +369,11 @@ def build(d, P, full=False):
             cv2.line(sc, (int(x), int(r.uniform(0, H))), (int(x + r.normal(0, s * 0.03)),
                      int(r.uniform(0, H))), float(r.choice([-1, 1])), 1, cv2.LINE_AA)
         out = out + sc[..., None] * 0.18
+    # finish as an 'overlay' layer for client compositing: 0.5 grey = neutral
+    delta = (out - before_finish).mean(2)
+    fin = np.repeat(np.clip(0.5 + delta, 0, 1)[..., None], 3, 2).astype(np.float32)
+    stack.append({"id": "finish", "z": "finish", "enabled": True,
+                  "layer": wl.Layer(fin, np.ones((H, W), np.float32), blend="overlay")})
     return np.clip(out, 0, 1), stack
 
 
@@ -369,29 +397,47 @@ def to_img(a):
     return Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8))
 
 
+def save_rgba(path, L):
+    rgba = np.dstack([L.rgb, L.alpha])
+    Image.fromarray((np.clip(rgba, 0, 1) * 255).astype(np.uint8), "RGBA").save(path)
+
+
 def render(d, P, full=False, event="render", **meta):
     t = time.time()
-    final, stack = build(d, P, full)
+    final, stack = build(d, P, full, all_layers=not full)
     img = to_img(final)
     img.save(d / ("final_full.jpg" if full else "final.jpg"), quality=93)
-    ld = d / "layers"
-    ld.mkdir(exist_ok=True)
-    for f in ld.glob("*.png"):
-        f.unlink()
-    for i, (name, L) in enumerate(stack):
-        rgba = np.dstack([L.rgb, L.alpha])
-        Image.fromarray((np.clip(rgba, 0, 1) * 255).astype(np.uint8), "RGBA").save(
-            ld / f"{i:02d}_{name}.png")
+    if not full:
+        ld = d / "layers"
+        ld.mkdir(exist_ok=True)
+        for f in ld.glob("*.png"):
+            f.unlink()
+        byid = {L["id"]: L for L in P["layers"]}
+        entries = []
+        for i, e in enumerate(stack):
+            fn = f"{i:02d}_{e['id']}.png"
+            save_rgba(ld / fn, e["layer"])
+            L = byid.get(e["id"], {})
+            entries.append({"id": e["id"], "file": fn, "kind": L.get("kind", e["id"]),
+                            "z": e["z"], "enabled": e["enabled"], "blend": e["layer"].blend,
+                            "riff": bool(L.get("riff")), "note": L.get("note", ""),
+                            "seed": L.get("seed"), "variants": L.get("variants", [])})
     if full:
         from psd_layers import write_psd
         W, H = img.size
         base = np.asarray(Image.open(d / "source.jpg").convert("RGB"))
         layers = [{"name": "photo (original)", "rgb": base, "mask": np.zeros((H, W), np.uint8)}]
-        for name, L in stack:
-            layers.append({"name": name, "rgb": (np.clip(L.rgb, 0, 1) * 255).astype(np.uint8),
+        for e in stack:
+            if not e["enabled"] or e["id"] == "finish":
+                continue
+            L = e["layer"]
+            layers.append({"name": e["id"], "rgb": (np.clip(L.rgb, 0, 1) * 255).astype(np.uint8),
                            "mask": (np.clip(L.alpha, 0, 1) * 255).astype(np.uint8)})
         write_psd(str(d / "piece.psd"), layers, (W, H), np.asarray(img))
     n = hist(d, P, event, full=full, **meta)
+    if not full:
+        (d / "layers" / "manifest.json").write_text(json.dumps(
+            {"rev": n, "W": img.width, "H": img.height, "layers": entries}, ensure_ascii=False))
     img.save(d / "history" / f"{n:03d}.jpg", quality=88)
     (d / "history" / f"{n:03d}.json").write_text(json.dumps(P, ensure_ascii=False))
     print(f"rendered in {time.time() - t:.1f}s  (history #{n})")
@@ -413,7 +459,118 @@ def cmd_set(a):
         changes[k] = parse_val(v)
     P["decisions"].append({"t": time.strftime("%F %T"), "set": changes, "note": a.note})
     save(d, P)
+    if a.no_render:
+        hist_event(d, "set", changes=changes, note=a.note)
+        print("saved (no render)")
+        return
     render(d, P, event="set", changes=changes, note=a.note)
+
+
+def hist_event(d, event, **kw):
+    """History line without an image (fast client-side edits; the next render snapshots)."""
+    (d / "history").mkdir(exist_ok=True)
+    with (d / "history" / "history.jsonl").open("a") as f:
+        f.write(json.dumps({"t": time.strftime("%Y-%m-%d %H:%M:%S"), "event": event, **kw},
+                           ensure_ascii=False) + "\n")
+
+
+def cmd_variant(a):
+    """Render one layer with another seed, for side-by-side choosing; active seed unchanged."""
+    d, P = load(a.piece)
+    L = next((x for x in P["layers"] if x["id"] == a.id), None)
+    if L is None:
+        raise SystemExit(f"no layer {a.id}")
+    seed = a.seed if a.seed is not None else int(np.random.default_rng().integers(1, 10 ** 6))
+    Q = copy.deepcopy(P)
+    for x in Q["layers"]:
+        if x["id"] == a.id:
+            x["seed"], x["enabled"] = seed, True
+    _, stack = build(d, Q, only=a.id)
+    vd = d / "layers" / "variants" / a.id
+    vd.mkdir(parents=True, exist_ok=True)
+    out = vd / f"s{seed}.png"
+    save_rgba(out, stack[0]["layer"])
+    cur = L.get("seed")
+    if cur is not None and not (vd / f"s{cur}.png").exists():   # keep the current one comparable
+        Q2 = copy.deepcopy(P)
+        for x in Q2["layers"]:
+            if x["id"] == a.id:
+                x["enabled"] = True
+        save_rgba(vd / f"s{cur}.png", build(d, Q2, only=a.id)[1][0]["layer"])
+    L.setdefault("variants", [])
+    for sd in (cur, seed):
+        if sd is not None and sd not in L["variants"]:
+            L["variants"].append(sd)
+    save(d, P)
+    hist_event(d, "variant", id=a.id, seed=seed)
+    mf = d / "layers" / "manifest.json"
+    if mf.exists():
+        m = json.loads(mf.read_text())
+        for e in m["layers"]:
+            if e["id"] == a.id:
+                e["variants"] = L["variants"]
+        mf.write_text(json.dumps(m, ensure_ascii=False))
+    print(f"Variant: {out}\nSeed: {seed}")
+
+
+def cmd_order(a):
+    """Full bottom→top order of content layers with 'subject' as the divider."""
+    d, P = load(a.piece)
+    ids = [x.strip() for x in a.ids.split(",") if x.strip()]
+    if "subject" not in ids:
+        raise SystemExit("order must include 'subject'")
+    byid = {L["id"]: L for L in P["layers"]}
+    unknown = [i for i in ids if i != "subject" and i not in byid]
+    if unknown:
+        raise SystemExit(f"unknown layers: {unknown}")
+    cut = ids.index("subject")
+    new = []
+    for i, lid in enumerate(ids):
+        if lid == "subject":
+            continue
+        byid[lid]["z"] = "under" if i < cut else "over"
+        new.append(byid[lid])
+    new += [L for L in P["layers"] if L["id"] not in ids]     # unlisted keep their place at the end
+    P["layers"] = new
+    P["decisions"].append({"t": time.strftime("%F %T"), "order": ids})
+    save(d, P)
+    if a.no_render:
+        hist_event(d, "order", order=ids)
+        print("saved (no render)")
+        return
+    render(d, P, event="order", order=ids)
+
+
+def cmd_save(a):
+    d, P = load(a.piece)
+    sd = d / "savepoints"
+    sd.mkdir(exist_ok=True)
+    idx_f = sd / "index.json"
+    idx = json.loads(idx_f.read_text()) if idx_f.exists() else []
+    n = max([e["n"] for e in idx] + [0]) + 1
+    slug = re.sub(r"[^\w-]+", "-", a.name.lower()).strip("-")[:40] or "save"
+    out = sd / f"{n:02d}_{slug}"
+    out.mkdir()
+    (out / "piece.json").write_text(json.dumps(P, indent=2, ensure_ascii=False))
+    import shutil
+    if (d / "final.jpg").exists():
+        shutil.copyfile(d / "final.jpg", out / "final.jpg")
+    idx.append({"n": n, "name": a.name, "t": time.strftime("%F %T"), "dir": out.name})
+    idx_f.write_text(json.dumps(idx, indent=2, ensure_ascii=False))
+    hist_event(d, "savepoint", n=n, name=a.name)
+    print(f"Savepoint {n}: {out}")
+
+
+def cmd_restore(a):
+    d, _ = load(a.piece)
+    idx = json.loads((d / "savepoints" / "index.json").read_text())
+    e = next((x for x in idx if x["n"] == int(a.savepoint)), None)
+    if e is None:
+        raise SystemExit(f"no savepoint {a.savepoint}")
+    P = json.loads((d / "savepoints" / e["dir"] / "piece.json").read_text())
+    P["decisions"].append({"t": time.strftime("%F %T"), "restore": e["n"], "name": e["name"]})
+    save(d, P)
+    render(d, P, event="restore", savepoint=e["n"], name=e["name"])
 
 
 # ---------------------------------------------------------------- choice sets
@@ -499,12 +656,18 @@ def main():
     i.add_argument("--seed", type=int)
     r = sub.add_parser("render"); r.add_argument("piece"); r.add_argument("--full", action="store_true")
     s = sub.add_parser("set"); s.add_argument("piece"); s.add_argument("kv", nargs="+"); s.add_argument("--note", default="")
+    s.add_argument("--no-render", action="store_true")
+    v = sub.add_parser("variant"); v.add_argument("piece"); v.add_argument("id"); v.add_argument("--seed", type=int)
+    od = sub.add_parser("order"); od.add_argument("piece"); od.add_argument("ids"); od.add_argument("--no-render", action="store_true")
+    sv = sub.add_parser("save"); sv.add_argument("piece"); sv.add_argument("--name", required=True)
+    rs = sub.add_parser("restore"); rs.add_argument("piece"); rs.add_argument("--savepoint", required=True)
     o = sub.add_parser("options"); o.add_argument("piece"); o.add_argument("--question", required=True); o.add_argument("--vary", required=True)
     p = sub.add_parser("pick"); p.add_argument("piece"); p.add_argument("--question", required=True)
     p.add_argument("--choice", required=True); p.add_argument("--comment", default="")
     a = ap.parse_args()
     {"init": cmd_init, "render": cmd_render, "set": cmd_set, "options": cmd_options,
-     "pick": cmd_pick}[a.cmd](a)
+     "pick": cmd_pick, "variant": cmd_variant, "order": cmd_order, "save": cmd_save,
+     "restore": cmd_restore}[a.cmd](a)
 
 
 if __name__ == "__main__":

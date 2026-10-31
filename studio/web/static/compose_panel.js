@@ -162,22 +162,25 @@ function wireDrag(handle, item, list, ctx) {
       }
       if (before !== item.nextSibling) placeAt(list, item, sibs, before);
     };
-    // Edge auto-scroll: only in a thin band at the scroller's very edge, only after
-    // the finger has rested there ~350ms, and slow (max ~150px/s, ramps with depth).
+    // Edge auto-scroll, speed ∝ how far the finger is pulled toward/past the edge:
+    // inside the thin edge band it creeps (after a ~350ms rest); past the edge it
+    // speeds up with distance (pointer capture keeps reporting outside the panel).
     let edgeSince = 0;
     const tick = (t) => {
       raf = 0;
       const r = sc === document.scrollingElement
         ? { top: 0, bottom: window.innerHeight } : sc.getBoundingClientRect();
       const zone = Math.min(28, (r.bottom - r.top) / 6);
-      let depth = 0;
-      if (y < r.top + zone) depth = -(r.top + zone - y) / zone;
-      else if (y > r.bottom - zone) depth = (y - (r.bottom - zone)) / zone;
-      if (!depth) { edgeSince = 0; return; }
+      let d = 0;                                   // px into the band / past the edge
+      if (y < r.top + zone) d = -(r.top + zone - y);
+      else if (y > r.bottom - zone) d = y - (r.bottom - zone);
+      if (!d) { edgeSince = 0; return; }
       if (!edgeSince) edgeSince = t;
-      if (t - edgeSince > 350) {
+      const past = Math.abs(d) - zone;             // >0 once outside the panel
+      if (past > 0 || t - edgeSince > 350) {
+        const step = past > 0 ? Math.min(30, 1 + past * 0.12) : 1;   // 60→~1800px/s max
         const before = sc.scrollTop;
-        sc.scrollTop += Math.sign(depth) * Math.max(1, Math.round(2.5 * Math.min(1, Math.abs(depth))));
+        sc.scrollTop += Math.sign(d) * Math.round(step);
         if (sc.scrollTop === before) return;
         place();
       }

@@ -32,7 +32,7 @@ from deconstruct import KINDS, REGIONS, _env, _parse  # noqa: E402
 
 # kinds the compositor can render for riffs; "asset" ones are generated images
 # (Flux on white, keyed to alpha) — the prompt describes the element itself.
-RIFF_KINDS = KINDS + ["glyph_rain", "asset"]
+RIFF_KINDS = KINDS + ["glyph_rain", "asset", "print"]
 
 
 def model_name(photo: Path) -> str | None:
@@ -86,6 +86,10 @@ Layer kinds the compositor can render: {kinds}.
 - "asset": a generated element (illustration/ephemera/object) — give params.prompt
   describing ONLY the element, isolated on plain white paper, no people, e.g.
   "1980s Soviet bread ration coupon, perforated edge, faded print, stamp".
+- TEXT MUST BE REAL. Generated images ("asset") render fake lettering, so never ask an
+  asset for text. For printed ephemera with words use kind "print": params.variant one of
+  tobacco_talon | sugar_talon | soap_talon | papirosy | stamp (stamp: params.ring = list of
+  real words around the ring, params.center = real word). Any Russian must be correct Russian.
 - "glyph_rain": columns of characters (params.charset: "katakana|latin|cyrillic|digits|ascii").
 - "scribbles": params.subject = what is doodled, params.medium.
 - "paper_scraps": params.content = what is printed on the scraps.

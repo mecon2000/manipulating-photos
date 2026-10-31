@@ -214,7 +214,7 @@ def eye_protect(pts, W, H, scale):
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     u = (xx - cx) * math.cos(ang) + (yy - cy) * math.sin(ang)
     v = -(xx - cx) * math.sin(ang) + (yy - cy) * math.cos(ang)
-    r = np.sqrt((u / (dist * 1.25)) ** 2 + (v / (dist * 0.55)) ** 2)
+    r = np.sqrt((u / (dist * 1.1)) ** 2 + (v / (dist * 0.2)) ** 2)   # eyes are short: keep the band tight
     return np.clip((1.5 - r) / 0.5, 0, 1).astype(np.float32)
 
 
@@ -274,7 +274,9 @@ def build(d, P, full=False):
     focus = focus_map(mask, s)
     ctx_args = dict(W=W, H=H, sbox=sbox, head=head_point(mask, sbox), mask=mask,
                     lum=lum if lum is not None else rgb.mean(2), palette=P.get("palette", []),
-                    focus=focus)
+                    focus=focus,
+                    face={k: (v[0] * W / src_full_size[0], v[1] * W / src_full_size[0])
+                          for k, v in face.items()} if face and sc >= 0.999 else None)
     # (subject_scale moves her, so eye coords only hold at scale 1)
     protect = eye_protect(face, W, H, W / src_full_size[0]) if sc >= 0.999 else np.zeros((H, W), np.float32)
     quiet = float(P["base"].get("margin_quiet", 0.7))
@@ -321,7 +323,9 @@ def build(d, P, full=False):
     for L in [x for x in live if x["z"] == "over"]:
         lay = run(L)
         if lay is not None:
-            lay.alpha = lay.alpha * (1 - protect) * (1 - quiet * 0.5 + quiet * 0.5 * focus)
+            fade = 1.0 if L["kind"] in ("dot_rows", "micro_text", "print") else \
+                (1 - quiet * 0.5 + quiet * 0.5 * focus)
+            lay.alpha = lay.alpha * (1 - protect) * fade
             out = composite(out, lay)
             stack.append((L["id"], lay))
 

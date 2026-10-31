@@ -52,6 +52,7 @@ class Ctx:
     lum: np.ndarray      # B&W subject luminance HxW 0-1
     palette: list
     focus: np.ndarray | None = None   # 1 near/behind the figure -> 0 in the quiet margins
+    face: dict | None = None          # face_align landmarks in canvas px (eye_l, eye_r, nose, mouth_l...)
 
     @property
     def s(self):
@@ -236,7 +237,8 @@ GLYPH_FONTS = {
     "block": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "brush": "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
 }
-RUNE_CHARS = "AEFHIKLMNRTVWXYZБГДЖЗИЛПФЦЧШЩЭЮЯЪ"
+# Latin + Greek shapes only: Cyrillic look-alikes read as broken Russian to a Russian reader
+RUNE_CHARS = "AEFHIKLMNRTVWXYZΔΣΨΩΞΛΓΠ"
 
 
 def font_glyph(ch, size, style, rng, condense=0.55, shear=0.0):
@@ -428,11 +430,37 @@ def gen_dot_rows(L, ctx):
     """Rows of braille. With params.text the dots spell it (Grade-1, one row per line,
     lines split on '/'); without, random cells."""
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
-    d = s * 0.011
-    r = max(1, int(d * 0.32))
+    d = s * float(p.get("dot_pitch", 0.009))     # real proportions: dot pitch d,
+    r = d * 0.3                                  # dot Ø 0.6d, cell pitch 2.4d, line pitch 4d
+    cell, line = d * 2.4, d * 4.0
+    SS = 4                                       # supersample → crisp round dots
+    big = np.zeros((ctx.H * SS // 2, ctx.W * SS // 2), np.uint8)
+    k = SS // 2
     img = np.zeros((ctx.H, ctx.W), np.float32)
     x0, y0, x1, y1 = region_box(L.get("region", "anywhere"), ctx)
     lines = [t.strip() for t in str(p.get("text", "")).split("/") if t.strip()]
+    anchor = p.get("anchor")
+    if lines and anchor and ctx.face and "mouth_l" in ctx.face:
+        # 'cheek-left': the text block ENDS on her cheek (image-left side of the face)
+        # and runs out to the left of her face, rows stacked downward
+        f = ctx.face
+        eye = min((f["eye_l"], f["eye_r"]), key=lambda q: q[0])
+        mouth = min((f["mouth_l"], f["mouth_r"]), key=lambda q: q[0])
+        # cheek apple: under the eye, a bit toward the nose (eye_l is the OUTER corner)
+        cx = eye[0] + (f["nose"][0] - eye[0]) * 0.5 if anchor == "cheek-left" else f["nose"][0]
+        cy = eye[1] + (mouth[1] - eye[1]) * 0.4
+        for i, t in enumerate(lines):
+            cells = braille_cells(t)
+            x = cx - len(cells) * cell
+            y = cy + i * line
+            for c in cells:
+                for kk in (c or ""):
+                    dx, dy = DOT_POS[kk]
+                    cv2.circle(big, (int((x + dx * d) * k), int((y + dy * d) * k)),
+                               max(1, int(r * k)), 255, -1, cv2.LINE_AA)
+                x += cell
+        img = cv2.resize(big, (ctx.W, ctx.H), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+        return solid(ctx, p.get("color", "#d4001e"), img * float(p.get("opacity", 1.0)))
     for i in range(len(lines) or int(p.get("rows", 3))):
         y = rng.uniform(y0 + 0.1 * (y1 - y0), y1 - 0.1 * (y1 - y0))
         if lines:
@@ -537,9 +565,11 @@ def gen_micro_text(L, ctx):
     d = ImageDraw.Draw(im)
     words = ["FIG.", "SPEC.", "No", "LOT", "REF", "SER.", "PLATE", "ARCH.", "DOC", "INV."]
     for cx, cy in region_pt(L.get("region", "edges"), ctx, int(rng.integers(2, 6))):
-        lines = [f"{rng.choice(words)} {rng.integers(10, 9999)} — "
-                 + " ".join("".join(rng.choice(list("abcdefghiklmnoprstuv"), rng.integers(2, 8)))
-                            for _ in range(rng.integers(2, 6)))
+        vocab = ("silver gelatin print · specimen · plate · archive · exposure · negative · "
+                 "contact sheet · ration · issued · received · copy · subject · study · "
+                 "window light · morning · unknown · catalogue · ink on paper").split(" · ")
+        lines = p.get("lines") or [f"{rng.choice(words)} {rng.integers(10, 9999)} — "
+                 + ", ".join(rng.choice(vocab, rng.integers(1, 4), replace=False))
                  for _ in range(rng.integers(2, 6))]
         d.multiline_text((cx, cy), "\n".join(lines), fill=255, font=font, spacing=1)
     return solid(ctx, p.get("color", "#555555"),
@@ -754,6 +784,116 @@ def gen_asset(L, ctx):
     return Layer(rgb, al * float(p.get("opacity", 0.9)))
 
 
+SERIF = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
+SANS_B = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+PAPER_PROMPT = "a single blank sheet of aged cream paper, slightly stained, torn rough edges, no text, no print"
+
+# real Soviet-era wording (checked): tobacco/sugar/soap ration coupons, 1990
+PRINTS = {
+    "tobacco_talon": {"head": ["ТАЛОН", "НА ТАБАЧНЫЕ ИЗДЕЛИЯ", "на март 1990 г."],
+                      "cells": ["1 пачка"] * 6, "foot": "Исполком горсовета", "stamp": "ПОГАШЕНО"},
+    "sugar_talon": {"head": ["ТАЛОН", "НА САХАР", "на апрель 1990 г."],
+                    "cells": ["1 кг", "1 кг", "0,5 кг", "0,5 кг"], "foot": "Исполком горсовета",
+                    "stamp": None},
+    "soap_talon": {"head": ["ТАЛОН", "НА МЫЛО", "на май 1990 г."],
+                   "cells": ["1 кусок"] * 4, "foot": "Исполком горсовета", "stamp": None},
+    "papirosy": {"head": ["ПАПИРОСЫ", "БЕЛОМОРКАНАЛ"], "cells": [], "foot": "Цена 22 коп.",
+                 "stamp": None},
+}
+
+
+def _txt(d, xy, text, size, font=SANS, fill=(0, 0, 0), anchor="mm"):
+    d.text(xy, text, font=ImageFont.truetype(font, max(6, int(size))), fill=fill, anchor=anchor)
+
+
+def render_print(variant, w, rng, ink=(178, 34, 40)):
+    """A printed coupon/label with REAL Russian text on a generated paper sheet."""
+    spec = PRINTS.get(variant, PRINTS["tobacco_talon"])
+    h = int(w * (1.35 if spec["cells"] else 0.7))
+    paper_rgb, paper_a = paper_object(asset_image(PAPER_PROMPT, 31 + rng.integers(3)))
+    paper = Image.fromarray((paper_rgb * 255).astype(np.uint8)).resize((w, h))
+    alpha = Image.fromarray((paper_a * 255).astype(np.uint8)).resize((w, h))
+    d = ImageDraw.Draw(paper)
+    m = int(w * 0.07)
+    d.rectangle([m, m, w - m, h - m], outline=ink, width=max(1, w // 160))
+    d.rectangle([m + w // 70, m + w // 70, w - m - w // 70, h - m - w // 70], outline=ink, width=1)
+    y = m + w * 0.1
+    for i, t in enumerate(spec["head"]):
+        sz = w * (0.11 if i == 0 else 0.065 if i == 1 else 0.05)
+        _txt(d, (w / 2, y), t, sz, SERIF if i < 2 else SANS, ink)
+        y += sz * 1.35
+    cells = spec["cells"]
+    if cells:
+        cols = 2
+        rows = (len(cells) + 1) // 2
+        top, bot = y + w * 0.03, h - m - w * 0.16
+        cw, ch = (w - 2 * m) / cols, (bot - top) / rows
+        for j, t in enumerate(cells):
+            cx0, cy0 = m + (j % cols) * cw, top + (j // cols) * ch
+            for xx in range(int(cx0), int(cx0 + cw), max(3, w // 60)):     # perforation
+                d.line([xx, cy0, xx + w // 120, cy0], fill=ink, width=1)
+            if j % cols:
+                for yy in range(int(cy0), int(cy0 + ch), max(3, w // 60)):
+                    d.line([cx0, yy, cx0, yy + w // 120], fill=ink, width=1)
+            _txt(d, (cx0 + cw / 2, cy0 + ch * 0.42), t, w * 0.06, SANS_B, ink)
+            _txt(d, (cx0 + cw / 2, cy0 + ch * 0.72), f"№ {rng.integers(1, 12):02d}", w * 0.035,
+                 SANS, ink)
+    _txt(d, (w / 2, h - m - w * 0.07), spec["foot"], w * 0.045, SANS, (40, 40, 40))
+    a = np.asarray(paper, np.float32) / 255
+    # ink wear: printed areas lose ink in patches
+    a = a + (1 - a) * np.clip(0.35 * fbm(a.shape[:2], rng, w * 0.02, 3), 0, 0.6)[..., None]
+    if spec.get("stamp"):
+        st = render_stamp(int(w * 0.55), rng, ["ИСПОЛКОМ", "1990"], spec["stamp"], (60, 60, 140))
+        sa = rotate(st[..., 3], rng.uniform(-30, 30))
+        sr = np.dstack([rotate(st[..., c], 0 if False else 0) for c in range(3)])
+        sh, sw = sa.shape
+        ox, oy = int(w * 0.4), int(h * 0.55)
+        reg = a[oy:oy + sh, ox:ox + sw]
+        sa = sa[:reg.shape[0], :reg.shape[1], None] * 0.8
+        reg[:] = reg * (1 - sa) + reg * np.array([0.25, 0.25, 0.55]) * sa
+    return np.clip(a, 0, 1), np.asarray(alpha, np.float32) / 255
+
+
+def render_stamp(size, rng, ring, center, color=(178, 34, 40)):
+    """Round rubber stamp: text around the ring, word in the middle, worn ink. RGBA float."""
+    im = Image.new("L", (size, size), 0)
+    d = ImageDraw.Draw(im)
+    lw = max(2, size // 40)
+    d.ellipse([lw, lw, size - lw, size - lw], outline=255, width=lw)
+    d.ellipse([size * 0.2, size * 0.2, size * 0.8, size * 0.8], outline=255, width=max(1, lw // 2))
+    text = " • ".join(ring) + " • "
+    f = ImageFont.truetype(SANS_B, max(6, int(size * 0.085)))
+    n = len(text)
+    for i, ch in enumerate(text):
+        ang = -math.pi / 2 + 2 * math.pi * i / n
+        r = size * 0.39
+        g = Image.new("L", (int(size * 0.12),) * 2, 0)
+        ImageDraw.Draw(g).text((g.width / 2, g.height / 2), ch, font=f, fill=255, anchor="mm")
+        g = g.rotate(-math.degrees(ang) - 90, resample=Image.BICUBIC)
+        im.paste(255, (int(size / 2 + r * math.cos(ang) - g.width / 2),
+                       int(size / 2 + r * math.sin(ang) - g.height / 2)), g)
+    _txt(d, (size / 2, size / 2), center, size * (0.11 if len(center) > 6 else 0.14), SANS_B, 255)
+    a = np.asarray(im, np.float32) / 255
+    a *= np.clip(0.75 + 0.6 * fbm(a.shape, rng, size * 0.03, 3), 0, 1)        # worn ink
+    rgb = np.ones((size, size, 3), np.float32) * np.array(color, np.float32) / 255
+    return np.dstack([rgb, a])
+
+
+def gen_print(L, ctx):
+    """Printed ephemera with real text: params.variant in PRINTS (tobacco_talon,
+    sugar_talon, soap_talon, papirosy), or variant 'stamp' with params.ring/center."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    v = p.get("variant", "tobacco_talon")
+    size = int(s * (0.14 + 0.5 * float(p.get("coverage", 0.15))))
+    if v == "stamp":
+        rgba = render_stamp(size, rng, p.get("ring", ["ИСПОЛКОМ", "ГОРСОВЕТ", "1990"]),
+                            p.get("center", "ВЫДАНО"), tuple(int(c * 255) for c in hex_rgb(p.get("color"))))
+        return place_object(L, ctx, rgba[..., :3], rgba[..., 3], size / s)
+    rgb_o, a_o = render_print(v, size, rng)
+    return place_object(L, ctx, rgb_o, a_o, size / s)
+
+
 # ---------------------------------------------------------------- on the subject
 def gen_skin_overlay(L, ctx):
     """Dense rune script tattooed onto the skin: multiply, clipped to the subject,
@@ -792,6 +932,7 @@ GENERATORS = {
     "stain": gen_stain,
     "paper_scraps": gen_paper_scraps,
     "asset": gen_asset,
+    "print": gen_print,
     "skin_overlay": gen_skin_overlay,
 }
 # handled by the compositor itself (they change the subject / the whole print):

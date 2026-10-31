@@ -21,7 +21,7 @@ export function renderPanel(body, ctx) {
   const movable = top.filter((L) => !["finish", "base"].includes(L.z) && !L.removed);
   const removed = top.filter((L) => L.removed);
 
-  fixedTop.forEach((L) => body.appendChild(fixedRow(L)));
+  fixedTop.forEach((L) => body.appendChild(fixedRow(L, ctx)));
   const list = el("div", "drag-list");
   movable.forEach((L) => {
     const wrap = el("div", "drag-item");
@@ -35,7 +35,7 @@ export function renderPanel(body, ctx) {
     list.appendChild(wrap);
   });
   body.appendChild(list);
-  fixedBottom.forEach((L) => body.appendChild(fixedRow(L)));
+  fixedBottom.forEach((L) => body.appendChild(fixedRow(L, ctx)));
   if (removed.length) body.appendChild(removedSection(removed, ctx));
   body.appendChild(el("div", "panel-legend", `top of the list = top of the stack · ${RIFF_TIP}`));
 }
@@ -63,11 +63,20 @@ function pretty(id) {
   return String(id).replace(/_/g, " ");
 }
 
-function fixedRow(L) {
-  const row = el("div", "layer-row fixed-row");
+function fixedRow(L, ctx) {
+  const isBase = L.z === "base";
+  const row = el("div", "layer-row fixed-row" + (isBase || L.enabled ? "" : " off"));
   row.appendChild(el("span", "drag-handle dim", "·"));
-  const n = el("span", "layer-name", L.z === "base" ? "paper" : "grain & scratches");
-  n.title = L.z === "base" ? "the paper background" : `finish (${L.blend || "normal"})`;
+  if (!isBase) {                  // grain & scratches can be switched off; paper can't
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.checked = !!L.enabled;
+    cb.title = "show / hide grain & scratches";
+    cb.onchange = () => ctx.onToggle(L, cb.checked);
+    row.appendChild(cb);
+  }
+  const n = el("span", "layer-name", isBase ? "paper" : "grain & scratches");
+  n.title = isBase ? "the paper background" : `finish (${L.blend || "normal"})`;
   row.appendChild(n);
   return row;
 }
@@ -160,7 +169,11 @@ function wireDrag(handle, item, list, ctx) {
         const r = s.getBoundingClientRect();
         if (y < r.top + r.height / 2) { before = s; break; }
       }
-      if (before !== item.nextSibling) placeAt(list, item, sibs, before);
+      if (before !== item.nextSibling) {
+        const keep = sc.scrollTop;              // scroll anchoring would shift it a row —
+        placeAt(list, item, sibs, before);      // only our edge tick may scroll
+        sc.scrollTop = keep;
+      }
     };
     // Edge auto-scroll, speed ∝ how far the finger is pulled toward/past the edge:
     // inside the thin edge band it creeps (after a ~350ms rest); past the edge it

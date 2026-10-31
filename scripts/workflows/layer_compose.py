@@ -83,6 +83,9 @@ def parse_val(v):
 def apply_set(P, key, val):
     """id.param=value  |  id.z / id.enabled / id.seed / id.region  |  base.k / background.k"""
     head, _, k = key.partition(".")
+    if head == "finish" and k == "enabled":       # the grain & scratches pass
+        P["base"]["finish"] = val
+        return
     if head in ("base", "background"):
         P[head][k] = val
         return
@@ -413,9 +416,10 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     # finish as an 'overlay' layer for client compositing: 0.5 grey = neutral
     delta = (out - before_finish).mean(2)
     fin = np.repeat(np.clip(0.5 + delta, 0, 1)[..., None], 3, 2).astype(np.float32)
-    stack.append({"id": "finish", "z": "finish", "enabled": True,
+    fin_on = base.get("finish", True) not in (False, "false", 0, "0")
+    stack.append({"id": "finish", "z": "finish", "enabled": fin_on,
                   "layer": wl.Layer(fin, np.ones((H, W), np.float32), blend="overlay")})
-    return np.clip(out, 0, 1), stack
+    return np.clip(out if fin_on else before_finish, 0, 1), stack
 
 
 def slice_subject(rgb, m, sbox, rng, s):
@@ -466,7 +470,7 @@ def render(d, P, full=False, event="render", **meta):
             written.add(fn)
             L = byid.get(e["id"], {})
             entries.append({"id": e["id"], "file": fn, "kind": L.get("kind", e["id"]),
-                            "z": e["z"], "enabled": bool(L.get("enabled", True)) if L else True,
+                            "z": e["z"], "enabled": bool(L.get("enabled", True)) if L else bool(e["enabled"]),
                             "removed": bool(L.get("removed")), "blend": e["layer"].blend,
                             "riff": bool(L.get("riff")), "note": L.get("note", ""),
                             "seed": L.get("seed"), "variants": L.get("variants", [])})

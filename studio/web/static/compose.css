@@ -99,6 +99,8 @@
   min-height: 36px; max-width: 34vw; font-size: 13px; }
 .topbar-actions .btn-small { padding: 6px 10px; min-height: 36px; }
 .drag-list { touch-action: pan-y; }
+/* no browser scroll anchoring: moving the dragged row would make Chrome jump the list */
+#layers-body, .compose-side, .studio-layout { overflow-anchor: none; }
 .drag-item { background: var(--bg-2); }
 .drag-item.dragging { opacity: 0.85; outline: 2px solid var(--accent); position: relative; z-index: 2; }
 .drag-handle { flex: none; width: 32px; min-height: 40px; display: inline-flex; align-items: center;

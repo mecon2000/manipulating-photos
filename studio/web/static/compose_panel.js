@@ -165,7 +165,7 @@ function wireDrag(handle, item, list, ctx) {
     // Edge auto-scroll, speed ∝ how far the finger is pulled toward/past the edge:
     // inside the thin edge band it creeps (after a ~350ms rest); past the edge it
     // speeds up with distance (pointer capture keeps reporting outside the panel).
-    let edgeSince = 0;
+    let edgeSince = 0, lastT = 0, carry = 0;
     const tick = (t) => {
       raf = 0;
       const r = sc === document.scrollingElement
@@ -174,16 +174,25 @@ function wireDrag(handle, item, list, ctx) {
       let d = 0;                                   // px into the band / past the edge
       if (y < r.top + zone) d = -(r.top + zone - y);
       else if (y > r.bottom - zone) d = y - (r.bottom - zone);
-      if (!d) { edgeSince = 0; return; }
+      if (!d) { edgeSince = 0; lastT = 0; carry = 0; return; }
       if (!edgeSince) edgeSince = t;
       const past = Math.abs(d) - zone;             // >0 once outside the panel
       if (past > 0 || t - edgeSince > 350) {
-        const step = past > 0 ? Math.min(30, 1 + past * 0.12) : 1;   // 60→~1800px/s max
-        const before = sc.scrollTop;
-        sc.scrollTop += Math.sign(d) * Math.round(step);
-        if (sc.scrollTop === before) return;
-        place();
-      }
+        // px/s: 30 creeping in the band → 150 max once ~120px past the edge.
+        // Time-based with a fractional carry so it's frame-rate independent.
+        const pxs = past > 0 ? Math.min(150, 30 + past) : 30;
+        const dt = lastT ? Math.min(50, t - lastT) : 16;
+        carry += Math.sign(d) * pxs * dt / 1000;
+        const step = Math.trunc(carry);
+        carry -= step;
+        lastT = t;
+        if (step) {
+          const before = sc.scrollTop;
+          sc.scrollTop += step;
+          if (sc.scrollTop === before) { lastT = 0; carry = 0; return; }
+          place();
+        }
+      } else lastT = 0;
       raf = requestAnimationFrame(tick);
     };
     const move = (ev) => {

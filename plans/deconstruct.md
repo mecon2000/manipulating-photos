@@ -12,11 +12,12 @@ Everything lives in the hub → Studio, so new art is made in one place.
 ## Folders (`~/.openclaw/workspace/shared/deconstruct/`)
 | Folder | What |
 |---|---|
-| `refs/` | **Drop reference photos here** (any number). Each is deconstructed once. |
+| `../refs/<technique>/` | **Drop reference photos here** — one subfolder per technique (`shared/refs/red-calligraffiti/`). Each subfolder → one recipe. |
 | `recipes/<ref>.json` | Layer recipe (schema v1) |
 | `recipes/<ref>__breakdown.jpg` | Ref with numbered layer boxes + legend |
 | `assets/<kind>/` | Reusable transparent elements (generated once, reused across photos) |
-| `renders/<photo>__<ref>/` | Compose outputs: final, per-layer PNGs, PSD, `recipe.json` used |
+| `models/<Model>.md` | Notes on the model that ground the riffs (Elly: smokes, USSR ephemera, dreads) |
+| `pieces/<photo>__<recipe>/` | `piece.json` state, `final.jpg`, `layers/`, `piece.psd` (--full), `questions/qN_{A,B,C}.jpg + qN_sheet.jpg`, **`history/NNN.jpg + NNN.json + history.jsonl`** — every render, question and pick, kept for the making-of reel |
 
 ## Recipe schema v1
 ```json
@@ -55,6 +56,23 @@ resolved against the subject bbox of the *target* photo (not the ref's pixels).
 4. **Taste** — picks + comments feed `studio/mine_taste.py`; hub tile; agent-knowledge
    entry.
 
+## Riffs + the wildness slider
+`riff.py` (called by `layer_compose.py init --wildness`) adds layers ADJACENT to the technique,
+grounded in the photo + `models/<Model>.md` notes, grouped into 1-3 themes, plus a controlled
+number of unrelated wildcards. 0 = pure imitation · 0.3 one tight theme · 0.5 two themes + 1
+wildcard · 0.8 freer media · 1.0 surprising. Extra kinds for riffs: `glyph_rain`, `asset`.
+
+## Making-of reel (later)
+history/ holds every render (numbered) + the piece state + the question/pick that caused it;
+layers/ of the final give a build-up sequence. Reel = build-up of the final, then the iteration
+trail (choice sheets flash, the picked option holds).
+
 ## Status
 - Phase 1: DONE (2026-10-31) — `deconstruct.py`, refs folder = `shared/refs/` (whole folder = one technique). First recipe: `red-calligraffiti` (14 layers, claude sonnet, ~35s). Note: sandboxed runs need api.anthropic.com allowed.
-- Phase 2: next — first target Elly `01 hotel/Processed/BLD_5611E.jpg`
+- Phase 2: DONE (2026-10-31) — `layer_compose.py` (init/render/set/options/pick), `wall_layers.py`
+  (generators), `riff.py`. ~9s preview render after first-run asset generation. First piece:
+  `pieces/BLD_5611E__red-calligraffiti` (Elly). Knobs: `base.subject_mid` (subject midtone),
+  `base.edge_dissolve`, `base.subject_scale` + `subject_dx` (shrink/reposition her on the paper —
+  valid, unused so far), any `layer.param`.
+- Phase 3: next — Studio compose session (layer panel, choice cards from questions/, pinned
+  comments → `set`), hub entry.

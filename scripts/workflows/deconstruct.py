@@ -1,7 +1,7 @@
 #!/home/rong/openclaw-venv/bin/python3
 """Reverse-engineer a reference image into a layer recipe (see plans/deconstruct.md).
 
-  deconstruct.py                        # all of shared/refs/ as ONE technique -> recipe "refs"
+  deconstruct.py                        # every shared/refs/<technique>/ subfolder -> recipe <technique>
   deconstruct.py --dir DIR --name NAME  # another folder of refs (one technique)
   deconstruct.py --ref a.jpg [b.jpg]    # explicit refs, one recipe
   deconstruct.py --force                # redo even if the recipe exists
@@ -291,19 +291,30 @@ def main():
     ap.add_argument("--model", default="sonnet")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
+    jobs = []
     if a.ref:
         refs = [Path(p).expanduser() for p in a.ref]
-        name = a.name or refs[0].stem
+        jobs.append((a.name or refs[0].stem, refs))
     else:
         d = Path(a.dir).expanduser()
-        refs = sorted(p for p in d.iterdir() if p.suffix.lower() in EXTS)
-        name = a.name or d.name
-    if not refs:
-        print(f"No refs. Drop reference images into {a.dir}")
+        imgs = lambda folder: sorted(p for p in folder.iterdir() if p.suffix.lower() in EXTS)
+        if d == REFS:
+            # shared/refs/<technique>/ — one subfolder per technique, one recipe each
+            loose = imgs(d)
+            if loose:
+                print(f"WARN: {len(loose)} loose image(s) in {d} ignored — put them in a "
+                      f"subfolder named after the technique")
+            jobs = [(sub.name, imgs(sub)) for sub in sorted(d.iterdir())
+                    if sub.is_dir() and not sub.name.startswith("_") and imgs(sub)]
+        else:
+            jobs.append((a.name or d.name, imgs(d)))
+    if not jobs:
+        print(f"No refs. Make a subfolder per technique under {REFS} and drop images in it")
         sys.exit(1)
-    name = re.sub(r"[^\w.-]+", "_", name).strip("_")
-    print(f"== {name}: {len(refs)} ref(s)")
-    deconstruct(refs, name, a.model, a.force)
+    for name, refs in jobs:
+        name = re.sub(r"[^\w.-]+", "_", name).strip("_")
+        print(f"== {name}: {len(refs)} ref(s)")
+        deconstruct(refs, name, a.model, a.force)
 
 
 if __name__ == "__main__":

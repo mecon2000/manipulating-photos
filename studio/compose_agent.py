@@ -240,6 +240,27 @@ def _server(piece: str, events: asyncio.Queue):
             await emit({"type": "tool_end", "name": "compose_set", "detail": "FAILED"})
             return _err(f"compose_set failed: {e}")
 
+    @tool("compose_add", "Add a NEW layer as its own toggleable row — use this for a new element "
+          "instead of changing an existing layer's kind/prompt (Ronnie wants to play with each "
+          "element separately). kind: asset (params.prompt, isolated on white, no text) | print "
+          "(params.variant stamp/typed + ring/center/lines; center=@triskelion for the BDSM emblem) | "
+          "any kind from compose_get. z under|over, region e.g. at:0.15,0.6. Renders (~40s).",
+          {"id": str, "kind": str, "z": str, "region": str, "params": dict, "why": str})
+    async def compose_add(args):
+        await emit({"type": "tool_start", "name": "compose_add", "detail": args.get("id", "")})
+        try:
+            await asyncio.to_thread(compose.do_add, piece, str(args.get("id", "")),
+                                    str(args.get("kind", "asset")), args.get("z") or "over",
+                                    args.get("region") or "anywhere", args.get("params") or {},
+                                    args.get("why") or "")
+            gate["dirty"] = True
+            await emit({"type": "graph_changed"})
+            await emit({"type": "tool_end", "name": "compose_add", "detail": "added"})
+            return _ok(f"added layer {args.get('id')} and re-rendered.")
+        except Exception as e:
+            await emit({"type": "tool_end", "name": "compose_add", "detail": "FAILED"})
+            return _err(f"compose_add failed: {e}")
+
     @tool("compose_options", "Raise a VISUAL question as a choice card: renders A/B/C with "
           "one key varied. vary: 'id.param=a,b,c' (2-4 values; use a|b|c when a value contains "
           "commas, e.g. lists). Vary ONE param, never a whole params object. Ronnie taps one; the pick is "
@@ -317,7 +338,7 @@ def _server(piece: str, events: asyncio.Queue):
         await asyncio.to_thread(append_journal, args["note"])
         return _ok("noted")
 
-    tools = [compose_get, compose_set, compose_options, compose_render,
+    tools = [compose_get, compose_set, compose_add, compose_options, compose_render,
              resolve_comment, look, journal]
     return create_sdk_mcp_server("compose", tools=tools), \
         [f"mcp__compose__{t.name}" for t in tools]

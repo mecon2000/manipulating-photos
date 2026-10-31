@@ -530,6 +530,33 @@ def cmd_set(a):
     render(d, P, event="set", changes=changes, note=a.note)
 
 
+def cmd_add(a):
+    """Add a NEW layer (its own row in the panel) instead of repurposing an existing one."""
+    d, P = load(a.piece)
+    if not re.match(r"^[a-z0-9_]+$", a.id):
+        raise SystemExit("id: lowercase letters, digits, _")
+    if any(L["id"] == a.id for L in P["layers"]):
+        raise SystemExit(f"layer {a.id} already exists — use set")
+    L = {"id": a.id, "theme": a.theme, "kind": a.kind, "z": a.z, "region": a.region,
+         "params": {}, "enabled": not a.off, "riff": True, "note": a.why,
+         "seed": (int(P.get("seed", 1)) + 7919 * (len(P["layers"]) + 1)) % 100000}
+    for kv in a.param or []:
+        k, v = kv.split("=", 1)
+        L["params"][k] = parse_val(v)
+    idx = next((i + 1 for i, x in enumerate(P["layers"]) if x["id"] == a.after), None)
+    if idx is None:   # end of its z group: right after the last layer with the same z
+        same = [i for i, x in enumerate(P["layers"]) if x.get("z") == a.z]
+        idx = same[-1] + 1 if same else len(P["layers"])
+    P["layers"].insert(idx, L)
+    P["decisions"].append({"t": time.strftime("%F %T"), "add": L, "note": a.why})
+    save(d, P)
+    if a.no_render:
+        hist_event(d, "add", layer=a.id)
+        print(f"added {a.id} (no render)")
+        return
+    render(d, P, event="add", layer=a.id, note=a.why)
+
+
 def hist_event(d, event, **kw):
     """History line without an image (fast client-side edits; the next render snapshots)."""
     (d / "history").mkdir(exist_ok=True)
@@ -786,12 +813,18 @@ def main():
     fv = sub.add_parser("fav"); fv.add_argument("piece"); fv.add_argument("--name", default="")
     rs = sub.add_parser("restore"); rs.add_argument("piece"); rs.add_argument("--savepoint", required=True)
     o = sub.add_parser("options"); o.add_argument("piece"); o.add_argument("--question", required=True); o.add_argument("--vary", required=True)
+    ad = sub.add_parser("add"); ad.add_argument("piece"); ad.add_argument("--id", required=True)
+    ad.add_argument("--kind", required=True); ad.add_argument("--z", default="over", choices=["under", "over"])
+    ad.add_argument("--region", default="anywhere"); ad.add_argument("--param", nargs="*")
+    ad.add_argument("--after", default=""); ad.add_argument("--theme", default="added")
+    ad.add_argument("--why", default=""); ad.add_argument("--off", action="store_true")
+    ad.add_argument("--no-render", action="store_true")
     p = sub.add_parser("pick"); p.add_argument("piece"); p.add_argument("--question", required=True)
     p.add_argument("--choice", required=True); p.add_argument("--comment", default="")
     a = ap.parse_args()
     {"init": cmd_init, "render": cmd_render, "set": cmd_set, "options": cmd_options,
      "pick": cmd_pick, "variant": cmd_variant, "order": cmd_order, "save": cmd_save,
-     "restore": cmd_restore, "fav": cmd_fav}[a.cmd](a)
+     "restore": cmd_restore, "fav": cmd_fav, "add": cmd_add}[a.cmd](a)
 
 
 if __name__ == "__main__":

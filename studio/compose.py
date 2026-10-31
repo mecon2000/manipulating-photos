@@ -254,6 +254,20 @@ def do_set(piece: str, changes, note: str = "") -> dict:
     return summary(piece)
 
 
+def do_add(piece: str, layer_id: str, kind: str, z: str = "over", region: str = "anywhere",
+           params: dict | None = None, why: str = "") -> dict:
+    """A NEW layer row (instead of repurposing an existing layer)."""
+    piece_dir(piece)
+    args = ["add", str(PIECES / piece), "--id", layer_id, "--kind", kind, "--z", z,
+            "--region", region, "--why", why or ""]
+    kv = [f"{k}={json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v}"
+          for k, v in (params or {}).items()]
+    if kv:
+        args += ["--param", *kv]
+    run_cli(piece, args)
+    return summary(piece)
+
+
 def reseed(piece: str, layer_id: str, note: str = "") -> dict:
     return do_set(piece, [f"{layer_id}.seed={random.randint(1, 99_999)}"],
                   note or f"re-seed {layer_id}")

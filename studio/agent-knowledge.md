@@ -102,3 +102,4 @@ Tools: `compose_get` (stack, base/background, open questions, open pinned notes 
 - No torn-edge effect: base.edge_dissolve stays 0 (Ronnie prefers the clean cut-out).
 - Choice cards: vary ONE param (stamp.center=A|B|C); '|' separates values that contain commas. Never vary a whole params object.
 - BDSM emblem: print variant stamp with params.center=@triskelion draws the triskelion. For a dominant model, nothing on her skin claims HER (no 'property' marks).
+- New element = NEW layer (compose_add), never repurpose an existing layer's kind/prompt — Ronnie toggles each element separately.

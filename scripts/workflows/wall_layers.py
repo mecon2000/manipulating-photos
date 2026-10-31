@@ -475,7 +475,7 @@ def gen_dot_rows(L, ctx):
             for c in cells:
                 for k in (c or ""):
                     dx, dy = DOT_POS[k]
-                    cv2.circle(img, (int(x + dx * d), int(y + dy * d)), r, 1.0, -1, cv2.LINE_AA)
+                    cv2.circle(img, (int(x + dx * d), int(y + dy * d)), max(1, int(round(r))), 1.0, -1, cv2.LINE_AA)
                 x += d * 3
             continue
         xa = rng.uniform(x0, x0 + 0.4 * (x1 - x0))
@@ -488,7 +488,7 @@ def gen_dot_rows(L, ctx):
             for cx in range(2):
                 for cy in range(3):
                     if rng.random() < 0.5:
-                        cv2.circle(img, (int(x + cx * d), int(y + cy * d)), r, 1.0, -1, cv2.LINE_AA)
+                        cv2.circle(img, (int(x + cx * d), int(y + cy * d)), max(1, int(round(r))), 1.0, -1, cv2.LINE_AA)
             x += d * 3
     return solid(ctx, p.get("color", "#d4001e"), img * float(p.get("opacity", 1.0)))
 

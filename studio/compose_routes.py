@@ -167,7 +167,8 @@ def api_order(piece: str, body: dict = Body(...)):
 
 @router.post("/api/compose/piece/{piece}/variant")
 def api_variant(piece: str, body: dict = Body(...)):
-    return _call(compose_sync.variant, piece, str(body.get("layer", "")), body.get("seed"))
+    return _call(compose_sync.variant, piece, str(body.get("layer", "")), body.get("seed"),
+                 body.get("count", 3))
 
 
 @router.post("/api/compose/piece/{piece}/save")

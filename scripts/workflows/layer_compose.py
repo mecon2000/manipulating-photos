@@ -17,7 +17,7 @@ A *piece* = one photo x one recipe, in shared/deconstruct/pieces/<photo>__<recip
   layer_compose.py options PIECE --question "..." --vary id.param=a,b,c
          vary keys: id.<param> | id.z | id.enabled | id.seed | base.<k> | background.<k>
   layer_compose.py pick   PIECE --question qN --choice B
-  layer_compose.py variant PIECE <layer-id> [--seed N]     one layer, another seed → layers/variants/
+  layer_compose.py variant PIECE <layer-id> [--count 3 | --seed N ...]  one layer, other seeds → layers/variants/
   layer_compose.py order  PIECE id,id,subject,id,...       bottom→top; left of subject = under
   layer_compose.py save   PIECE --name "..."               savepoint (piece.json + final.jpg)
   layer_compose.py restore PIECE --savepoint N             (savepoint 0 = start, always there)
@@ -253,7 +253,7 @@ def composite(dst, L):
     return dst * (1 - a) + L.rgb * a
 
 
-def build(d, P, full=False, all_layers=False, only=None):
+def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     """Returns (final HxWx3 float, stack) at preview or full res.
     stack: bottom→top list of dicts {id, z, enabled, layer} — paper, under…, subject, over…, finish.
     all_layers: also generate disabled layers (not composited) so a client can toggle them.
@@ -316,13 +316,15 @@ def build(d, P, full=False, all_layers=False, only=None):
     gen_set = P["layers"] if (all_layers or only) else live
     if only:
         gen_set = [L for L in P["layers"] if L["id"] == only]
+        if only_seeds:     # several variants of one layer in one pass (ctx built once)
+            gen_set = [{**gen_set[0], "seed": sd, "enabled": True} for sd in only_seeds]
 
     def emit(L, lay):
         nonlocal out
         on = L.get("enabled", True)
         if on and not only:
             out = composite(out, lay)
-        stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay})
+        stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay, "seed": L.get("seed")})
 
     # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
     ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
@@ -490,34 +492,28 @@ def hist_event(d, event, **kw):
 
 
 def cmd_variant(a):
-    """Render one layer with another seed, for side-by-side choosing; active seed unchanged."""
+    """Render one layer with other seeds (default: 3 random) for side-by-side choosing;
+    the active seed is unchanged. Prints a Variant:/Seed: pair per variant."""
     d, P = load(a.piece)
     L = next((x for x in P["layers"] if x["id"] == a.id), None)
     if L is None:
         raise SystemExit(f"no layer {a.id}")
-    seed = a.seed if a.seed is not None else int(np.random.default_rng().integers(1, 10 ** 6))
-    Q = copy.deepcopy(P)
-    for x in Q["layers"]:
-        if x["id"] == a.id:
-            x["seed"], x["enabled"] = seed, True
-    _, stack = build(d, Q, only=a.id)
+    rng = np.random.default_rng()
+    seeds = list(a.seed) if a.seed else [int(rng.integers(1, 99_999)) for _ in range(a.count)]
     vd = d / "layers" / "variants" / a.id
     vd.mkdir(parents=True, exist_ok=True)
-    out = vd / f"s{seed}.png"
-    save_rgba(out, next(e for e in stack if e["id"] == a.id)["layer"])
     cur = L.get("seed")
-    if cur is not None and not (vd / f"s{cur}.png").exists():   # keep the current one comparable
-        Q2 = copy.deepcopy(P)
-        for x in Q2["layers"]:
-            if x["id"] == a.id:
-                x["enabled"] = True
-        save_rgba(vd / f"s{cur}.png", next(e for e in build(d, Q2, only=a.id)[1] if e["id"] == a.id)["layer"])
+    todo = seeds + ([cur] if cur is not None and not (vd / f"s{cur}.png").exists() else [])
+    _, stack = build(d, P, only=a.id, only_seeds=todo)
+    for e in stack:
+        if e["id"] == a.id and e.get("seed") in todo:
+            save_rgba(vd / f"s{e['seed']}.png", e["layer"])
     L.setdefault("variants", [])
-    for sd in (cur, seed):
+    for sd in [cur] + seeds:
         if sd is not None and sd not in L["variants"]:
             L["variants"].append(sd)
     save(d, P)
-    hist_event(d, "variant", id=a.id, seed=seed)
+    hist_event(d, "variant", id=a.id, seeds=seeds)
     mf = d / "layers" / "manifest.json"
     if mf.exists():
         m = json.loads(mf.read_text())
@@ -525,7 +521,8 @@ def cmd_variant(a):
             if e["id"] == a.id:
                 e["variants"] = L["variants"]
         mf.write_text(json.dumps(m, ensure_ascii=False))
-    print(f"Variant: {out}\nSeed: {seed}")
+    for sd in seeds:
+        print(f"Variant: {vd / f's{sd}.png'}\nSeed: {sd}")
 
 
 def cmd_order(a):
@@ -731,7 +728,8 @@ def main():
     r = sub.add_parser("render"); r.add_argument("piece"); r.add_argument("--full", action="store_true")
     s = sub.add_parser("set"); s.add_argument("piece"); s.add_argument("kv", nargs="+"); s.add_argument("--note", default="")
     s.add_argument("--no-render", action="store_true")
-    v = sub.add_parser("variant"); v.add_argument("piece"); v.add_argument("id"); v.add_argument("--seed", type=int)
+    v = sub.add_parser("variant"); v.add_argument("piece"); v.add_argument("id")
+    v.add_argument("--seed", type=int, nargs="*"); v.add_argument("--count", type=int, default=3)
     od = sub.add_parser("order"); od.add_argument("piece"); od.add_argument("ids"); od.add_argument("--no-render", action="store_true")
     sv = sub.add_parser("save"); sv.add_argument("piece"); sv.add_argument("--name", required=True)
     fv = sub.add_parser("fav"); fv.add_argument("piece"); fv.add_argument("--name", default="")

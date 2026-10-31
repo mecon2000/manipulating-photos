@@ -194,10 +194,11 @@ const panelCtx = () => ({
     rolling.add(L.id);
     renderAll();
     try {
-      const r = await post("/variant", { layer: L.id });
-      localVariants[L.id] = [...(localVariants[L.id] || []), r.seed];
-      L.variants = [...(L.variants || []).filter((s) => s !== r.seed), r.seed];
-      overrides[L.id] = r.seed;
+      const r = await post("/variant", { layer: L.id, count: 3 });   // 🎲 = 3 new versions
+      const seeds = r.seeds || [r.seed];
+      localVariants[L.id] = [...(localVariants[L.id] || []), ...seeds];
+      L.variants = [...(L.variants || []).filter((s) => !seeds.includes(s)), ...seeds];
+      overrides[L.id] = seeds[0];
       await loadImg(layerSrc(L));
       redraw();
     } catch (e) {

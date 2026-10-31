@@ -110,24 +110,18 @@ def order(piece: str, ids: list[str]) -> dict:
     return status(piece)
 
 
-def variant(piece: str, layer: str, seed: int | None = None) -> dict:
+def variant(piece: str, layer: str, seed: int | None = None, count: int = 3) -> dict:
+    """Roll `count` new versions of one layer in one engine pass (or one given seed)."""
     compose.piece_dir(piece)
     if not re.match(r"^[\w\-]+$", layer):
         raise ValueError("bad layer id")
-    seed = int(seed) if seed is not None else random.randint(1, 99_999)
+    seeds = [int(seed)] if seed is not None else \
+        random.sample(range(1, 99_999), max(1, min(6, int(count or 3))))
     out = compose.run_cli(piece, ["variant", str(compose.PIECES / piece), layer,
-                                  "--seed", str(seed)], timeout=600)
-    m = re.search(r"Seed:\s*(\d+)", out)
-    p = re.search(r"Variant:\s*(\S.*)$", out, re.M)
-    seed = int(m.group(1)) if m else seed
-    rel = f"layers/variants/{layer}/s{seed}.png"
-    if p:
-        try:
-            rel = str(Path(p.group(1).strip()).resolve().relative_to(
-                compose.piece_dir(piece).resolve()))
-        except ValueError:
-            pass
-    return {"layer": layer, "seed": seed, "file": rel}
+                                  "--seed", *map(str, seeds)], timeout=600)
+    got = [int(x) for x in re.findall(r"Seed:\s*(\d+)", out)] or seeds
+    files = [f"layers/variants/{layer}/s{sd}.png" for sd in got]
+    return {"layer": layer, "seeds": got, "files": files, "seed": got[0], "file": files[0]}
 
 
 def save(piece: str, name: str) -> list[dict]:

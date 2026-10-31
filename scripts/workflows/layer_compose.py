@@ -418,13 +418,14 @@ def render(d, P, full=False, event="render", **meta):
     if not full:
         ld = d / "layers"
         ld.mkdir(exist_ok=True)
-        for f in ld.glob("*.png"):
-            f.unlink()
         byid = {L["id"]: L for L in P["layers"]}
-        entries = []
+        entries, written = [], set()
         for i, e in enumerate(stack):
             fn = f"{i:02d}_{e['id']}.png"
-            save_rgba(ld / fn, e["layer"])
+            tmp = ld / f".{fn}.tmp.png"
+            save_rgba(tmp, e["layer"])
+            os.replace(tmp, ld / fn)                  # atomic: readers never see a gap
+            written.add(fn)
             L = byid.get(e["id"], {})
             entries.append({"id": e["id"], "file": fn, "kind": L.get("kind", e["id"]),
                             "z": e["z"], "enabled": e["enabled"], "blend": e["layer"].blend,
@@ -444,8 +445,14 @@ def render(d, P, full=False, event="render", **meta):
         write_psd(str(psd_path(d, P)), layers, (W, H), np.asarray(img))
     n = hist(d, P, event, full=full, **meta)
     if not full:
-        (d / "layers" / "manifest.json").write_text(json.dumps(
-            {"rev": n, "W": img.width, "H": img.height, "layers": entries}, ensure_ascii=False))
+        mf = d / "layers" / "manifest.json"
+        tmp = mf.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"rev": n, "W": img.width, "H": img.height, "layers": entries},
+                                  ensure_ascii=False))
+        os.replace(tmp, mf)
+        for f in (d / "layers").glob("*.png"):         # stale files only after the new manifest
+            if f.name not in written:
+                f.unlink()
     img.save(d / "history" / f"{n:03d}.jpg", quality=88)
     (d / "history" / f"{n:03d}.json").write_text(json.dumps(P, ensure_ascii=False))
     print(f"rendered in {time.time() - t:.1f}s  (history #{n})")
@@ -532,14 +539,16 @@ def cmd_order(a):
     if unknown:
         raise SystemExit(f"unknown layers: {unknown}")
     cut = ids.index("subject")
-    new = []
+    listed = []
     for i, lid in enumerate(ids):
         if lid == "subject":
             continue
         byid[lid]["z"] = "under" if i < cut else "over"
-        new.append(byid[lid])
-    new += [L for L in P["layers"] if L["id"] not in ids]     # unlisted keep their place at the end
-    P["layers"] = new
+        listed.append(byid[lid])
+    # listed layers fill their own old slots in the new order; unlisted ones (subject_cut,
+    # grain — not drawn as separate layers) stay exactly where they were
+    it = iter(listed)
+    P["layers"] = [next(it) if L["id"] in byid and L["id"] in ids else L for L in P["layers"]]
     P["decisions"].append({"t": time.strftime("%F %T"), "order": ids})
     save(d, P)
     if a.no_render:

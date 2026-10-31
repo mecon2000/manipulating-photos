@@ -51,6 +51,7 @@ class Ctx:
     mask: np.ndarray     # subject alpha HxW 0-1
     lum: np.ndarray      # B&W subject luminance HxW 0-1
     palette: list
+    focus: np.ndarray | None = None   # 1 near/behind the figure -> 0 in the quiet margins
 
     @property
     def s(self):
@@ -102,7 +103,13 @@ def region_pt(region, ctx, n=1):
             pts.append({0: (t * ctx.W, m * ctx.H), 1: (t * ctx.W, (1 - m) * ctx.H),
                         2: (m * ctx.W, t * ctx.H), 3: ((1 - m) * ctx.W, t * ctx.H)}[side])
         return np.array(pts)
-    return np.stack([rng.uniform(x0, max(x0 + 1, x1), n), rng.uniform(y0, max(y0 + 1, y1), n)], 1)
+    cand = np.stack([rng.uniform(x0, max(x0 + 1, x1), n * 8),
+                     rng.uniform(y0, max(y0 + 1, y1), n * 8)], 1)
+    if ctx.focus is None:
+        return cand[:n]
+    w = ctx.focus[np.clip(cand[:, 1].astype(int), 0, ctx.H - 1),
+                  np.clip(cand[:, 0].astype(int), 0, ctx.W - 1)] ** 2 + 0.02
+    return cand[rng.choice(len(cand), n, replace=False, p=w / w.sum())]
 
 
 def stamp(dst, src, cx, cy, mode="max"):
@@ -329,7 +336,41 @@ def gen_runes(L, ctx, mode):
 
 
 # ---------------------------------------------------------------- marks
+BRUSH_PROMPT = ("one single bold black ink dry-brush stroke on white paper, sumi-e, fast gesture, "
+                "ragged bristle streaks at the end, small ink spatter, no text")
+
+
 def gen_ink_smear(L, ctx):
+    """Black ink masses: real brush strokes generated once (Flux, cached — a small
+    library of 4 strokes), keyed to alpha, scattered near the figure."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    if p.get("style") == "procedural":
+        return _ink_smear_procedural(L, ctx)
+    cov = float(p.get("coverage", 0.3))
+    acc = np.zeros((ctx.H, ctx.W), np.float32)
+    strokes = []
+    for k in range(4):
+        a = np.asarray(asset_image(BRUSH_PROMPT, 500 + k), np.float32) / 255
+        lum = a @ np.array([0.3, 0.59, 0.11], np.float32)
+        al = np.clip((0.85 - lum) / 0.55, 0, 1)
+        ys, xs = np.nonzero(al > 0.2)
+        if len(xs):
+            al = al[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        strokes.append(al)
+    base_dir = float(re.sub(r"[^\d.-]", "", str(p.get("direction", "-30"))) or -30)
+    for cx, cy in region_pt(L.get("region", "behind-head"), ctx, int(2 + cov * 8)):
+        st = strokes[rng.integers(len(strokes))]
+        ln = s * rng.uniform(0.3, 0.7)
+        sc = ln / max(st.shape)
+        st = cv2.resize(st, (max(4, int(st.shape[1] * sc)), max(4, int(st.shape[0] * sc))),
+                        interpolation=cv2.INTER_AREA)
+        if rng.random() < 0.5:
+            st = st[:, ::-1]
+        stamp(acc, rotate(np.ascontiguousarray(st), base_dir + rng.normal(0, 35)), cx, cy)
+    return solid(ctx, p.get("color", "#101015"), acc * float(p.get("opacity", 0.9)))
+
+
+def _ink_smear_procedural(L, ctx):
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     cov = float(p.get("coverage", 0.3))
     base_dir = float(re.sub(r"[^\d.-]", "", str(p.get("direction", "-30"))) or -30)
@@ -369,14 +410,40 @@ def gen_splatter(L, ctx):
     return solid(ctx, p.get("color", "#0d0d12"), img * float(p.get("opacity", 0.9)))
 
 
+BRAILLE = {c: d for c, d in zip("abcdefghijklmnopqrstuvwxyz", [
+    "1", "12", "14", "145", "15", "124", "1245", "125", "24", "245", "13", "123", "134",
+    "1345", "135", "1234", "12345", "1235", "234", "2345", "136", "1236", "2456", "1346",
+    "13456", "1356"])}
+BRAILLE.update({"'": "3", ",": "2", ".": "256", "-": "36", "?": "236", "!": "235"})
+DOT_POS = {"1": (0, 0), "2": (0, 1), "3": (0, 2), "4": (1, 0), "5": (1, 1), "6": (1, 2)}
+
+
+def braille_cells(text):
+    """Grade-1 braille: one cell per letter, None for a space."""
+    return [None if ch == " " else BRAILLE.get(ch) for ch in text.lower()
+            if ch == " " or ch in BRAILLE]
+
+
 def gen_dot_rows(L, ctx):
+    """Rows of braille. With params.text the dots spell it (Grade-1, one row per line,
+    lines split on '/'); without, random cells."""
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     d = s * 0.011
     r = max(1, int(d * 0.32))
     img = np.zeros((ctx.H, ctx.W), np.float32)
     x0, y0, x1, y1 = region_box(L.get("region", "anywhere"), ctx)
-    for _ in range(int(p.get("rows", 3))):
+    lines = [t.strip() for t in str(p.get("text", "")).split("/") if t.strip()]
+    for i in range(len(lines) or int(p.get("rows", 3))):
         y = rng.uniform(y0 + 0.1 * (y1 - y0), y1 - 0.1 * (y1 - y0))
+        if lines:
+            cells = braille_cells(lines[i])
+            x = rng.uniform(x0, max(x0 + 1, x1 - len(cells) * d * 3))
+            for c in cells:
+                for k in (c or ""):
+                    dx, dy = DOT_POS[k]
+                    cv2.circle(img, (int(x + dx * d), int(y + dy * d)), r, 1.0, -1, cv2.LINE_AA)
+                x += d * 3
+            continue
         xa = rng.uniform(x0, x0 + 0.4 * (x1 - x0))
         xb = rng.uniform(xa + 0.25 * (x1 - x0), x1)
         x = xa

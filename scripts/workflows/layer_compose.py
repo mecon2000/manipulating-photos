@@ -20,7 +20,7 @@ A *piece* = one photo x one recipe, in shared/deconstruct/pieces/<photo>__<recip
 
 Cropping is smart-crop.py's job (choose with `smart-crop.py --source P --show-options`).
 """
-import argparse, copy, json, os, re, subprocess, sys, time, zlib
+import argparse, copy, json, math, os, re, subprocess, sys, time, zlib
 from pathlib import Path
 
 import numpy as np
@@ -193,6 +193,38 @@ def head_point(mask, sbox):
     return hx, y0 + (y1 - y0) * 0.1
 
 
+def face_points(d, src_full):
+    """Face landmarks on the full-res source, cached in face.json."""
+    fp = d / "face.json"
+    if not fp.exists():
+        from face_align import landmarks
+        pts = landmarks(np.asarray(src_full))
+        fp.write_text(json.dumps({k: [float(v[0]), float(v[1])] for k, v in (pts or {}).items()}))
+    return json.loads(fp.read_text())
+
+
+def eye_protect(pts, W, H, scale):
+    """Soft band over both eyes. House rule: nothing ever covers her eyes."""
+    if not pts or "eye_l" not in pts or "eye_r" not in pts:
+        return np.zeros((H, W), np.float32)
+    (lx, ly), (rx, ry) = [(v[0] * scale, v[1] * scale) for v in (pts["eye_l"], pts["eye_r"])]
+    cx, cy = (lx + rx) / 2, (ly + ry) / 2
+    dist = math.hypot(rx - lx, ry - ly)
+    ang = math.atan2(ry - ly, rx - lx)
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    u = (xx - cx) * math.cos(ang) + (yy - cy) * math.sin(ang)
+    v = -(xx - cx) * math.sin(ang) + (yy - cy) * math.cos(ang)
+    r = np.sqrt((u / (dist * 1.25)) ** 2 + (v / (dist * 0.55)) ** 2)
+    return np.clip((1.5 - r) / 0.5, 0, 1).astype(np.float32)
+
+
+def focus_map(mask, s):
+    """1 on/near the figure, falling off into the margins — decorations pile up
+    behind her and the edges of the paper stay quiet (as in the refs)."""
+    out = distance_transform_edt(mask < 0.5)
+    return np.exp(-(out / (s * 0.22)) ** 2).astype(np.float32)
+
+
 def edge_dissolve(mask, amt, s, rng):
     if amt <= 0:
         return mask
@@ -216,6 +248,8 @@ def build(d, P, full=False):
     """Returns (final HxWx3 float, [(name, Layer)] bottom→top) at preview or full res."""
     src = Image.open(d / "source.jpg").convert("RGB")
     mask_im = subject_mask(d, src)
+    src_full_size = src.size
+    face = face_points(d, src) if P["base"].get("protect_eyes", True) else {}
     if not full:
         src.thumbnail((PREVIEW, PREVIEW))
     W, H = src.size
@@ -237,8 +271,13 @@ def build(d, P, full=False):
 
     ys, xs = np.nonzero(mask > 0.5)
     sbox = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else (0, 0, W, H)
+    focus = focus_map(mask, s)
     ctx_args = dict(W=W, H=H, sbox=sbox, head=head_point(mask, sbox), mask=mask,
-                    lum=lum if lum is not None else rgb.mean(2), palette=P.get("palette", []))
+                    lum=lum if lum is not None else rgb.mean(2), palette=P.get("palette", []),
+                    focus=focus)
+    # (subject_scale moves her, so eye coords only hold at scale 1)
+    protect = eye_protect(face, W, H, W / src_full_size[0]) if sc >= 0.999 else np.zeros((H, W), np.float32)
+    quiet = float(P["base"].get("margin_quiet", 0.7))
 
     paper = wl.hex_rgb(bgc.get("color", "#f1eee8"))
     out = np.empty((H, W, 3), np.float32)
@@ -259,9 +298,12 @@ def build(d, P, full=False):
         return g(L, ctx)
 
     live = [L for L in P["layers"] if L.get("enabled", True)]
+    # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
+    ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
     for L in [x for x in live if x["z"] == "under"]:
         lay = run(L)
         if lay is not None:
+            lay.alpha = lay.alpha * (1 - quiet + quiet * focus)
             out = composite(out, lay)
             stack.append((L["id"], lay))
 
@@ -275,9 +317,11 @@ def build(d, P, full=False):
     out = composite(out, subj)
     stack.append(("subject", subj))
 
+    ctx_args["focus"] = focus
     for L in [x for x in live if x["z"] == "over"]:
         lay = run(L)
         if lay is not None:
+            lay.alpha = lay.alpha * (1 - protect) * (1 - quiet * 0.5 + quiet * 0.5 * focus)
             out = composite(out, lay)
             stack.append((L["id"], lay))
 

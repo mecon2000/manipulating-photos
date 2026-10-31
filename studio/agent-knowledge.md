@@ -76,3 +76,9 @@ the bottom, keep entries terse.
   flux-general repainted context and ignored the prompt. Every inpaint is now
   auto-verified: the edited region is cropped and the VLM answers YES/NO against
   the prompt — trust that verdict over the model's own claim of success.
+
+## Decorations never cover the eyes (Ronnie, 2026-10-31)
+Any overlay, text, texture, scribble or stamp placed ON the subject must leave her eyes clear.
+`layer_compose.py` enforces it (`eye_protect`, face_align landmarks → soft band over both eyes,
+applied to every over-layer; `base.protect_eyes`). Apply the same rule in any new tool.
+Also: random-walk "marker scribbles" crossing the face read as ugly — keep red pen gestures off the head.

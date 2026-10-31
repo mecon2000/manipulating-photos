@@ -116,7 +116,9 @@
 .cmp-top, .cmp-actions { display: flex; gap: 8px; align-items: center; }
 .cmp-label { flex: 1; font-size: 12px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmp-actions .btn { flex: 1; }
-#cmp-pos { width: 100%; }
+.cmp-hold { width: 100%; min-height: 48px; font-weight: 600; user-select: none; -webkit-user-select: none;
+  touch-action: none; -webkit-touch-callout: none; }
+.cmp-hold.active { background: #2dd4bf; color: #000; }
 .btn-danger { border-color: var(--danger); color: var(--danger); }
 .chat-hint { font-size: 12px; color: var(--fg-dim); padding: 8px 14px 0; }
 .sp-bar { display: flex; gap: 6px; align-items: center; }

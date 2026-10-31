@@ -22,8 +22,15 @@ export function loadImg(url) {
 }
 
 // layers: manifest-shaped rows in bottom→top order, each with .url (resolved src).
-// compare: null | {img, mode: "wipe"|"side", pos: 0..1}
+// compare: null | {img, mode: "hold"|"side", showing: bool}
+//   hold: the canvas shows the savepoint only while the hold button/space is down
 export async function composite(W, H, layers, compare) {
+  if (compare && compare.mode === "hold" && compare.showing && compare.img) {
+    if (out.width !== W || out.height !== H) { out.width = W; out.height = H; }
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(compare.img, 0, 0, W, H);
+    return out;
+  }
   const imgs = await Promise.all(layers.map((L) =>
     L.enabled ? loadImg(L.url).catch(() => null) : Promise.resolve(null)));
   const side = compare && compare.mode === "side";
@@ -51,16 +58,6 @@ export async function composite(W, H, layers, compare) {
       ctx.fillStyle = "#111";
       ctx.fillRect(W, 0, cw - 2 * W, H);
       ctx.drawImage(compare.img, 0, 0, W, H);
-    } else {
-      const px = Math.round(W * compare.pos);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, px, H);
-      ctx.clip();
-      ctx.drawImage(compare.img, 0, 0, W, H);
-      ctx.restore();
-      ctx.fillStyle = "#2dd4bf";
-      ctx.fillRect(px - Math.max(2, W * 0.002), 0, Math.max(4, W * 0.004), H);
     }
   }
   return out;

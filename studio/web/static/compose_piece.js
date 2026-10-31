@@ -24,7 +24,7 @@ const usedSeeds = {};       // layer id -> seed chosen with "use", until the man
 const localVariants = {};   // layer id -> seeds rolled here (manifest only learns them on render)
 let inflight = 0;           // local requests not yet acknowledged
 let serverPending = false;
-let compare = null;         // {sp, img, mode: "wipe"|"side", pos}
+let compare = null;         // {sp, img, mode: "hold"|"side", showing}
 let pendingPin = null;
 let pinContext = null;
 
@@ -290,13 +290,14 @@ async function openCompare(n) {
   if (!sp) return closeCompare();
   try {
     const img = await loadImg(fileUrl(`${sp.rel}/final.jpg`, sp.t));
-    compare = { sp, img, mode: compare ? compare.mode : "wipe", pos: compare ? compare.pos : 0.5 };
+    compare = { sp, img, mode: compare ? compare.mode : "hold", showing: false };
   } catch (e) { toast(`no image for savepoint ${sp.n}`); return; }
   setMode("pan");
   canvas.setMarkers([]);
   $("sp-select").value = String(sp.n);
   $("compare-bar").classList.remove("hidden");
-  $("cmp-label").textContent = `← ${sp.name}  |  now →`;
+  $("cmp-label").textContent = `savepoint: ${sp.name}`;
+  $("cmp-hold").textContent = `Hold to see “${sp.name}”`;
   syncCompareUi();
   redraw();
 }
@@ -310,8 +311,8 @@ function closeCompare() {
 }
 
 function syncCompareUi() {
-  $("cmp-mode").textContent = compare.mode === "wipe" ? "Side by side" : "Wipe";
-  $("cmp-pos").classList.toggle("hidden", compare.mode !== "wipe");
+  $("cmp-mode").textContent = compare.mode === "hold" ? "Side by side" : "Hold to flip";
+  $("cmp-hold").classList.toggle("hidden", compare.mode !== "hold");
 }
 
 // ---- fav (full-res + PSD + favorites, ~20s in the background) ----
@@ -420,8 +421,24 @@ function boot() {
   };
   $("sp-select").onchange = (e) => (e.target.value ? openCompare(e.target.value) : closeCompare());
   $("cmp-close").onclick = closeCompare;
-  $("cmp-mode").onclick = () => { compare.mode = compare.mode === "wipe" ? "side" : "wipe"; syncCompareUi(); redraw(); };
-  $("cmp-pos").oninput = (e) => { if (compare) { compare.pos = parseFloat(e.target.value); redraw(); } };
+  $("cmp-mode").onclick = () => { compare.mode = compare.mode === "hold" ? "side" : "hold"; compare.showing = false; syncCompareUi(); redraw(); };
+  // press-and-hold flips to the savepoint; release = back to now (button or Space)
+  const hold = (on) => {
+    if (!compare || compare.mode !== "hold" || compare.showing === on) return;
+    compare.showing = on;
+    $("cmp-hold").classList.toggle("active", on);
+    redraw();
+  };
+  const hb = $("cmp-hold");
+  hb.addEventListener("pointerdown", (e) => { e.preventDefault(); hb.setPointerCapture?.(e.pointerId); hold(true); });
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach((ev) => hb.addEventListener(ev, () => hold(false)));
+  hb.addEventListener("contextmenu", (e) => e.preventDefault());
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && compare && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName || "")) {
+      e.preventDefault(); hold(true);
+    }
+  });
+  window.addEventListener("keyup", (e) => { if (e.code === "Space") hold(false); });
   $("cmp-restore").onclick = async () => {
     if (!compare || !confirm(`Restore “${compare.sp.name}”? (current state stays in history)`)) return;
     const n = compare.sp.n;

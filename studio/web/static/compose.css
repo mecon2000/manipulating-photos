@@ -153,3 +153,24 @@
 .removed-sec { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 4px; }
 .removed-head { cursor: pointer; font-size: 12px; color: var(--fg-dim); padding: 6px 0; }
 .removed-row .layer-name { color: var(--fg-dim); }
+
+/* ---- phone: photo pinned on top and as big as it can be; only the panel below scrolls,
+   so a checkbox tap and its effect are on screen together ---- */
+@media (max-width: 899px) {
+  body:has(.compose-side) .studio-layout { overflow: hidden; }
+  body:has(.compose-side) .canvas-col { flex: 0 0 auto; }
+  body:has(.compose-side) .canvas-wrap { height: 58dvh; }
+  body:has(.compose-side) .mode-bar { flex-direction: row; flex-wrap: nowrap; overflow-x: auto;
+    gap: 6px; padding: 4px 6px; align-items: center; }
+  body:has(.compose-side) .mode-bar .mode-toggle,
+  body:has(.compose-side) .mode-bar .sp-bar { flex: none; display: flex; gap: 4px; }
+  body:has(.compose-side) .mode-bar .mode-btn,
+  body:has(.compose-side) .mode-bar .btn,
+  body:has(.compose-side) .mode-bar select { font-size: 12px; padding: 4px 8px; min-height: 28px; }
+  body:has(.compose-side) .mode-bar .sp-select { max-width: 110px; }
+  body:has(.compose-side) .compare-bar { flex: none; }
+  body:has(.compose-side) .compose-side { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    -webkit-overflow-scrolling: touch; }
+  body:has(.compose-side) .compose-side .layer-row { min-height: 40px; }
+  body:has(.compose-side) .compose-side .chat-col { min-height: 50dvh; }
+}

@@ -140,3 +140,7 @@
   .compose-side .collapsible:not(.docked):not(#layers-sec) .collapsible-body { max-height: 28vh; }
   .compose-side .chat-col { flex: 0 0 30vh; min-height: 200px; }
 }
+
+.layers-head { display: flex; align-items: center; gap: 8px; padding-right: 10px; }
+.layers-head .collapsible-toggle { flex: 1; }
+.layers-head .btn { flex: none; white-space: nowrap; }

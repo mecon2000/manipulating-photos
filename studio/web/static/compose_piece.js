@@ -167,9 +167,45 @@ async function poll() {
 }
 
 // ---- panel handlers ----
+// "Only model + paper": remembers which layers were on, so the button flips between the
+// clean base and that set. Any manual toggle while clean starts a NEW set (forget the old).
+let cleanSaved = null;
+const contentLayers = () => (man ? man.layers.filter((L) => L.z === "under" || L.z === "over") : []);
+
+function syncCleanBtn() {
+  const b = $("clean-btn");
+  if (!b) return;
+  b.textContent = cleanSaved ? `↩ Previous layers (${cleanSaved.length})` : "Only model + paper";
+  b.classList.toggle("btn-accent", !!cleanSaved);
+}
+
+function onCleanClick() {
+  if (!man) return;
+  const kv = [];
+  if (cleanSaved) {
+    const want = new Set(cleanSaved);
+    for (const L of contentLayers()) {
+      const on = want.has(L.id);
+      if (L.enabled !== on) { L.enabled = on; kv.push(`${L.id}.enabled=${on}`); }
+    }
+    cleanSaved = null;
+  } else {
+    cleanSaved = contentLayers().filter((L) => L.enabled).map((L) => L.id);
+    if (!cleanSaved.length) { cleanSaved = null; toast("Already just model + paper"); return; }
+    for (const L of contentLayers()) {
+      if (L.enabled) { L.enabled = false; kv.push(`${L.id}.enabled=false`); }
+    }
+  }
+  syncCleanBtn();
+  redraw();
+  renderAll();
+  if (kv.length) persist("/quick-set", { kv, note: cleanSaved ? "only model + paper" : "back to previous layers" });
+}
+
 const panelCtx = () => ({
   layers: man ? man.layers : [], overrides, rolling, openNotes,
   onToggle(L, on) {
+    if (cleanSaved) { cleanSaved = null; syncCleanBtn(); }   // building a new set from clean
     L.enabled = on;
     redraw();
     renderAll();
@@ -449,6 +485,8 @@ function boot() {
     await mutate("/restore", { n }, "restoring…");
   };
   wireCollapsible("layers-toggle", "layers-body", () => "Layers");
+  $("clean-btn").onclick = onCleanClick;
+  syncCleanBtn();
   wireCollapsible("pins-toggle", "pins-body", () => `Notes (${state ? openPins(state).length : 0})`);
   wireCollapsible("hist-toggle", "hist-body", () => "History");
 

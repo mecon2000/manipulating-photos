@@ -162,19 +162,26 @@ function wireDrag(handle, item, list, ctx) {
       }
       if (before !== item.nextSibling) placeAt(list, item, sibs, before);
     };
-    const tick = () => {
+    // Edge auto-scroll: only in a thin band at the scroller's very edge, only after
+    // the finger has rested there ~350ms, and slow (max ~150px/s, ramps with depth).
+    let edgeSince = 0;
+    const tick = (t) => {
       raf = 0;
       const r = sc === document.scrollingElement
         ? { top: 0, bottom: window.innerHeight } : sc.getBoundingClientRect();
-      const zone = Math.min(48, (r.bottom - r.top) / 4);
-      let dy = 0;
-      if (y < r.top + zone) dy = -Math.ceil((r.top + zone - y) / 3);
-      else if (y > r.bottom - zone) dy = Math.ceil((y - (r.bottom - zone)) / 3);
-      if (dy) {
+      const zone = Math.min(28, (r.bottom - r.top) / 6);
+      let depth = 0;
+      if (y < r.top + zone) depth = -(r.top + zone - y) / zone;
+      else if (y > r.bottom - zone) depth = (y - (r.bottom - zone)) / zone;
+      if (!depth) { edgeSince = 0; return; }
+      if (!edgeSince) edgeSince = t;
+      if (t - edgeSince > 350) {
         const before = sc.scrollTop;
-        sc.scrollTop += dy;
-        if (sc.scrollTop !== before) { place(); raf = requestAnimationFrame(tick); }
+        sc.scrollTop += Math.sign(depth) * Math.max(1, Math.round(2.5 * Math.min(1, Math.abs(depth))));
+        if (sc.scrollTop === before) return;
+        place();
       }
+      raf = requestAnimationFrame(tick);
     };
     const move = (ev) => {
       y = ev.clientY;

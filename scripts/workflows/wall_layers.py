@@ -448,10 +448,11 @@ def gen_splatter(L, ctx):
     cov = float(p.get("coverage", 0.12))
     big = p.get("size") == "large"
     img = np.zeros((ctx.H, ctx.W), np.float32)
+    k = float(p.get("scale", 1.0))          # bigger drops + wider spread (zoomed-in subject)
     for cx, cy in region_pt(L.get("region", "around"), ctx, int(3 + cov * 20)):
-        spread = s * rng.uniform(0.03, 0.12)
+        spread = s * rng.uniform(0.03, 0.12) * k ** 0.5
         for _ in range(int(30 + cov * 300)):
-            r = s * min(0.03 if big else 0.012, 0.0008 * (rng.pareto(2.2) + 1))
+            r = s * min(0.03 if big else 0.012, 0.0008 * (rng.pareto(2.2) + 1)) * k
             x, y = rng.normal(cx, spread), rng.normal(cy, spread)
             if rng.random() < 0.15:        # elongated fleck
                 ang = rng.uniform(0, 180)
@@ -675,8 +676,9 @@ def gen_stain(L, ctx):
     img = np.zeros((ctx.H, ctx.W), np.float32)
     cov = float(p.get("coverage", 0.2))
     rings = p.get("type") in ("coffee",) and "finger" not in L.get("id", "")
-    for cx, cy in region_pt(L.get("region", "behind-head"), ctx, int(2 + cov * 10)):
-        R = int(s * rng.uniform(0.04, 0.08))
+    n = int(p.get("count") or (2 + cov * 10))
+    for cx, cy in region_pt(L.get("region", "behind-head"), ctx, n):
+        R = int(s * rng.uniform(0.04, 0.08) * float(p.get("scale", 1.0)))   # scale 4+: one giant partial print
         yy, xx = np.mgrid[-R:R, -int(R * 0.75):int(R * 0.75)].astype(np.float32)
         warp = fbm(yy.shape, rng, R * 0.3, 3) * R * 0.08
         if rings:
@@ -795,6 +797,8 @@ def place_object(L, ctx, rgb_obj, a_obj, size_frac, gray=False):
         sc = ctx.s * size_frac * rng.uniform(0.8, 1.2) / max(a_obj.shape)
         w, h = max(4, int(a_obj.shape[1] * sc)), max(4, int(a_obj.shape[0] * sc))
         ang = rng.normal(0, 10)
+        if p.get("angle") not in (None, ""):
+            ang = float(p["angle"])
         A = rotate(cv2.resize(a_obj, (w, h), interpolation=cv2.INTER_AREA), ang)
         C = np.dstack([rotate(cv2.resize(rgb_obj[..., c], (w, h), interpolation=cv2.INTER_AREA), ang)
                        for c in range(3)])

@@ -201,12 +201,51 @@ def bw(rgb, base, mask=None):
     return out.astype(np.float32)
 
 
-def subject_mask(d, im):
+def _lifted(im):
+    """Brightened copy for masking only: gamma lift + CLAHE pulls dark hair / shoulders
+    out of a dark room so the matting model sees their edge. Never shown."""
+    import cv2
+    a = np.asarray(im.convert("RGB"), np.float32) / 255
+    a = np.power(a, 0.45)
+    lab = cv2.cvtColor((a * 255).astype(np.uint8), cv2.COLOR_RGB2LAB)
+    lab[..., 0] = cv2.createCLAHE(3.0, (8, 8)).apply(lab[..., 0])
+    return Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
+
+
+def _person_mask(im):
+    """MediaPipe multiclass 'anything that's her' (skin/hair/clothes). Coarse edges, but it
+    keeps skin the matting model drops in low light (chest between harness straps)."""
+    import cv2
+    import mediapipe as mp
+    W, H = im.size
+    small = im.convert("RGB").copy()
+    small.thumbnail((1024, 1024))
+    model = Path("~/openclaw-venv/mediapipe_models/selfie_multiclass.tflite").expanduser()
+    with mp.tasks.vision.ImageSegmenter.create_from_options(mp.tasks.vision.ImageSegmenterOptions(
+            base_options=mp.tasks.BaseOptions(model_asset_path=str(model)),
+            output_category_mask=True)) as seg:
+        cm = seg.segment(mp.Image(image_format=mp.ImageFormat.SRGB,
+                                  data=np.ascontiguousarray(np.asarray(small)))).category_mask
+        cm = cm.numpy_view().squeeze()
+    person = ((cm > 0) * 255).astype(np.uint8)
+    person = cv2.morphologyEx(person, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8))
+    person = cv2.resize(person, (W, H), interpolation=cv2.INTER_LINEAR)
+    return cv2.GaussianBlur(person, (0, 0), max(1.0, W * 0.002))
+
+
+def subject_mask(d, im, boost=False):
+    """BiRefNet subject mask, cached. boost (base.mask_boost): union with BiRefNet on a
+    brightened copy and a MediaPipe person mask — recovers hair/skin lost in a dark room."""
     mp = d / "mask.png"
     if not mp.exists():
         from masking import build_mask
         m, _ = build_mask(im, affect="subject", exclude="", output_dir=str(d), feather=0)
-        m.convert("L").resize(im.size).save(mp)
+        m = np.asarray(m.convert("L").resize(im.size), np.uint8)
+        if boost:
+            mb, _ = build_mask(_lifted(im), affect="subject", exclude="", output_dir=str(d), feather=0)
+            m = np.maximum(m, np.asarray(mb.convert("L").resize(im.size), np.uint8))
+            m = np.maximum(m, _person_mask(im))
+        Image.fromarray(m).save(mp)
     return Image.open(mp).convert("L")
 
 
@@ -310,7 +349,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     all_layers: also generate disabled layers (not composited) so a client can toggle them.
     only: id of one layer — returns (None, [that entry]) without compositing (variants)."""
     src = Image.open(d / "source.jpg").convert("RGB")
-    mask_im = subject_mask(d, src)
+    mask_im = subject_mask(d, src, boost=bool(P["base"].get("mask_boost")))
     src_full_size = src.size
     face = face_points(d, src) if P["base"].get("protect_eyes", True) else {}
     if not full:
@@ -319,6 +358,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     mask = np.asarray(mask_im.resize((W, H)), np.float32) / 255
     rgb = np.asarray(src, np.float32) / 255
     sc = float(P["base"].get("subject_scale", 1.0))
+    ox, oy = 0, 0                 # where her scaled photo sits (for face landmarks)
     if sc < 0.999:   # shrink her inside the canvas (bottom-anchored) — BG is paper anyway
         import cv2
         w2, h2 = int(W * sc), int(H * sc)
@@ -327,6 +367,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         rgb, mask = np.ones_like(rgb), np.zeros_like(mask)
         x0 = (W - w2) // 2 + int(float(P["base"].get("subject_dx", 0)) * W)
         rgb[H - h2:, x0:x0 + w2], mask[H - h2:, x0:x0 + w2] = r2, m2
+        ox, oy = x0, H - h2
     s = min(W, H)
     rng0 = np.random.default_rng(P["seed"])
     base, bgc = P["base"], P["background"]
@@ -338,10 +379,12 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     ctx_args = dict(W=W, H=H, sbox=sbox, head=head_point(mask, sbox), mask=mask,
                     lum=lum if lum is not None else rgb.mean(2), palette=P.get("palette", []),
                     focus=focus,
-                    face={k: (v[0] * W / src_full_size[0], v[1] * W / src_full_size[0])
-                          for k, v in face.items()} if face and sc >= 0.999 else None)
-    # (subject_scale moves her, so eye coords only hold at scale 1)
-    protect = eye_protect(face, W, H, W / src_full_size[0]) if sc >= 0.999 else np.zeros((H, W), np.float32)
+                    face={k: (ox + v[0] * W / src_full_size[0] * min(sc, 1.0),
+                              oy + v[1] * W / src_full_size[0] * min(sc, 1.0))
+                          for k, v in face.items()} if face else None)
+    # (face landmarks follow her when subject_scale shrinks/moves her)
+    # eyes are protected at any subject_scale: use the landmarks already moved with her
+    protect = eye_protect(ctx_args["face"], W, H, 1.0) if ctx_args.get("face") else np.zeros((H, W), np.float32)
     quiet = float(P["base"].get("margin_quiet", 0.7))
 
     paper = wl.hex_rgb(bgc.get("color", "#f1eee8"))
@@ -536,6 +579,23 @@ def cmd_set(a):
         print("saved (no render)")
         return
     render(d, P, event="set", changes=changes, note=a.note)
+
+
+def cmd_recrop(a):
+    """New crop for an existing piece (zoom out / reframe): new source, mask and face
+    landmarks; every layer keeps its settings (positions are relative to the frame)."""
+    d, P = load(a.piece)
+    if a.boost:
+        P["base"]["mask_boost"] = True
+    src = smart_crop(Path(P["photo"]), d, a.crop, a.custom)
+    ImageOps.exif_transpose(Image.open(src)).convert("RGB").save(d / "source.jpg", quality=95)
+    for f in ("mask.png", "mask_affect.png", "face.json"):
+        (d / f).unlink(missing_ok=True)
+    P["crop"] = {"n": a.crop, "custom": a.custom}
+    P["decisions"].append({"t": time.strftime("%F %T"), "recrop": P["crop"],
+                           "mask_boost": P["base"].get("mask_boost", False), "note": a.note})
+    save(d, P)
+    render(d, P, event="recrop", crop=P["crop"], note=a.note)
 
 
 def cmd_add(a):
@@ -821,6 +881,8 @@ def main():
     fv = sub.add_parser("fav"); fv.add_argument("piece"); fv.add_argument("--name", default="")
     rs = sub.add_parser("restore"); rs.add_argument("piece"); rs.add_argument("--savepoint", required=True)
     o = sub.add_parser("options"); o.add_argument("piece"); o.add_argument("--question", required=True); o.add_argument("--vary", required=True)
+    rc = sub.add_parser("recrop"); rc.add_argument("piece"); rc.add_argument("--crop")
+    rc.add_argument("--custom"); rc.add_argument("--boost", action="store_true"); rc.add_argument("--note", default="")
     ad = sub.add_parser("add"); ad.add_argument("piece"); ad.add_argument("--id", required=True)
     ad.add_argument("--kind", required=True); ad.add_argument("--z", default="over", choices=["under", "over"])
     ad.add_argument("--region", default="anywhere"); ad.add_argument("--param", nargs="*")
@@ -832,7 +894,7 @@ def main():
     a = ap.parse_args()
     {"init": cmd_init, "render": cmd_render, "set": cmd_set, "options": cmd_options,
      "pick": cmd_pick, "variant": cmd_variant, "order": cmd_order, "save": cmd_save,
-     "restore": cmd_restore, "fav": cmd_fav, "add": cmd_add}[a.cmd](a)
+     "restore": cmd_restore, "fav": cmd_fav, "add": cmd_add, "recrop": cmd_recrop}[a.cmd](a)
 
 
 if __name__ == "__main__":

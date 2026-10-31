@@ -6,7 +6,7 @@
 import * as canvas from "./canvas.js";
 import { init as initChat } from "./chat.js";
 import { composite, loadImg } from "./compose_layers.js";
-import { renderPanel } from "./compose_panel.js";
+import { renderPanel, isDragging } from "./compose_panel.js";
 import { openPins, renderHistory, renderPinList, renderQuestions } from "./compose_side.js";
 
 const BASE = window.COMPOSE.base || "";
@@ -148,6 +148,7 @@ async function load(force = false) {
 
 // Poll the cheap /sync until the background render is done, then reload once.
 let pollT = null;
+let panelStale = false;
 function pollSoon(ms = 1500) {
   clearTimeout(pollT);
   pollT = setTimeout(poll, ms);
@@ -275,6 +276,7 @@ const panelCtx = () => ({
     renderAll();
     persist("/quick-set", { kv: [`${L.id}.seed=${seed}`], note: `use variant seed ${seed} for ${L.id}` });
   },
+  onDragEnd() { if (panelStale) renderAll(); },
   onNote(id) {
     openNotes.has(id) ? openNotes.delete(id) : openNotes.add(id);
     renderAll();
@@ -284,8 +286,16 @@ const panelCtx = () => ({
 // ---- render the side UI ----
 function renderAll() {
   if (!state) return;
-  if (man) renderPanel($("layers-body"), panelCtx());
-  else $("layers-body").innerHTML = '<div class="empty-hint">Building layers… (first render after the update)</div>';
+  if (man) {
+    if (isDragging()) panelStale = true;          // rebuild after the drop, not mid-drag
+    else {
+      const lb = $("layers-body"), sc = lb.closest(".collapsible-body") || lb;
+      const top = sc.scrollTop;                   // keep the scroll position across rebuilds
+      renderPanel(lb, panelCtx());
+      sc.scrollTop = top;
+      panelStale = false;
+    }
+  } else $("layers-body").innerHTML = '<div class="empty-hint">Building layers… (first render after the update)</div>';
   const lb = (src, cap) => lightbox(src, cap);
   renderQuestions($("questions"), state, {
     api: P_API, lightbox: lb,
@@ -528,7 +538,7 @@ function boot() {
   load(true).then(() => pollSoon(serverPending ? 1500 : 3000));
   // the agent (or another device) may change the piece — cheap poll while idle
   setInterval(() => {
-    if (!document.hidden && inflight === 0 && !serverPending && rolling.size === 0) load();
+    if (!document.hidden && inflight === 0 && !serverPending && rolling.size === 0 && !isDragging()) load();
   }, 6000);
 }
 

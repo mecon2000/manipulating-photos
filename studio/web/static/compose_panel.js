@@ -128,35 +128,69 @@ function placeAt(list, item, sibs, before) {
   sibs.slice(k).forEach((n) => list.appendChild(n));
 }
 
+// True while a row is being dragged — the page must not rebuild the list then
+// (a rebuild destroys the dragged node and silently ends the drag).
+let _dragging = false;
+export const isDragging = () => _dragging;
+
+function scrollerOf(node) {
+  for (let n = node.parentElement; n; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY;
+    if ((oy === "auto" || oy === "scroll") && n.scrollHeight > n.clientHeight) return n;
+  }
+  return document.scrollingElement;
+}
+
 // Pointer-based (touch-safe) drag: the item follows the finger by being
-// re-inserted among its siblings at the midpoint it crosses.
+// re-inserted among its siblings at the midpoint it crosses. Holding near the
+// top/bottom edge of the scrolling panel keeps scrolling (rAF), even without moving.
 function wireDrag(handle, item, list, ctx) {
   handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
+    _dragging = true;
     item.classList.add("dragging");
     const startOrder = [...list.children].map((c) => c.dataset.id).join(",");
-    const move = (ev) => {
+    const sc = scrollerOf(list);
+    let y = e.clientY, raf = 0;
+    const place = () => {
       const sibs = [...list.children].filter((c) => c !== item);
       let before = null;
       for (const s of sibs) {
         const r = s.getBoundingClientRect();
-        if (ev.clientY < r.top + r.height / 2) { before = s; break; }
+        if (y < r.top + r.height / 2) { before = s; break; }
       }
       if (before !== item.nextSibling) placeAt(list, item, sibs, before);
-      const lr = list.getBoundingClientRect();
-      const sc = list.closest(".studio-layout") || list.parentElement;
-      if (ev.clientY < lr.top + 30 || ev.clientY > window.innerHeight - 30) {
-        sc.scrollBy(0, ev.clientY < window.innerHeight / 2 ? -12 : 12);
+    };
+    const tick = () => {
+      raf = 0;
+      const r = sc === document.scrollingElement
+        ? { top: 0, bottom: window.innerHeight } : sc.getBoundingClientRect();
+      const zone = Math.min(48, (r.bottom - r.top) / 4);
+      let dy = 0;
+      if (y < r.top + zone) dy = -Math.ceil((r.top + zone - y) / 3);
+      else if (y > r.bottom - zone) dy = Math.ceil((y - (r.bottom - zone)) / 3);
+      if (dy) {
+        const before = sc.scrollTop;
+        sc.scrollTop += dy;
+        if (sc.scrollTop !== before) { place(); raf = requestAnimationFrame(tick); }
       }
+    };
+    const move = (ev) => {
+      y = ev.clientY;
+      place();
+      if (!raf) raf = requestAnimationFrame(tick);
     };
     const up = () => {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
+      if (raf) cancelAnimationFrame(raf);
+      _dragging = false;
       item.classList.remove("dragging");
       const ids = [...list.children].map((c) => c.dataset.id);
       if (ids.join(",") !== startOrder) ctx.onReorder(ids.reverse()); // → bottom→top
+      else ctx.onDragEnd?.();
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);

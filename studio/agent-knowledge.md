@@ -98,3 +98,4 @@ Tools: `compose_get` (stack, base/background, open questions, open pinned notes 
   gestures across the head, subject stays the focal point; prefer re-seeding a layer over
   deleting it when only its layout is wrong.
 - paper_scraps renders unreadable print only (Flux misspells: 'safeword' → 'Sefeworu'). Any real words go in kind=print or rendered text; quoted words in params.content are stripped.
+- Readable text on paper: kind=print, variant=typed (params.title, params.lines list, params.strike indices, sign). Each piece gets its own seeds (photo-mixed) and its own brush-stroke set (params.brush_seed) — never reuse another piece's visuals.

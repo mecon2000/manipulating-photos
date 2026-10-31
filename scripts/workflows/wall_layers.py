@@ -357,8 +357,9 @@ def gen_ink_smear(L, ctx):
     cov = float(p.get("coverage", 0.3))
     acc = np.zeros((ctx.H, ctx.W), np.float32)
     strokes = []
+    b0 = int(p.get("brush_seed", 500))      # 500 = the original shared library (old pieces)
     for k in range(4):
-        a = np.asarray(asset_image(BRUSH_PROMPT, 500 + k), np.float32) / 255
+        a = np.asarray(asset_image(BRUSH_PROMPT, b0 + k), np.float32) / 255
         lum = a @ np.array([0.3, 0.59, 0.11], np.float32)
         al = np.clip((0.85 - lum) / 0.55, 0, 1)
         ys, xs = np.nonzero(al > 0.2)
@@ -891,9 +892,46 @@ def render_stamp(size, rng, ring, center, color=(178, 34, 40)):
     return np.dstack([rgb, a])
 
 
+MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+
+
+def render_typed(w, rng, title, lines, strike=(), sign="Подпись ____________",
+                 ink=(30, 30, 34), red=(178, 34, 40)):
+    """A typewritten sheet with REAL text (Flux can't spell): title, numbered lines,
+    red strike-throughs on the `strike` indices, a signature line, uneven ribbon ink."""
+    n = len(lines) + 4
+    h = int(w * max(0.9, 0.16 + n * 0.085))
+    paper_rgb, paper_a = paper_object(asset_image(PAPER_PROMPT, 31 + rng.integers(3)))
+    paper = Image.fromarray((paper_rgb * 255).astype(np.uint8)).resize((w, h))
+    alpha = Image.fromarray((paper_a * 255).astype(np.uint8)).resize((w, h))
+    d = ImageDraw.Draw(paper)
+    m = int(w * 0.09)
+    fs = max(6, int(w * 0.042))
+    f = ImageFont.truetype(MONO, fs)
+    y = m
+    if title:
+        _txt(d, (w / 2, y + fs), title, fs * 1.35, MONO, ink)
+        y += fs * 3
+    for i, t in enumerate(lines):
+        x = m + rng.normal(0, w * 0.002)
+        d.text((x, y), t, font=f, fill=ink)
+        if i in strike:
+            tw = d.textlength(t, font=f)
+            yy = y + fs * 0.55 + rng.normal(0, fs * 0.08)
+            d.line([x - fs * 0.3, yy, x + tw + fs * 0.3, yy + rng.normal(0, fs * 0.15)],
+                   fill=red, width=max(1, fs // 6))
+        y += fs * 1.7
+    if sign:
+        d.text((m, y + fs), sign, font=f, fill=ink)
+    a = np.asarray(paper, np.float32) / 255
+    a = a + (1 - a) * np.clip(0.45 * fbm(a.shape[:2], rng, w * 0.015, 3), 0, 0.7)[..., None]
+    return np.clip(a, 0, 1), np.asarray(alpha, np.float32) / 255
+
+
 def gen_print(L, ctx):
     """Printed ephemera with real text: params.variant in PRINTS (tobacco_talon,
-    sugar_talon, soap_talon, papirosy), or variant 'stamp' with params.ring/center."""
+    sugar_talon, soap_talon, papirosy), variant 'stamp' with params.ring/center, or
+    variant 'typed' with params.title / lines / strike (indices) / sign."""
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     v = p.get("variant", "tobacco_talon")
     size = int(s * (0.14 + 0.5 * float(p.get("coverage", 0.15))))
@@ -901,6 +939,18 @@ def gen_print(L, ctx):
         rgba = render_stamp(size, rng, p.get("ring", ["ИСПОЛКОМ", "ГОРСОВЕТ", "1990"]),
                             p.get("center", "ВЫДАНО"), tuple(int(c * 255) for c in hex_rgb(p.get("color"))))
         return place_object(L, ctx, rgba[..., :3], rgba[..., 3], size / s)
+    if v == "typed":
+        def _list(x):
+            if isinstance(x, str):
+                try:
+                    x = json.loads(x)
+                except ValueError:
+                    x = [t for t in x.split("/") if t.strip()]
+            return x if isinstance(x, list) else [x]
+        rgb_o, a_o = render_typed(size, rng, p.get("title", ""), [str(t) for t in _list(p.get("lines") or [])],
+                                  tuple(int(i) for i in _list(p.get("strike", []))),
+                                  p.get("sign", "Подпись ____________"))
+        return place_object(L, ctx, rgb_o, a_o, size / s, gray=bool(p.get("gray", True)))
     rgb_o, a_o = render_print(v, size, rng)
     return place_object(L, ctx, rgb_o, a_o, size / s)
 

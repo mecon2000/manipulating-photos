@@ -88,8 +88,10 @@ Layer kinds the compositor can render: {kinds}.
   "1980s Soviet bread ration coupon, perforated edge, faded print, stamp".
 - TEXT MUST BE REAL. Generated images ("asset") render fake lettering, so never ask an
   asset for text. For printed ephemera with words use kind "print": params.variant one of
-  tobacco_talon | sugar_talon | soap_talon | papirosy | stamp (stamp: params.ring = list of
-  real words around the ring, params.center = real word). Any Russian must be correct Russian.
+  tobacco_talon | sugar_talon | soap_talon | papirosy | stamp | typed (stamp: params.ring =
+  list of real words around the ring, params.center = real word; typed: a typewritten sheet,
+  params.title, params.lines = list of real lines, params.strike = indices crossed out in red).
+  The talon/papirosy variants are Soviet — only use them if the model notes ask for that era. Any Russian must be correct Russian.
 - "glyph_rain": columns of characters (params.charset: "katakana|latin|cyrillic|digits|ascii").
 - "scribbles": params.subject = what is doodled, params.medium.
 - "paper_scraps": params.content = what KIND of printed matter (texture only — it renders as

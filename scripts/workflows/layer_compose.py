@@ -128,6 +128,10 @@ def cmd_init(a):
     im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
     im.save(d / "source.jpg", quality=95)
     seed = a.seed if a.seed is not None else int(time.time()) % 100000
+    # mix the photo in: the same --seed on two photos must not give two pieces the
+    # same scraps / glyph layouts / brush strokes (Elina came out as Elly's twin)
+    import zlib
+    seed = (seed + zlib.crc32(photo.stem.encode())) % 100000
     P = {"schema": 1, "photo": str(photo), "crop": {"n": a.crop, "custom": a.custom},
          "recipe": a.recipe, "seed": seed, "wildness": a.wildness,
          "palette": recipe.get("palette", []), "base": copy.deepcopy(recipe["base"]),
@@ -136,6 +140,8 @@ def cmd_init(a):
     P["base"].setdefault("edge_dissolve", 0.45)
     for i, L in enumerate(P["layers"]):
         L.setdefault("seed", seed + 101 * (i + 1))
+        if L.get("kind") == "ink_smear":      # own set of Flux brush strokes per piece
+            L.setdefault("params", {}).setdefault("brush_seed", 1000 + (seed % 9000) * 4)
     for lid in filter(None, (a.disable or "").split(",")):
         apply_set(P, f"{lid}.enabled", False)
     for kv in a.set or []:

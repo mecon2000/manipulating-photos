@@ -18,7 +18,8 @@ export function renderPanel(body, ctx) {
   const top = ctx.layers.slice().reverse();
   const fixedTop = top.filter((L) => L.z === "finish");
   const fixedBottom = top.filter((L) => L.z === "base");
-  const movable = top.filter((L) => !["finish", "base"].includes(L.z));
+  const movable = top.filter((L) => !["finish", "base"].includes(L.z) && !L.removed);
+  const removed = top.filter((L) => L.removed);
 
   fixedTop.forEach((L) => body.appendChild(fixedRow(L)));
   const list = el("div", "drag-list");
@@ -35,7 +36,27 @@ export function renderPanel(body, ctx) {
   });
   body.appendChild(list);
   fixedBottom.forEach((L) => body.appendChild(fixedRow(L)));
+  if (removed.length) body.appendChild(removedSection(removed, ctx));
   body.appendChild(el("div", "panel-legend", `top of the list = top of the stack · ${RIFF_TIP}`));
+}
+
+let removedOpen = false;   // survives panel re-renders
+function removedSection(removed, ctx) {
+  const det = el("details", "removed-sec");
+  det.open = removedOpen;
+  det.ontoggle = () => { removedOpen = det.open; };
+  det.appendChild(el("summary", "removed-head", `Removed (${removed.length})`));
+  removed.forEach((L) => {
+    const row = el("div", "layer-row removed-row");
+    const n = el("span", "layer-name", pretty(L.id));
+    n.title = `${L.id} · ${L.kind || ""}`;
+    const back = el("button", "btn btn-small", "restore");
+    back.title = "put it back in the stack where it was";
+    back.onclick = () => ctx.onRestore(L);
+    row.append(n, back);
+    det.appendChild(row);
+  });
+  return det;
 }
 
 function pretty(id) {
@@ -75,6 +96,9 @@ function layerRows(wrap, L, ctx, list) {
   roll.onclick = () => ctx.onRoll(L);
   row.append(handle, cb, name);
   wrap.appendChild(row);
+  const rm = el("button", "rmbtn", "✕");
+  rm.title = "remove (goes to Removed at the bottom — restorable)";
+  rm.onclick = () => ctx.onRemove(L);
 
   const seeds = [L.seed, ...(L.variants || []).filter((s) => s !== L.seed)];
   if (seeds.length > 1) {
@@ -90,6 +114,7 @@ function layerRows(wrap, L, ctx, list) {
     row.appendChild(chips);
   }
   row.appendChild(roll);
+  row.appendChild(rm);
   if (ctx.openNotes.has(L.id)) {
     wrap.appendChild(el("div", "layer-note", L.note || "(no note)"));
   }

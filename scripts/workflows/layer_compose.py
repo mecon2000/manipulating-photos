@@ -93,7 +93,7 @@ def apply_set(P, key, val):
                          "(normalized, ';' between boxes; empty value clears).")
     for L in P["layers"]:
         if L["id"] == head:
-            if k in ("z", "enabled", "seed", "region", "kind"):
+            if k in ("z", "enabled", "removed", "seed", "region", "kind"):
                 L[k] = val
             else:
                 L["params"][k] = val
@@ -347,7 +347,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
             return None
         return g(L, ctx)
 
-    live = [L for L in P["layers"] if L.get("enabled", True)]
+    live = [L for L in P["layers"] if L.get("enabled", True) and not L.get("removed")]
     gen_set = P["layers"] if (all_layers or only) else live
     if only:
         gen_set = [L for L in P["layers"] if L["id"] == only]
@@ -357,7 +357,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     def emit(L, lay):
         nonlocal out
         lay = apply_boxes(L, lay, W, H, s)
-        on = L.get("enabled", True)
+        on = L.get("enabled", True) and not L.get("removed")
         if on and not only:
             out = composite(out, lay)
         stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay, "seed": L.get("seed")})
@@ -466,7 +466,8 @@ def render(d, P, full=False, event="render", **meta):
             written.add(fn)
             L = byid.get(e["id"], {})
             entries.append({"id": e["id"], "file": fn, "kind": L.get("kind", e["id"]),
-                            "z": e["z"], "enabled": e["enabled"], "blend": e["layer"].blend,
+                            "z": e["z"], "enabled": bool(L.get("enabled", True)) if L else True,
+                            "removed": bool(L.get("removed")), "blend": e["layer"].blend,
                             "riff": bool(L.get("riff")), "note": L.get("note", ""),
                             "seed": L.get("seed"), "variants": L.get("variants", [])})
     if full:

@@ -144,3 +144,10 @@
 .layers-head { display: flex; align-items: center; gap: 8px; padding-right: 10px; }
 .layers-head .collapsible-toggle { flex: 1; }
 .layers-head .btn { flex: none; white-space: nowrap; }
+
+.rmbtn { flex: none; min-width: 32px; min-height: 32px; background: none; border: 1px solid transparent;
+  color: var(--fg-dim); border-radius: 6px; font-size: 14px; cursor: pointer; }
+.rmbtn:hover { color: #f87171; border-color: var(--border); }
+.removed-sec { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 4px; }
+.removed-head { cursor: pointer; font-size: 12px; color: var(--fg-dim); padding: 6px 0; }
+.removed-row .layer-name { color: var(--fg-dim); }

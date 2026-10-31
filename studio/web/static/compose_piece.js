@@ -171,7 +171,7 @@ async function poll() {
 // "Only model + paper": remembers which layers were on, so the button flips between the
 // clean base and that set. Any manual toggle while clean starts a NEW set (forget the old).
 let cleanSaved = null;
-const contentLayers = () => (man ? man.layers.filter((L) => L.z === "under" || L.z === "over") : []);
+const contentLayers = () => (man ? man.layers.filter((L) => (L.z === "under" || L.z === "over") && !L.removed) : []);
 
 function syncCleanBtn() {
   const b = $("clean-btn");
@@ -205,6 +205,18 @@ function onCleanClick() {
 
 const panelCtx = () => ({
   layers: man ? man.layers : [], overrides, rolling, openNotes,
+  onRemove(L) {
+    L.removed = true;
+    redraw();
+    renderAll();
+    persist("/quick-set", { kv: [`${L.id}.removed=true`], note: `removed: ${L.id}` });
+  },
+  onRestore(L) {
+    L.removed = false;
+    redraw();
+    renderAll();
+    persist("/quick-set", { kv: [`${L.id}.removed=false`], note: `restored: ${L.id}` });
+  },
   onToggle(L, on) {
     if (cleanSaved) { cleanSaved = null; syncCleanBtn(); }   // building a new set from clean
     L.enabled = on;
@@ -220,7 +232,9 @@ const panelCtx = () => ({
       if (L.id === "subject" || L.z === "subject") { z = "over"; continue; }
       L.z = z;
     }
+    // removed layers aren't in the drag list — keep them (server keeps their slots too)
     man.layers = [...man.layers.filter((L) => L.z === "base"), ...content,
+                  ...man.layers.filter((L) => L.removed && !content.includes(L)),
                   ...man.layers.filter((L) => L.z === "finish")];
     redraw();
     renderAll();

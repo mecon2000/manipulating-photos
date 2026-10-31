@@ -32,7 +32,7 @@ export async function composite(W, H, layers, compare) {
     return out;
   }
   const imgs = await Promise.all(layers.map((L) =>
-    L.enabled ? loadImg(L.url).catch(() => null) : Promise.resolve(null)));
+    L.enabled && !L.removed ? loadImg(L.url).catch(() => null) : Promise.resolve(null)));
   const side = compare && compare.mode === "side";
   const cw = side ? W * 2 + Math.round(W * 0.02) : W;
   if (out.width !== cw || out.height !== H) { out.width = cw; out.height = H; }

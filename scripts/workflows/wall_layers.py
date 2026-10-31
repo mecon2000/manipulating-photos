@@ -75,6 +75,10 @@ def solid(ctx, color, alpha, **kw):
 
 def region_box(region, ctx):
     W, H = ctx.W, ctx.H
+    if str(region).startswith("at:"):        # pinned: "at:0.2,0.88" (normalized centre)
+        fx, fy = (float(v) for v in region[3:].split(","))
+        r = 0.01 * min(W, H)
+        return (int(fx * W - r), int(fy * H - r), int(fx * W + r), int(fy * H + r))
     x0, y0, x1, y1 = ctx.sbox
     sw, sh = x1 - x0, y1 - y0
     hx, hy = ctx.head
@@ -95,6 +99,8 @@ def region_box(region, ctx):
 def region_pt(region, ctx, n=1):
     x0, y0, x1, y1 = region_box(region, ctx)
     rng = ctx.rng
+    if str(region).startswith("at:"):
+        return np.array([((x0 + x1) / 2, (y0 + y1) / 2)] * n)
     if region == "edges":
         pts = []
         for _ in range(n):

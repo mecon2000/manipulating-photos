@@ -305,6 +305,28 @@ def rune_block(w, h, ctx, glyph, t_frac=0.16, style="block", vertical=True, gap=
     return out
 
 
+CALLIG_FONT = str(Path(__file__).resolve().parent / "fonts" / "RuslanDisplay-Regular.ttf")
+
+
+def text_block(text, g, font=CALLIG_FONT):
+    """REAL words (Cyrillic ok) as brush lettering, glyph height ≈ g; '/' starts a new
+    line (centred). Alpha 0-1."""
+    f = ImageFont.truetype(font, max(8, int(g)))
+    lines = [t.strip() for t in text.split("/") if t.strip()] or [text]
+    d0 = ImageDraw.Draw(Image.new("L", (1, 1)))
+    bbs = [d0.textbbox((0, 0), t, font=f) for t in lines]
+    lh = max(b[3] - b[1] for b in bbs)
+    W = max(b[2] - b[0] for b in bbs) + int(g * 0.4)
+    H = int(lh * len(lines) + g * 0.25 * (len(lines) - 1) + g * 0.4)
+    im = Image.new("L", (W, H), 0)
+    dr = ImageDraw.Draw(im)
+    for i, (t, b) in enumerate(zip(lines, bbs)):
+        x = (W - (b[2] - b[0])) / 2 - b[0]
+        y = g * 0.2 + i * (lh + g * 0.25) - b[1]
+        dr.text((x, y), t, font=f, fill=255)
+    return np.asarray(im, np.float32) / 255
+
+
 def gen_runes(L, ctx, mode):
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     cov = float(p.get("coverage", 0.35))
@@ -322,16 +344,37 @@ def gen_runes(L, ctx, mode):
     else:                                    # big wet-brush calligraphy lines
         n = max(1, int(1 + cov * 5))
         vertical = p.get("orientation") == "vertical"
-        for _ in range(n):
+        # params.text: real words instead of runes. They take the FIRST line's spot, size and
+        # rotation; the other lines are dropped (rng still drawn, so nothing else moves).
+        text = str(p.get("text") or p.get("words") or "").strip()
+        for i in range(n):
             g = s * rng.uniform(0.07, 0.13)
             cnt = rng.integers(4, 9)
             bw_, bh_ = (int(g * 1.2), int(g * 1.15 * cnt)) if vertical else (int(g * 1.15 * cnt), int(g * 1.3))
             blk = rune_block(bw_, bh_, ctx, g, 0.2, "brush", vertical=False, gap=0.0)
-            blk = rotate(blk, rng.normal(0, 6))
+            ang = rng.normal(0, 6)
             cx, cy = rng.uniform(x0, x1), rng.uniform(y0, y1)
-            stamp(acc, blk, cx, cy)
+            if text:
+                if i:
+                    continue
+                blk = text_block(text, g * float(p.get("text_scale", 0.8)))
+                if vertical:
+                    blk = np.rot90(blk, -1)
+                blk = rotate(blk, ang)
+                if p.get("at"):                       # pin the words to a spot (normalized centre)
+                    ax, ay = [float(v) for v in str(p["at"]).split(",")[:2]]
+                    cx, cy = ax * ctx.W, ay * ctx.H
+                m = ctx.s * 0.03                      # words must be whole: keep inside the frame
+                if blk.shape[1] > ctx.W - 2 * m:
+                    blk = cv2.resize(blk, (int(ctx.W - 2 * m), int(blk.shape[0] * (ctx.W - 2 * m) / blk.shape[1])))
+                cx = min(max(cx, m + blk.shape[1] / 2), ctx.W - m - blk.shape[1] / 2)
+                cy = min(max(cy, m + blk.shape[0] / 2), ctx.H - m - blk.shape[0] / 2)
+                stamp(acc, blk, cx, cy)
+                continue
+            stamp(acc, rotate(blk, ang), cx, cy)
     # light dry-brush breakup + chipped edges (marks must still read as glyphs)
-    chip = np.clip(1.4 + 0.9 * fbm(acc.shape, rng, s * 0.003, 2), 0, 1)
+    chip = np.clip((1.7 if (p.get("text") or p.get("words")) else 1.4)
+                   + 0.9 * fbm(acc.shape, rng, s * 0.003, 2), 0, 1)
     acc = acc * chip * (0.75 + 0.25 * dry_texture(acc.shape, ctx, 90, 0.3))
     acc = np.clip(acc * 1.2, 0, 1)
     if p.get("drips", mode == "block"):

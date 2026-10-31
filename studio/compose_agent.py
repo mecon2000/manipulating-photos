@@ -200,6 +200,23 @@ async def _with_pin_label(piece: str, message: str, pin_id: str, wait: float = 2
         await asyncio.sleep(1.0)
 
 
+def _layer_hashes(piece: str) -> dict:
+    """id -> hash of its rendered layer PNG (to detect a set that changed nothing)."""
+    import hashlib
+    d = compose.piece_dir(piece) / "layers"
+    try:
+        m = json.loads((d / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for L in m.get("layers", []):
+        try:
+            out[L["id"]] = hashlib.md5((d / L["file"]).read_bytes()).hexdigest()
+        except OSError:
+            pass
+    return out
+
+
 def _server(piece: str, events: asyncio.Queue):
     gate = {"dirty": False}   # a compose_set happened and nobody looked since
 
@@ -231,8 +248,23 @@ def _server(piece: str, events: asyncio.Queue):
         kv = args.get("kv") or []
         await emit({"type": "tool_start", "name": "compose_set", "detail": ", ".join(map(str, kv))[:80]})
         try:
+            before = await asyncio.to_thread(_layer_hashes, _p(args))
             await asyncio.to_thread(compose.do_set, _p(args), kv, args.get("note") or "")
             gate["dirty"] = True
+            after = await asyncio.to_thread(_layer_hashes, _p(args))
+            # only real param edits: on/off, removed, z and order never change the layer's own PNG
+            touched = {str(x).split(".", 1)[0] for x in kv
+                       if "=" in str(x) and str(x).split("=", 1)[0].count(".") >= 1
+                       and str(x).split("=", 1)[0].split(".", 1)[1] not in ("enabled", "removed", "z", "note")
+                       } - {"base", "background", "finish"}
+            dead = [i for i in touched if i in before and before.get(i) == after.get(i)]
+            if dead:
+                await emit({"type": "graph_changed"})
+                await emit({"type": "tool_end", "name": "compose_set", "detail": "NO CHANGE"})
+                return _err(f"set {kv} saved, but layer(s) {dead} rendered EXACTLY the same — the "
+                            "generator doesn't read that param (or the value was already in effect). "
+                            "Nothing visible changed: do NOT tell Ronnie it's done. Try a param the "
+                            "kind supports (compose_get shows each layer's params) or say it can't.")
             await emit({"type": "graph_changed"})
             await emit({"type": "tool_end", "name": "compose_set", "detail": "rendered"})
             return _ok(f"set {kv} and re-rendered final.jpg (now on Ronnie's canvas).")

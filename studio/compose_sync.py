@@ -126,7 +126,9 @@ def variant(piece: str, layer: str, seed: int | None = None, count: int = 3) -> 
 
 def save(piece: str, name: str) -> list[dict]:
     compose.piece_dir(piece)
-    name = (name or "").strip()[:80] or time.strftime("save %H:%M")
+    # no name asked: save points are just numbered (#1, #2 …)
+    n = max([int(sp.get("n", 0)) for sp in savepoints(piece)] + [0]) + 1
+    name = (name or "").strip()[:80] or f"#{n}"
     compose.run_cli(piece, ["save", str(compose.PIECES / piece), "--name", name], timeout=120)
     return savepoints(piece)
 

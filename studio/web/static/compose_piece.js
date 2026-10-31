@@ -597,13 +597,12 @@ function boot() {
     if (compare && compare.sp.n === st.n) closeCompare(); else openCompare(st.n);
   };
   $("save-btn").onclick = async () => {
-    const name = prompt("Name this save point", "");
-    if (name === null) return;
     try {
-      const r = await post("/save", { name });
+      const r = await post("/save", {});      // numbered automatically (#1, #2 …)
       state.savepoints = r.savepoints;
       renderSavepoints();
-      toast("Saved");
+      const last = r.savepoints[r.savepoints.length - 1];
+      toast(`Saved ${last ? last.name : ""}`);
     } catch (e) { toast(`Save failed: ${e.message}`, 6000); }
   };
   $("sp-select").onchange = (e) => (e.target.value ? openCompare(e.target.value) : closeCompare());

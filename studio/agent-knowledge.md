@@ -103,3 +103,4 @@ Tools: `compose_get` (stack, base/background, open questions, open pinned notes 
 - Choice cards: vary ONE param (stamp.center=A|B|C); '|' separates values that contain commas. Never vary a whole params object.
 - BDSM emblem: print variant stamp with params.center=@triskelion draws the triskelion. For a dominant model, nothing on her skin claims HER (no 'property' marks).
 - New element = NEW layer (compose_add), never repurpose an existing layer's kind/prompt — Ronnie toggles each element separately.
+- Calligraphy can spell real words: red_calligraphy*.text (Cyrillic ok, Ruslan Display font; '/' = new line; .at=x,y pins it; .text_scale). There is NO 'words' param. compose_set now errors if a layer renders identically — never claim a change you didn't see.

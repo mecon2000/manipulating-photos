@@ -241,7 +241,8 @@ def _server(piece: str, events: asyncio.Queue):
             return _err(f"compose_set failed: {e}")
 
     @tool("compose_options", "Raise a VISUAL question as a choice card: renders A/B/C with "
-          "one key varied. vary: 'id.param=a,b,c' (2-4 values). Ronnie taps one; the pick is "
+          "one key varied. vary: 'id.param=a,b,c' (2-4 values; use a|b|c when a value contains "
+          "commas, e.g. lists). Vary ONE param, never a whole params object. Ronnie taps one; the pick is "
           "applied + logged automatically. Takes ~10s per option.",
           {"piece": str, "question": str, "vary": str})
     async def compose_options(args):

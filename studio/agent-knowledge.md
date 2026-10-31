@@ -100,3 +100,5 @@ Tools: `compose_get` (stack, base/background, open questions, open pinned notes 
 - paper_scraps renders unreadable print only (Flux misspells: 'safeword' → 'Sefeworu'). Any real words go in kind=print or rendered text; quoted words in params.content are stripped.
 - Readable text on paper: kind=print, variant=typed (params.title, params.lines list, params.strike indices, sign). Each piece gets its own seeds (photo-mixed) and its own brush-stroke set (params.brush_seed) — never reuse another piece's visuals.
 - No torn-edge effect: base.edge_dissolve stays 0 (Ronnie prefers the clean cut-out).
+- Choice cards: vary ONE param (stamp.center=A|B|C); '|' separates values that contain commas. Never vary a whole params object.
+- BDSM emblem: print variant stamp with params.center=@triskelion draws the triskelion. For a dominant model, nothing on her skin claims HER (no 'property' marks).

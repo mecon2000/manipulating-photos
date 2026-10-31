@@ -348,10 +348,53 @@ function renderPins() {
   });
 }
 
+// Lightbox. lightbox(src, cap) for one image, or lightbox(items, i) with items =
+// [{src, cap, pick?}] to flip between them: ‹ › buttons, tap the left/right third,
+// arrow keys. No animation — an instant swap makes the differences jump out.
+let lbItems = [], lbIdx = 0;
 function lightbox(src, cap) {
-  $("lb-img").src = src;
-  $("lb-cap").textContent = cap || "";
+  if (Array.isArray(src)) { lbItems = src; lbIdx = cap || 0; }
+  else { lbItems = [{ src, cap }]; lbIdx = 0; }
+  lbItems.forEach((it) => { const im = new Image(); im.src = it.src; });   // preload: instant flips
+  lbShow();
   $("lightbox").classList.remove("hidden");
+}
+function lbShow() {
+  const it = lbItems[lbIdx];
+  if (!it) return;
+  $("lb-img").src = it.src;
+  const n = lbItems.length;
+  $("lb-cap").textContent = (n > 1 ? `${lbIdx + 1}/${n}  ` : "") + (it.cap || "");
+  $("lb-prev").classList.toggle("hidden", n < 2);
+  $("lb-next").classList.toggle("hidden", n < 2);
+  const pk = $("lb-pick");
+  pk.classList.toggle("hidden", !it.pick);
+  if (it.pick) { pk.textContent = it.pickLabel || "Pick"; pk.onclick = (e) => { e.stopPropagation(); lbClose(); it.pick(); }; }
+}
+function lbStep(d) {
+  if (lbItems.length < 2) return;
+  lbIdx = (lbIdx + d + lbItems.length) % lbItems.length;
+  lbShow();
+}
+function lbClose() { $("lightbox").classList.add("hidden"); }
+function wireLightbox() {
+  const lb = $("lightbox");
+  lb.onclick = (e) => {
+    if (lbItems.length > 1 && e.target.closest("#lb-img, .lb-stage")) {
+      const r = lb.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
+      if (x < 0.33) return lbStep(-1);
+      if (x > 0.67) return lbStep(1);
+    }
+    lbClose();
+  };
+  $("lb-prev").onclick = (e) => { e.stopPropagation(); lbStep(-1); };
+  $("lb-next").onclick = (e) => { e.stopPropagation(); lbStep(1); };
+  document.addEventListener("keydown", (e) => {
+    if (lb.classList.contains("hidden")) return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); lbStep(-1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); lbStep(1); }
+    else if (e.key === "Escape") lbClose();
+  });
 }
 
 // ---- savepoints + compare ----
@@ -546,7 +589,7 @@ function boot() {
   });
   $("pin-cancel").onclick = closePin;
   $("pin-send").onclick = sendPin;
-  $("lightbox").onclick = () => $("lightbox").classList.add("hidden");
+  wireLightbox();
   $("fav-btn").onclick = startFav;
   $("vs-start-btn").onclick = () => {
     const st = (state.savepoints || []).find((s) => s.kind === "start" || s.n === 0);

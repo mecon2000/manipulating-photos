@@ -268,8 +268,9 @@ def do_render(piece: str, full: bool = False) -> dict:
 def do_options(piece: str, question: str, vary: str) -> dict:
     piece_dir(piece)
     key, sep, vals = vary.partition("=")
-    if not sep or len([v for v in vals.split(",") if v]) < 2:
-        raise ValueError("vary must be key=a,b[,c] with 2+ values")
+    parts = vals.split("|") if "|" in vals else vals.split(",")
+    if not sep or len([v for v in parts if v.strip()]) < 2:
+        raise ValueError("vary must be key=a,b[,c] (or a|b|c when values contain commas) with 2+ values")
     _kv([f"{key}=x"])
     out = run_cli(piece, ["options", str(PIECES / piece), "--question",
                           question, "--vary", vary])

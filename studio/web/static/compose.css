@@ -184,3 +184,7 @@
   .split-handle span { width: 48px; height: 5px; border-radius: 3px; background: var(--fg-dim); opacity: 0.6; }
   .split-handle.active span { background: var(--accent); opacity: 1; }
 }
+.lightbox .lb-stage { display: flex; align-items: center; justify-content: center; max-width: 100%; }
+.lightbox .lb-bar { display: flex; align-items: center; gap: 10px; padding: 0 12px; max-width: 100%; }
+.lightbox .lb-cap { flex: 1; min-width: 0; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lightbox .lb-nav { font-size: 26px; min-width: 52px; min-height: 44px; }

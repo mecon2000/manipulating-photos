@@ -17,17 +17,21 @@ export function renderQuestions(box, state, h) {
     const opts = el("div", "q-opts");
     const comment = el("input", "text-in");
     comment.placeholder = "comment (optional)";
-    for (const o of q.options) {
+    const items = q.options.map((o) => ({
+      src: `${h.api}/file/questions/${o.file}`, cap: `${o.letter} — ${o.value}`,
+      pick: () => h.onPick(q, o.letter, comment.value.trim()), pickLabel: `Pick ${o.letter}`,
+    }));
+    q.options.forEach((o, i) => {
       const col = el("div", "q-opt");
       const img = el("img");
       img.loading = "lazy";
       img.src = `${h.api}/file/questions/${o.file}?w=600`;
-      img.onclick = () => h.lightbox(`${h.api}/file/questions/${o.file}`, `${o.letter} — ${o.value}`);
+      img.onclick = () => h.lightbox(items, i);
       const btn = el("button", "btn btn-accent", o.letter);
       btn.onclick = () => h.onPick(q, o.letter, comment.value.trim());
       col.append(img, btn, el("div", "q-val", String(o.value)));
       opts.appendChild(col);
-    }
+    });
     card.append(opts, comment);
     box.appendChild(card);
   }

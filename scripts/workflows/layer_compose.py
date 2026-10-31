@@ -695,7 +695,11 @@ def cmd_restore(a):
 def cmd_options(a):
     d, P = load(a.piece)
     key, _, vals = a.vary.partition("=")
-    vals = [parse_val(v) for v in vals.split(",")]
+    # '|' separates options whenever a value itself has commas (lists, JSON, boxes);
+    # splitting JSON on ',' produced fragment options that all rendered the same
+    vals = [parse_val(v.strip()) for v in (vals.split("|") if "|" in vals else vals.split(","))]
+    if key.endswith(".params") or any(isinstance(v, str) and v.lstrip().startswith("{") for v in vals):
+        raise SystemExit("vary ONE param (e.g. stamp.center=A|B|C), not a whole params object")
     qd = d / "questions"
     qd.mkdir(exist_ok=True)
     qn = f"q{len(list(qd.glob('q*.json'))) + 1}"

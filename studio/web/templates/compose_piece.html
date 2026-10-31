@@ -85,7 +85,15 @@
     <button id="pin-send" class="btn btn-accent">Pin + send</button>
   </div>
 </div>
-<div id="lightbox" class="lightbox hidden"><img id="lb-img" alt=""><div id="lb-cap" class="lb-cap"></div></div>
+<div id="lightbox" class="lightbox hidden">
+  <div class="lb-stage"><img id="lb-img" alt=""></div>
+  <div class="lb-bar">
+    <button id="lb-prev" class="btn lb-nav hidden" aria-label="previous">‹</button>
+    <div id="lb-cap" class="lb-cap"></div>
+    <button id="lb-pick" class="btn btn-accent hidden">Pick</button>
+    <button id="lb-next" class="btn lb-nav hidden" aria-label="next">›</button>
+  </div>
+</div>
 <div id="toast" class="toast hidden"></div>
 
 <script>window.COMPOSE = { base: "{{ base }}", piece: {{ piece|tojson }} };</script>

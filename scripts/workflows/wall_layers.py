@@ -869,6 +869,24 @@ def render_print(variant, w, rng, ink=(178, 34, 40)):
     return np.clip(a, 0, 1), np.asarray(alpha, np.float32) / 255
 
 
+def draw_triskelion(d, cx, cy, R, fill=255):
+    """The BDSM emblem: a ring split by three spokes that sweep from the centre to the
+    rim (each turning ~70°), with a hole in each of the three sections."""
+    lw = max(2, int(R * 0.14))
+    d.ellipse([cx - R, cy - R, cx + R, cy + R], outline=fill, width=lw)
+    for k in range(3):
+        a0 = math.radians(-90 + k * 120)
+        pts = []
+        for i in range(25):
+            t = i / 24
+            r, th = R * t, a0 + math.radians(70) * t * t
+            pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
+        d.line(pts, fill=fill, width=lw, joint="curve")
+        th = a0 + math.radians(70 + 52)              # the hole sits mid-section, near the rim
+        hr, hx, hy = R * 0.12, cx + R * 0.62 * math.cos(th), cy + R * 0.62 * math.sin(th)
+        d.ellipse([hx - hr, hy - hr, hx + hr, hy + hr], fill=fill)
+
+
 def render_stamp(size, rng, ring, center, color=(178, 34, 40)):
     """Round rubber stamp: text around the ring, word in the middle, worn ink. RGBA float."""
     im = Image.new("L", (size, size), 0)
@@ -887,7 +905,10 @@ def render_stamp(size, rng, ring, center, color=(178, 34, 40)):
         g = g.rotate(-math.degrees(ang) - 90, resample=Image.BICUBIC)
         im.paste(255, (int(size / 2 + r * math.cos(ang) - g.width / 2),
                        int(size / 2 + r * math.sin(ang) - g.height / 2)), g)
-    _txt(d, (size / 2, size / 2), center, size * (0.11 if len(center) > 6 else 0.14), SANS_B, 255)
+    if center == "@triskelion":
+        draw_triskelion(d, size / 2, size / 2, size * 0.25)
+    else:
+        _txt(d, (size / 2, size / 2), center, size * (0.11 if len(center) > 6 else 0.14), SANS_B, 255)
     a = np.asarray(im, np.float32) / 255
     a *= np.clip(0.75 + 0.6 * fbm(a.shape, rng, size * 0.03, 3), 0, 1)        # worn ink
     rgb = np.ones((size, size, 3), np.float32) * np.array(color, np.float32) / 255
@@ -932,6 +953,16 @@ def render_typed(w, rng, title, lines, strike=(), sign="Подпись _________
     return np.clip(a, 0, 1), np.asarray(alpha, np.float32) / 255
 
 
+def _as_list(x):
+    """List params arrive as lists, JSON strings ('["a","b"]') or 'a/b' strings."""
+    if isinstance(x, str):
+        try:
+            x = json.loads(x)
+        except ValueError:
+            x = [t.strip() for t in x.split("/") if t.strip()]
+    return x if isinstance(x, list) else [x]
+
+
 def gen_print(L, ctx):
     """Printed ephemera with real text: params.variant in PRINTS (tobacco_talon,
     sugar_talon, soap_talon, papirosy), variant 'stamp' with params.ring/center, or
@@ -940,19 +971,12 @@ def gen_print(L, ctx):
     v = p.get("variant", "tobacco_talon")
     size = int(s * (0.14 + 0.5 * float(p.get("coverage", 0.15))))
     if v == "stamp":
-        rgba = render_stamp(size, rng, p.get("ring", ["ИСПОЛКОМ", "ГОРСОВЕТ", "1990"]),
+        rgba = render_stamp(size, rng, [str(t) for t in _as_list(p.get("ring", ["ИСПОЛКОМ", "ГОРСОВЕТ", "1990"]))],
                             p.get("center", "ВЫДАНО"), tuple(int(c * 255) for c in hex_rgb(p.get("color"))))
         return place_object(L, ctx, rgba[..., :3], rgba[..., 3], size / s)
     if v == "typed":
-        def _list(x):
-            if isinstance(x, str):
-                try:
-                    x = json.loads(x)
-                except ValueError:
-                    x = [t for t in x.split("/") if t.strip()]
-            return x if isinstance(x, list) else [x]
-        rgb_o, a_o = render_typed(size, rng, p.get("title", ""), [str(t) for t in _list(p.get("lines") or [])],
-                                  tuple(int(i) for i in _list(p.get("strike", []))),
+        rgb_o, a_o = render_typed(size, rng, p.get("title", ""), [str(t) for t in _as_list(p.get("lines") or [])],
+                                  tuple(int(i) for i in _as_list(p.get("strike", []))),
                                   p.get("sign", "Подпись ____________"))
         return place_object(L, ctx, rgb_o, a_o, size / s)
     rgb_o, a_o = render_print(v, size, rng)

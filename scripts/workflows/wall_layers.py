@@ -53,6 +53,7 @@ class Ctx:
     palette: list
     focus: np.ndarray | None = None   # 1 near/behind the figure -> 0 in the quiet margins
     face: dict | None = None          # face_align landmarks in canvas px (eye_l, eye_r, nose, mouth_l...)
+    photo: np.ndarray | None = None   # toned photo HxWx3 (base.look=photo): ghosts/smears are made of it
 
     @property
     def s(self):
@@ -1098,6 +1099,136 @@ def gen_skin_overlay(L, ctx):
     return solid(ctx, p.get("color", "#1a1a22"), a, blend="multiply", clip="subject")
 
 
+
+# ---------------------------------------------------------------- photographic (smears look)
+def _photo(ctx):
+    return ctx.photo if ctx.photo is not None else np.repeat(ctx.lum[..., None], 3, 2)
+
+
+def _shift(a, dx, dy):
+    M = np.float32([[1, 0, dx], [0, 1, dy]])
+    return cv2.warpAffine(a, M, (a.shape[1], a.shape[0]), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+
+def _deg(p, key, default):
+    try:
+        return float(re.sub(r"[^\d.-]", "", str(p.get(key, default))) or default)
+    except ValueError:
+        return float(default)
+
+
+def gen_haze(L, ctx):
+    """Defocused smoky glow behind the figure: a soft light mass hugging the silhouette
+    plus slow smoke texture. Screen blend — lifts the black, never flattens it."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    m = gaussian_filter(ctx.mask, s * float(p.get("spread", 0.12)))
+    m = m / max(1e-3, m.max())
+    smoke = np.clip(0.55 + 0.9 * fbm((ctx.H, ctx.W), rng, s * 0.18, 4), 0, 1.2)
+    a = np.clip(m * smoke, 0, 1) * float(p.get("opacity", 0.45)) * min(1.0, 0.4 + float(p.get("coverage", 0.6)))
+    return solid(ctx, p.get("color", "#8a8d98"), a, blend="screen")
+
+
+def gen_ghost(L, ctx):
+    """Out-of-focus duplicates of HER, drifted along one direction (double exposure in
+    a shaking hand). Made of the photo itself, so they read as the same body."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    ph, m = _photo(ctx), ctx.mask
+    ang = np.deg2rad(_deg(p, "direction", rng.uniform(-180, 180)))
+    n = int(p.get("count", 2))
+    dist = s * float(p.get("offset", 0.06))
+    blur = s * float(p.get("blur", 0.012))
+    acc_rgb = np.zeros_like(ph)
+    acc_a = np.zeros_like(m)
+    for k in range(1, n + 1):
+        dx, dy = np.cos(ang) * dist * k, np.sin(ang) * dist * k
+        dx += rng.normal(0, dist * 0.25)
+        dy += rng.normal(0, dist * 0.25)
+        a = gaussian_filter(_shift(m, dx, dy), blur * k)
+        c = gaussian_filter(_shift(ph * m[..., None], dx, dy), (blur * k, blur * k, 0))
+        w = 1.0 / k
+        acc_rgb += c * w
+        acc_a += a * w
+    rgb = acc_rgb / np.maximum(acc_a[..., None], 1e-3)
+    alpha = np.clip(acc_a, 0, 1) * float(p.get("opacity", 0.5))
+    return Layer(np.clip(rgb, 0, 1).astype(np.float32), alpha.astype(np.float32))
+
+
+def gen_motion_smear(L, ctx):
+    """Directional motion smear of the body that SPREADS past the silhouette (blur in
+    place is invisible), streaked into fine ribs along the motion like a slit-scan."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    ph, m = _photo(ctx), ctx.mask
+    ang = np.deg2rad(_deg(p, "direction", rng.uniform(-60, 60)))
+    length = s * float(p.get("length", 0.12))
+    steps = 28
+    acc_rgb = np.zeros_like(ph)
+    acc_a = np.zeros_like(m)
+    src = ph * m[..., None]
+    for k in range(steps):
+        t = (k / (steps - 1)) * length
+        w = 1 - k / steps
+        acc_rgb += _shift(src, np.cos(ang) * t, np.sin(ang) * t) * w
+        acc_a += _shift(m, np.cos(ang) * t, np.sin(ang) * t) * w
+    rgb = acc_rgb / np.maximum(acc_a[..., None], 1e-3)
+    a = acc_a / max(1e-3, acc_a.max())
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W].astype(np.float32)
+    perp = -xx * np.sin(ang) + yy * np.cos(ang)          # across the motion
+    period = s * float(p.get("rib", 0.006))
+    jitter = fbm((ctx.H, ctx.W), rng, s * 0.05, 2) * period * 2
+    ribs = 0.5 + 0.5 * np.sin((perp + jitter) / period * 2 * np.pi)
+    rib_amt = float(p.get("ribs", 0.6))
+    a = a * (1 - rib_amt + rib_amt * ribs)
+    # mostly on the trailing side: keep her own body readable underneath
+    a = a * (1 - float(p.get("keep_body", 0.6)) * m)
+    # only part of the body smears (an arm, a shoulder) — a soft blob picks where
+    cov = float(p.get("coverage", 0.5))
+    pick = np.clip(0.5 + 1.6 * fbm((ctx.H, ctx.W), rng, s * 0.25, 2) + (cov - 0.5), 0, 1)
+    a = a * pick * float(p.get("opacity", 0.85))
+    return Layer(np.clip(rgb, 0, 1).astype(np.float32), np.clip(a, 0, 1).astype(np.float32))
+
+
+def _spectrum(t):
+    """t 0..1 -> rainbow RGB (prism order: red → violet), soft."""
+    h = np.clip(t, 0, 1) * 0.78
+    hsv = np.stack([h * 179, np.full_like(h, 200), np.full_like(h, 255)], -1).astype(np.uint8)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB).astype(np.float32) / 255
+
+
+def gen_light_leak(L, ctx):
+    """Prism / lens-flare rainbow bands raking across body and background (screen)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    n = int(p.get("count", 2))
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W].astype(np.float32)
+    rgb = np.zeros((ctx.H, ctx.W, 3), np.float32)
+    alpha = np.zeros((ctx.H, ctx.W), np.float32)
+    base_ang = _deg(p, "direction", rng.uniform(-70, -30))
+    for cx, cy in region_pt(L.get("region", "anywhere"), ctx, n):
+        ang = np.deg2rad(base_ang + rng.normal(0, 8))
+        u = (xx - cx) * np.cos(ang) + (yy - cy) * np.sin(ang)     # across the band
+        v = -(xx - cx) * np.sin(ang) + (yy - cy) * np.cos(ang)    # along it
+        wdt = s * rng.uniform(0.04, 0.09) * float(p.get("width", 1.0))
+        ln = s * rng.uniform(0.35, 0.7)
+        prof = np.exp(-(u / wdt) ** 2) * np.exp(-(v / ln) ** 2)
+        warp = fbm((ctx.H, ctx.W), rng, s * 0.06, 2) * 0.25
+        col = _spectrum((u / wdt + 1.2) / 2.4 + warp)
+        rgb = rgb * (1 - prof[..., None]) + col * prof[..., None]
+        alpha = np.maximum(alpha, prof)
+    alpha = gaussian_filter(alpha, s * 0.004) * float(p.get("opacity", 0.5))
+    return Layer(rgb, np.clip(alpha, 0, 1), blend="screen")
+
+
+def gen_vignette(L, ctx):
+    """Edges fall to near-black (low-key)."""
+    p, s = L.get("params", {}), ctx.s
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W].astype(np.float32)
+    hx, hy = ctx.head
+    cx = ctx.W / 2 * 0.6 + hx * 0.4
+    cy = ctx.H / 2 * 0.6 + hy * 0.4
+    r = np.sqrt(((xx - cx) / (ctx.W * 0.62)) ** 2 + ((yy - cy) / (ctx.H * 0.62)) ** 2)
+    a = np.clip((r - float(p.get("inner", 0.45))) / 0.6, 0, 1) ** 1.6
+    return solid(ctx, p.get("color", "#05050a"), a * float(p.get("opacity", 0.85)))
+
 GENERATORS = {
     "paint_pattern": lambda L, c: gen_runes(L, c, "block"),
     "calligraphy": lambda L, c: gen_runes(L, c, "brush"),
@@ -1113,6 +1244,11 @@ GENERATORS = {
     "asset": gen_asset,
     "print": gen_print,
     "skin_overlay": gen_skin_overlay,
+    "haze": gen_haze,
+    "ghost": gen_ghost,
+    "motion_smear": gen_motion_smear,
+    "light_leak": gen_light_leak,
+    "vignette": gen_vignette,
 }
 # handled by the compositor itself (they change the subject / the whole print):
 # subject_cut, grain, scratches

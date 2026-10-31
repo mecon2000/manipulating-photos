@@ -26,7 +26,9 @@ EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 KINDS = ["paint_pattern", "calligraphy", "splatter", "ink_smear", "dot_rows", "pen_loops",
          "scribbles", "paper_scraps", "micro_text", "skin_overlay", "subject_cut",
-         "scratches", "stain", "grain"]
+         "scratches", "stain", "grain",
+         # photographic (base.look=photo — dark photo, not a print on paper):
+         "haze", "ghost", "motion_smear", "light_leak", "vignette"]
 REGIONS = ["behind-head", "around", "left", "right", "top", "bottom", "edges", "anywhere"]
 BW_PRESETS = ["tri-x-punch", "high-key", "low-key", "soft-matte", "newsprint"]
 
@@ -45,7 +47,9 @@ Return ONLY a JSON object, no prose, no code fence:
  "palette": ["#hex", ...],                       // 3-6 dominant colors
  "aspect": "4:5" | "1:1" | "9:16" | "3:4" | "other",
  "base": {{{{"bw": true|false, "preset": one of {BW_PRESETS},
-            "contrast": 1.0-2.0, "grain": 0.0-0.15, "note": "tone treatment"}}}},
+            "contrast": 1.0-2.0, "grain": 0.0-0.15,
+            "look": "paper" (subject printed/cut out onto paper) | "photo" (stays a dark photograph),
+            "duotone": "#shadow,#highlight" (optional), "note": "tone treatment"}}}},
  "background": {{{{"mode": "flat"|"keep"|"texture", "color": "#hex", "note": "..."}}}},
  "layers": [
    {{{{"id": "short_snake_case", "kind": one of {KINDS},
@@ -67,7 +71,12 @@ Return ONLY a JSON object, no prose, no code fence:
                   scribbles: "subject": "what is doodled, e.g. groups of eyes",
                              "medium": "ballpoint|marker|charcoal";
                   paper_scraps: "count": int, "content": "what is on the paper";
-                  stain: "type": "coffee|water"; ink_smear: "direction": "deg"}}}},
+                  stain: "type": "coffee|water" (fingerprints/rings ONLY); ink_smear: "direction": "deg";
+                  haze: soft glow/smoke behind her (screen), "spread";
+                  ghost: blurred duplicates of her body, "direction": "deg", "count", "offset";
+                  motion_smear: her body streaked past its edge, "direction": "deg", "length", "ribs";
+                  light_leak: prism/rainbow flare bands, "direction": "deg", "count";
+                  vignette: edges to black, "inner"}}}},
       "note": "why it works visually"}}}}
  ],
  "questions": ["things a human should decide when rebuilding this, 1-4 items"]

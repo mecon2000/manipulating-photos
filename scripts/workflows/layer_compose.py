@@ -340,6 +340,8 @@ def composite(dst, L):
     a = L.alpha[..., None]
     if L.blend == "multiply":
         return dst * (1 - a) + dst * L.rgb * a
+    if L.blend == "screen":
+        return dst * (1 - a) + (1 - (1 - dst) * (1 - L.rgb)) * a
     return dst * (1 - a) + L.rgb * a
 
 
@@ -372,13 +374,26 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     rng0 = np.random.default_rng(P["seed"])
     base, bgc = P["base"], P["background"]
     lum = bw(rgb, base, mask) if base.get("bw", True) else None
+    look = base.get("look", "paper")     # paper: she is printed on paper | photo: dark photograph
+    photo_t = None
+    if look == "photo":
+        lu = lum if lum is not None else rgb.mean(2)
+        pal = P.get("palette") or []
+        lo_c, hi_c = (str(base.get("duotone") or "").split(",") + ["", ""])[:2]
+        lo = wl.hex_rgb(lo_c or (pal[0] if pal else "#0a0a12"))
+        hi = wl.hex_rgb(hi_c or "#dfe1e8")
+        photo_t = (lo + (hi - lo) * lu[..., None]).astype(np.float32)
+        soft = float(base.get("soften", 0)) * min(W, H)     # refs are never tack-sharp
+        if soft > 0:
+            from scipy.ndimage import gaussian_filter as _gf
+            photo_t = _gf(photo_t, (soft, soft, 0))
 
     ys, xs = np.nonzero(mask > 0.5)
     sbox = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else (0, 0, W, H)
     focus = focus_map(mask, s)
     ctx_args = dict(W=W, H=H, sbox=sbox, head=head_point(mask, sbox), mask=mask,
                     lum=lum if lum is not None else rgb.mean(2), palette=P.get("palette", []),
-                    focus=focus,
+                    focus=focus, photo=photo_t,
                     face={k: (ox + v[0] * W / src_full_size[0] * min(sc, 1.0),
                               oy + v[1] * W / src_full_size[0] * min(sc, 1.0))
                           for k, v in face.items()} if face else None)
@@ -396,6 +411,10 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     out *= (tone * vig)[..., None]
     if bgc.get("mode") == "keep":
         out = rgb.copy()
+    if photo_t is not None:     # her own background, defocused and pushed down into the dark
+        from scipy.ndimage import gaussian_filter as _gf
+        bl = float(bgc.get("blur", 0.02)) * s
+        out = _gf(photo_t, (bl, bl, 0)) * float(bgc.get("brightness", 0.55))
     stack = [{"id": "paper", "z": "base", "enabled": True,
               "layer": wl.Layer(out.copy(), np.ones((H, W), np.float32))}]
 
@@ -432,7 +451,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     # subject: B&W, highlights fall to paper (multiply onto paper colour), ragged edge
     m = edge_dissolve(mask, float(base.get("edge_dissolve", 0)), s, rng0,
                       keep_layout=bool(base.get("edge_keep_layout", False)))
-    subj_rgb = (lum[..., None] * paper) if lum is not None else rgb
+    subj_rgb = photo_t if photo_t is not None else (lum[..., None] * paper) if lum is not None else rgb
     cut = next((L for L in live if L["kind"] == "subject_cut"), None)
     if cut is not None:
         subj_rgb, m = slice_subject(subj_rgb, m, sbox, np.random.default_rng(int(cut.get("seed", 1))), s)

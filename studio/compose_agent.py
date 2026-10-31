@@ -28,13 +28,17 @@ How you work:
 - compose_get first if you don't know the current layer stack, open questions or pinned comments.
 - compose_set changes the recipe and re-renders (~10s). Keys: <layer>.<param>, <layer>.z
   (under|over), <layer>.enabled (true|false), <layer>.seed (new int = new random layout),
-  <layer>.region, base.<k> (bw, preset, contrast, grain, subject_mid, edge_dissolve,
+  <layer>.region, <layer>.exclude / <layer>.include (normalized boxes "x0,y0,x1,y1", ';' between
+  boxes, "" clears — THE way to keep a layer off part of the picture; bbox does nothing),
+  base.<k> (bw, preset, contrast, grain, subject_mid, edge_dissolve,
   subject_scale, subject_dx, protect_eyes), background.<k> (color, mode). Always give a short note.
 - When the question is VISUAL ("denser or sparser?", "which red?", "under or over her?"), don't
   ask in prose — call compose_options with 2-3 values; Ronnie taps a card. Then stop and wait.
 - Pinned comments arrive as region-scoped notes "at (x,y) — near …: text" (normalized 0..1 of
-  final.jpg). Find the layer(s) that live there (bbox/region in compose_get), act with
-  compose_set, then mark it done with resolve_comment.
+  final.jpg). Find the layer(s) that live there (region in compose_get; use the face landmarks
+  it lists to place boxes for anything about the face), act with compose_set, then LOOK at the
+  result (look with a region around the pin) and only resolve_comment when the change is
+  actually visible — if it isn't, say so and try again.
 - look re-examines final.jpg (optionally a region) — check your edit actually landed.
 - compose_render(full=true) only when he asks for a full-res render; the finished piece goes
   through his Fav ★ button (full-res + PSD + favorites entry + savepoint).
@@ -79,7 +83,17 @@ def compact(piece: str) -> str:
         src = full.get(L["id"], {})
         lines.append(f"  {'✓' if L['enabled'] else '·'} {L['id']} [{L['kind']}, {L['z']}"
                      f"{', riff' if L['riff'] else ''}] region={L['region']} "
-                     f"bbox={src.get('bbox')} seed={L['seed']} params={json.dumps(L['params'])}")
+                     f"seed={L['seed']} params={json.dumps(L['params'])}")
+    try:   # face landmarks, normalized to final.jpg (the cropped source), for placing boxes
+        from PIL import Image as _I
+        d = compose.piece_dir(piece)
+        W0, H0 = _I.open(d / "source.jpg").size
+        f = json.loads((d / "face.json").read_text())
+        lines.append("face (normalized x,y): " + ", ".join(
+            f"{k}=({v[0] / W0:.3f},{v[1] / H0:.3f})" for k, v in f.items()) +
+            "  — image-left/right; her right cheek is image-LEFT")
+    except Exception:
+        pass
     oq = [q for q in s["questions"] if q.get("status") == "open"]
     if oq:
         lines.append("open questions: " + "; ".join(

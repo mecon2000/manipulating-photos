@@ -160,6 +160,7 @@ async function poll() {
     if (!s.pending && inflight === 0) {
       if (man && s.rev !== man.rev) await load(true);
       else if (s.error) toast(`render error: ${s.error.slice(-200)}`, 8000);
+      pollSoon(document.hidden ? 15000 : 3000);   // idle watch: agent edits / other devices
       return;
     }
   } catch (e) { /* transient */ }
@@ -384,9 +385,20 @@ async function pollFav() {
 }
 
 // ---- pins ----
+function pinMarkers() {
+  return openPins(state).map((c, i) => ({ n: i + 1, x: c.x, y: c.y, label: c.text.slice(0, 40) }));
+}
 function onMarkerAdded(m) {
-  if (pendingPin || compare) return;
-  pendingPin = m;
+  if (compare) return;
+  const saved = pinMarkers();
+  if (pendingPin) {
+    // tapping again: move the pending pin (or, once something is typed, keep it where it is)
+    if (!$("pin-text").value.trim()) pendingPin = { ...m, n: saved.length + 1 };
+    canvas.setMarkers([...saved, pendingPin]);
+    return;
+  }
+  pendingPin = { ...m, n: saved.length + 1 };
+  canvas.setMarkers([...saved, pendingPin]);
   $("pin-text").value = "";
   $("pin-sheet").classList.remove("hidden");
   setTimeout(() => $("pin-text").focus(), 50);
@@ -499,7 +511,7 @@ function boot() {
     onGraphChanged: () => load(true),
   });
 
-  load(true).then(() => { if (serverPending) pollSoon(); });
+  load(true).then(() => pollSoon(serverPending ? 1500 : 3000));
   // the agent (or another device) may change the piece — cheap poll while idle
   setInterval(() => {
     if (!document.hidden && inflight === 0 && !serverPending && rolling.size === 0) load();

@@ -86,6 +86,11 @@ def apply_set(P, key, val):
     if head in ("base", "background"):
         P[head][k] = val
         return
+    if k in ("bbox", "params.bbox"):
+        raise SystemExit("bbox only marks where the element sat in the REFERENCE photo — nothing "
+                         "reads it. To keep a layer off/on part of the picture use "
+                         f"{head}.exclude=x0,y0,x1,y1 or {head}.include=x0,y0,x1,y1 "
+                         "(normalized, ';' between boxes; empty value clears).")
     for L in P["layers"]:
         if L["id"] == head:
             if k in ("z", "enabled", "seed", "region", "kind"):
@@ -246,6 +251,36 @@ def edge_dissolve(mask, amt, s, rng):
     return (mask * keep).astype(np.float32)
 
 
+def parse_boxes(v):
+    """'x0,y0,x1,y1;x0,y0,x1,y1' or [[..],[..]] or [..] (normalized 0-1) -> list of boxes."""
+    if v in (None, "", [], "none"):
+        return []
+    if isinstance(v, str):
+        v = [[float(t) for t in b.split(",")] for b in v.split(";") if b.strip()]
+    if v and not isinstance(v[0], (list, tuple)):
+        v = [v]
+    return [tuple(float(t) for t in b[:4]) for b in v if len(b) >= 4]
+
+
+def box_mask(boxes, W, H, s):
+    m = np.zeros((H, W), np.float32)
+    for x0, y0, x1, y1 in boxes:
+        m[int(min(y0, y1) * H):int(max(y0, y1) * H), int(min(x0, x1) * W):int(max(x0, x1) * W)] = 1
+    return gaussian_filter(m, s * 0.012) if boxes else m
+
+
+def apply_boxes(L, lay, W, H, s):
+    """params.include: the layer only shows inside these boxes; params.exclude: never inside
+    them. Soft-edged. This is THE way to keep a layer off part of the picture."""
+    p = L.get("params", {})
+    inc, exc = parse_boxes(p.get("include")), parse_boxes(p.get("exclude"))
+    if inc:
+        lay.alpha = lay.alpha * box_mask(inc, W, H, s)
+    if exc:
+        lay.alpha = lay.alpha * (1 - box_mask(exc, W, H, s))
+    return lay
+
+
 def composite(dst, L):
     a = L.alpha[..., None]
     if L.blend == "multiply":
@@ -321,6 +356,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
 
     def emit(L, lay):
         nonlocal out
+        lay = apply_boxes(L, lay, W, H, s)
         on = L.get("enabled", True)
         if on and not only:
             out = composite(out, lay)

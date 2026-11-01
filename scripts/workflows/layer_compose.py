@@ -94,6 +94,8 @@ def apply_set(P, key, val):
                          "reads it. To keep a layer off/on part of the picture use "
                          f"{head}.exclude=x0,y0,x1,y1 or {head}.include=x0,y0,x1,y1 "
                          "(normalized, ';' between boxes; empty value clears).")
+    if k.startswith("params."):       # id.params.x == id.x (it was stored as a dead "params.x" key)
+        k = k[len("params."):]
     for L in P["layers"]:
         if L["id"] == head:
             if k == "kind" and val not in wl.GENERATORS and val not in ("subject_cut", "grain", "scratches"):

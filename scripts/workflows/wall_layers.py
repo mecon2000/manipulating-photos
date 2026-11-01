@@ -1167,15 +1167,33 @@ def gen_motion_smear(L, ctx):
     acc_rgb = np.zeros_like(ph)
     acc_a = np.zeros_like(m)
     src = ph * m[..., None]
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W].astype(np.float32)
+    # arc mode: the smear swings around a pivot (params.pivot = x,y normalized) by
+    # params.sweep degrees (sign = direction), so it follows a curved body instead of a line
+    arc = p.get("mode") == "arc"
+    if arc:
+        px, py = [float(v) for v in str(p.get("pivot", "0.5,0.9")).split(",")[:2]]
+        px, py = px * ctx.W, py * ctx.H
+        sweep = float(p.get("sweep", 25)) * st ** 0.5
     for k in range(steps):
-        t = (k / (steps - 1)) * length
+        f = k / (steps - 1)
         w = 1 - k / steps
-        acc_rgb += _shift(src, np.cos(ang) * t, np.sin(ang) * t) * w
-        acc_a += _shift(m, np.cos(ang) * t, np.sin(ang) * t) * w
+        if arc:
+            M = cv2.getRotationMatrix2D((px, py), sweep * f, 1.0)
+            warp = lambda a_, M=M: cv2.warpAffine(a_, M, (ctx.W, ctx.H), flags=cv2.INTER_LINEAR,
+                                                  borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            acc_rgb += warp(src) * w
+            acc_a += warp(m) * w
+        else:
+            t = f * length
+            acc_rgb += _shift(src, np.cos(ang) * t, np.sin(ang) * t) * w
+            acc_a += _shift(m, np.cos(ang) * t, np.sin(ang) * t) * w
     rgb = acc_rgb / np.maximum(acc_a[..., None], 1e-3)
     a = acc_a / max(1e-3, acc_a.max())
-    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W].astype(np.float32)
-    perp = -xx * np.sin(ang) + yy * np.cos(ang)          # across the motion
+    if arc:
+        perp = np.sqrt((xx - px) ** 2 + (yy - py) ** 2)     # ribs = rings around the pivot
+    else:
+        perp = -xx * np.sin(ang) + yy * np.cos(ang)      # across the motion
     period = s * float(p.get("rib", 0.006))
     jitter = fbm((ctx.H, ctx.W), rng, s * 0.05, 2) * period * 2
     ribs = 0.5 + 0.5 * np.sin((perp + jitter) / period * 2 * np.pi)

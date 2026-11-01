@@ -304,7 +304,7 @@ const panelCtx = () => ({
   },
   onRefresh() { renderAll(); },
   onParam(L, key, value) {
-    persist("/quick-set", { kv: [`${L.id}.params.${key}=${value}`], note: `${L.id}: ${key} ${value}` });
+    persist("/quick-set", { kv: [`${L.id}.${key}=${value}`], note: `${L.id}: ${key} ${value}` });
   },
 });
 

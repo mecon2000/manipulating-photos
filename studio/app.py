@@ -43,7 +43,12 @@ async def strip_prefix(request: Request, call_next):
     if path == PREFIX or path.startswith(PREFIX + "/"):
         request.scope["path"] = path[len(PREFIX):] or "/"
         request.scope.setdefault("state", {})["studio_base"] = PREFIX
-    return await call_next(request)
+    resp = await call_next(request)
+    if request.scope["path"].startswith("/static/"):
+        # ES-module imports (./compose_panel.js …) were served from the phone's heuristic
+        # cache after a deploy; no-cache forces a cheap ETag revalidation every load
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 def _base(request: Request) -> str:

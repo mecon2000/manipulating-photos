@@ -86,7 +86,14 @@ function sliderBox(L, ctx) {
     r.value = P[k] ?? def;
     val.textContent = r.value;
     r.oninput = () => { val.textContent = r.value; };
-    r.onchange = () => { P[k] = Number(r.value); ctx.onParam(L, k, Number(r.value)); };
+    // while a finger is on the slider the page must not rebuild the panel (a rebuild
+    // replaces the input and the drag dies — the 6s poll / render updates did that)
+    r.addEventListener("pointerdown", () => { _sliding = true; });
+    const end = () => { _sliding = false; };
+    r.addEventListener("pointerup", end);
+    r.addEventListener("pointercancel", end);
+    r.addEventListener("blur", end);
+    r.onchange = () => { end(); P[k] = Number(r.value); ctx.onParam(L, k, Number(r.value)); };
     row.append(el("span", "slider-label", label), r, val);
     box.appendChild(row);
   }
@@ -184,7 +191,8 @@ function placeAt(list, item, sibs, before) {
 // True while a row is being dragged — the page must not rebuild the list then
 // (a rebuild destroys the dragged node and silently ends the drag).
 let _dragging = false;
-export const isDragging = () => _dragging;
+let _sliding = false;
+export const isDragging = () => _dragging || _sliding;
 
 function scrollerOf(node) {
   for (let n = node.parentElement; n; n = n.parentElement) {

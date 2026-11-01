@@ -111,3 +111,6 @@ Tools: `compose_get` (stack, base/background, open questions, open pinned notes 
 - smears dials: motion_smear.strength and ghost.strength (1 = subtle, 4 = Ronnie's 'way stronger'); show a 1/2/3/4/6 choice card before settling.
 - base.eye_feather (default 0.5): how softly the eye protection fades. Under heavy smear/ghost use 2-4 — a tight band 'punches' a hard window around her eyes.
 - motion_smear arc mode: .mode=arc .pivot=x,y (centre of the body's curve, normalized) .sweep=deg (sign = direction) — the smear swings along a curved body (arched back) instead of a straight line.
+- Sparks / embers / fire specks: kind=embers (color, count, size, trail 0-1, spread; same .mode=arc .pivot .sweep as motion_smear to ride the same wind, else .direction). NEVER fake an element with motion_smear — it only smears HER photo and draws nothing new.
+- compose_add now refuses unknown kinds (e.g. 'red_calligraphy' — the kind is 'calligraphy') and errors when the new layer renders nothing visible. If it errors, fix it; never tell Ronnie it was added.
+- Calligraphy text wider than the frame is shrunk to fit and clamped, so .at/.text_scale seem to do nothing — lower text_scale (~0.8) first.

@@ -1208,6 +1208,64 @@ def gen_motion_smear(L, ctx):
     return Layer(np.clip(rgb, 0, 1).astype(np.float32), np.clip(a, 0, 1).astype(np.float32))
 
 
+def gen_embers(L, ctx):
+    """Glowing bonfire sparks caught in a wind around her: bright cores with fading
+    trails, denser close to the body, thinning outward. Follows the same motion as a
+    smear: params.mode=arc + pivot + sweep (curved wind), else params.direction (deg).
+    params.count, size, trail (0-1), spread (how far from her, fraction of short edge)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    H, W = ctx.H, ctx.W
+    n = int(p.get("count", 160 * float(p.get("coverage", 0.5)) * 2))
+    outside = distance_transform_edt(ctx.mask < 0.5)
+    spread = s * float(p.get("spread", 0.14))
+    w = np.exp(-outside / (spread * 0.45)) * (outside > s * 0.004) * (outside < spread * 2)
+    if L.get("z") == "over":
+        w = w + 0.25 * (ctx.mask > 0.5) * w.max()      # a few drift across her too
+    flat = w.ravel() / max(1e-9, w.sum())
+    idx = rng.choice(flat.size, size=max(1, n), p=flat)
+    ys, xs = np.divmod(idx, W)
+    arc = p.get("mode") == "arc"
+    if arc:
+        px, py = [float(v) for v in str(p.get("pivot", "0.5,0.9")).split(",")[:2]]
+        px, py = px * W, py * H
+        sweep = float(p.get("sweep", -30))
+    else:
+        ang = np.deg2rad(_deg(p, "direction", 200))
+    core = np.zeros((H, W), np.float32)
+    trail = float(p.get("trail", 0.5))
+    size = float(p.get("size", 1.0))
+    for x, y in zip(xs.astype(np.float32), ys.astype(np.float32)):
+        r0 = s * rng.uniform(0.0015, 0.005) * size * (1.6 if rng.random() < 0.08 else 1.0)
+        b = rng.uniform(0.5, 1.0)
+        steps = 14
+        if arc:
+            th = np.deg2rad(sweep * rng.uniform(0.05, 0.25) * trail)
+            c, sn = np.cos(th * np.linspace(0, 1, steps)), np.sin(th * np.linspace(0, 1, steps))
+            dx, dy = x - px, y - py
+            # cv2 sign convention: positive sweep = counter-clockwise on screen
+            tx = px + dx * c + dy * sn
+            ty = py - dx * sn + dy * c
+        else:
+            ln = s * rng.uniform(0.02, 0.09) * trail
+            t = np.linspace(0, 1, steps)
+            tx = x - np.cos(ang) * ln * t
+            ty = y - np.sin(ang) * ln * t
+        tx = tx + rng.normal(0, s * 0.002, steps).cumsum() * 0.3       # flicker in the wind
+        ty = ty + rng.normal(0, s * 0.002, steps).cumsum() * 0.3
+        cv2.circle(core, (int(tx[0]), int(ty[0])), max(1, int(r0)), float(b), -1, cv2.LINE_AA)
+        for k in range(1, steps):                    # continuous tapering streak
+            f = 1 - k / steps
+            cv2.line(core, (int(tx[k - 1]), int(ty[k - 1])), (int(tx[k]), int(ty[k])),
+                     float(b * f ** 1.5), max(1, int(2 * r0 * (0.25 + 0.75 * f))), cv2.LINE_AA)
+    core = np.clip(core, 0, 1)
+    glow = gaussian_filter(core, s * 0.006) * 2.2 + gaussian_filter(core, s * 0.02) * 1.5
+    a = np.clip(core + glow, 0, 1) * float(p.get("opacity", 0.95))
+    col = hex_rgb(p.get("color", "#ff6a1a"))
+    hot = np.array([1.0, 0.93, 0.7], np.float32)            # cores burn yellow-white
+    rgb = col + (hot - col) * np.clip(core, 0, 1)[..., None]
+    return Layer(rgb.astype(np.float32), a.astype(np.float32), blend="screen")
+
+
 def _spectrum(t):
     """t 0..1 -> rainbow RGB (prism order: red → violet), soft."""
     h = np.clip(t, 0, 1) * 0.78
@@ -1269,6 +1327,7 @@ GENERATORS = {
     "motion_smear": gen_motion_smear,
     "light_leak": gen_light_leak,
     "vignette": gen_vignette,
+    "embers": gen_embers,
 }
 # handled by the compositor itself (they change the subject / the whole print):
 # subject_cut, grain, scratches

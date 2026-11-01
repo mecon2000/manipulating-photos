@@ -96,6 +96,8 @@ def apply_set(P, key, val):
                          "(normalized, ';' between boxes; empty value clears).")
     for L in P["layers"]:
         if L["id"] == head:
+            if k == "kind" and val not in wl.GENERATORS and val not in ("subject_cut", "grain", "scratches"):
+                raise SystemExit(f"unknown kind '{val}'. Kinds: {', '.join(sorted(wl.GENERATORS))}")
             if k in ("z", "enabled", "removed", "seed", "region", "kind"):
                 L[k] = val
             else:
@@ -629,6 +631,10 @@ def cmd_add(a):
         raise SystemExit("id: lowercase letters, digits, _")
     if any(L["id"] == a.id for L in P["layers"]):
         raise SystemExit(f"layer {a.id} already exists — use set")
+    if a.kind not in wl.GENERATORS:
+        # an unknown kind renders NOTHING and never reaches the panel (the agent once
+        # 'added' kind=red_calligraphy and reported success)
+        raise SystemExit(f"unknown kind '{a.kind}'. Kinds: {', '.join(sorted(wl.GENERATORS))}")
     L = {"id": a.id, "theme": a.theme, "kind": a.kind, "z": a.z, "region": a.region,
          "params": {}, "enabled": not a.off, "riff": True, "note": a.why,
          "seed": (int(P.get("seed", 1)) + 7919 * (len(P["layers"]) + 1)) % 100000}
@@ -647,6 +653,14 @@ def cmd_add(a):
         print(f"added {a.id} (no render)")
         return
     render(d, P, event="add", layer=a.id, note=a.why)
+    if L["enabled"]:       # a layer that draws nothing is a failed add, not a success
+        mf = json.loads((d / "layers" / "manifest.json").read_text())
+        e = next((x for x in mf["layers"] if x["id"] == a.id), None)
+        al = np.asarray(Image.open(d / "layers" / e["file"]))[..., 3] if e else None
+        if al is None or (al > 8).mean() < 0.0005:
+            raise SystemExit(f"layer {a.id} was added but renders NOTHING visible "
+                             f"(kind {a.kind} with these params). Fix params or kind; "
+                             f"don't report it as done.")
 
 
 def hist_event(d, event, **kw):

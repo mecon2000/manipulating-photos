@@ -1220,8 +1220,13 @@ def gen_embers(L, ctx):
     n = int(p.get("count", 160 * float(p.get("coverage", 0.5)) * 2))
     outside = distance_transform_edt(ctx.mask < 0.5)
     spread = s * float(p.get("spread", 0.3))
-    w = np.exp(-outside / (spread * 0.6)) * (outside > s * 0.004)
-    w = w / max(1e-9, w.sum()) * 0.8 + (outside > s * 0.004) / max(1, (outside > s * 0.004).sum()) * 0.2
+    depth = max(1.0, s * float(p.get("inside", 0.025)))
+    inner = distance_transform_edt(ctx.mask > 0.5)
+    w = np.exp(-outside / (spread * 0.6)) * (outside > 0)
+    # sparks are also born inside her outline, thinning to none at params.inside deep
+    w = w + 3 * (inner > 0) * np.clip(1 - inner / depth, 0, 1) ** 1.5
+    bg = outside > 0
+    w = w / max(1e-9, w.sum()) * 0.8 + bg / max(1, bg.sum()) * 0.2
     flat = w.ravel() / max(1e-9, w.sum())
     idx = rng.choice(flat.size, size=max(1, n), p=flat)
     ys, xs = np.divmod(idx, W)
@@ -1273,8 +1278,7 @@ def gen_embers(L, ctx):
     a = np.clip(core + glow, 0, 1) * float(p.get("opacity", 0.55))
     # kept off her: they may push into her outline by params.inside (fraction of the short
     # edge, default 0.025 ≈ 50-100px), feathered, never into her midst
-    depth = max(1.0, s * float(p.get("inside", 0.025)))
-    t_in = np.clip(distance_transform_edt(ctx.mask > 0.5) / depth, 0, 1)
+    t_in = np.clip(inner / depth, 0, 1)
     a = a * (1 - t_in * t_in * (3 - 2 * t_in))
     col = hex_rgb(p.get("color", "#ff6a1a"))
     sat = float(p.get("saturation", 0.12))

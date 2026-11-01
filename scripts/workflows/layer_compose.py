@@ -531,6 +531,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     if g_amt > 0:
         grain = rng0.standard_normal((H, W)).astype(np.float32) * g_amt * 0.5
         out = out + grain[..., None] * (0.4 + 0.6 * (1 - out.mean(2, keepdims=True)))
+    gl = next((L for L in live if L["kind"] == "scratches"), None)   # grain alone draws no lines
     if gl is not None:
         import cv2
         sc = np.zeros((H, W), np.float32)

@@ -164,7 +164,7 @@ function layerRows(wrap, L, ctx, list) {
     row.appendChild(chips);
   }
   if (SLIDERS[L.kind]) {
-    const tune = el("button", "seedbtn tunebtn" + (openSliders.has(L.id) ? " active" : ""), "⚙ sliders");
+    const tune = el("button", "seedbtn" + (openSliders.has(L.id) ? " active" : ""), "⚙");
     tune.title = "sliders: colour, visibility, spread …";
     tune.onclick = () => {
       openSliders.has(L.id) ? openSliders.delete(L.id) : openSliders.add(L.id);

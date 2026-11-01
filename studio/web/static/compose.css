@@ -195,4 +195,3 @@
 .slider-row input[type=range] { width: 100%; min-height: 36px; touch-action: none; }  /* the list is pan-y: give the slider the horizontal drag */
 .slider-val { text-align: right; font-variant-numeric: tabular-nums; }
 .seedbtn.active { border-color: var(--fg-dim); }
-.tunebtn { min-width: 0; padding: 0 8px; font-size: 12px; white-space: nowrap; }

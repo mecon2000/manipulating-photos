@@ -61,10 +61,10 @@ function removedSection(removed, ctx) {
 
 // Sliders per layer kind: [param, label, min, max, step, default]. Released → one quick-set.
 const SLIDERS = {
-  embers: [["saturation", "colour", 0, 1, 0.02, 0.12], ["opacity", "visibility", 0, 1, 0.02, 0.7],
+  embers: [["saturation", "colour", 0, 1, 0.02, 0.12], ["opacity", "visibility", 0, 1, 0.02, 0.55],
            ["spread", "spread", 0.05, 0.8, 0.01, 0.3], ["chaos", "wind wildness", 0, 1, 0.02, 0.45],
            ["count", "amount", 40, 800, 10, 160], ["size", "spark size", 0.4, 3, 0.05, 1],
-           ["trail", "trail length", 0, 2, 0.05, 0.5]],
+           ["trail", "trail length", 0, 2, 0.05, 0.5], ["inside", "into her outline", 0, 0.1, 0.005, 0.025]],
   motion_smear: [["strength", "strength", 0, 5, 0.1, 1], ["length", "length", 0, 0.6, 0.01, 0.25],
                  ["opacity", "visibility", 0, 1, 0.02, 0.8]],
   ghost: [["strength", "strength", 0, 5, 0.1, 1], ["opacity", "visibility", 0, 1, 0.02, 0.4],

@@ -267,8 +267,10 @@ def face_points(d, src_full):
     return json.loads(fp.read_text())
 
 
-def eye_protect(pts, W, H, scale):
-    """Soft band over both eyes. House rule: nothing ever covers her eyes."""
+def eye_protect(pts, W, H, scale, feather=0.5):
+    """Soft band over both eyes. House rule: nothing ever covers her eyes.
+    feather (base.eye_feather): fade width — 0.5 is a tight band; 3+ lets the eyes
+    surface softly through heavy effects (a hard window reads as a 'punched' slit)."""
     if not pts or "eye_l" not in pts or "eye_r" not in pts:
         return np.zeros((H, W), np.float32)
     (lx, ly), (rx, ry) = [(v[0] * scale, v[1] * scale) for v in (pts["eye_l"], pts["eye_r"])]
@@ -278,8 +280,11 @@ def eye_protect(pts, W, H, scale):
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     u = (xx - cx) * math.cos(ang) + (yy - cy) * math.sin(ang)
     v = -(xx - cx) * math.sin(ang) + (yy - cy) * math.cos(ang)
-    r = np.sqrt((u / (dist * 1.1)) ** 2 + (v / (dist * 0.2)) ** 2)   # eyes are short: keep the band tight
-    return np.clip((1.5 - r) / 0.5, 0, 1).astype(np.float32)
+    f = max(0.05, float(feather))
+    tall = 0.2 * (1 + 0.6 * max(0.0, f - 0.5))          # a wide feather grows the band vertically too
+    r = np.sqrt((u / (dist * 1.1)) ** 2 + (v / (dist * tall)) ** 2)   # eyes are short: keep the band tight
+    t = np.clip((1 + f - r) / f, 0, 1)
+    return (t * t * (3 - 2 * t)).astype(np.float32)          # smoothstep: no visible rim
 
 
 def focus_map(mask, s):
@@ -399,7 +404,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
                           for k, v in face.items()} if face else None)
     # (face landmarks follow her when subject_scale shrinks/moves her)
     # eyes are protected at any subject_scale: use the landmarks already moved with her
-    protect = eye_protect(ctx_args["face"], W, H, 1.0) if ctx_args.get("face") else np.zeros((H, W), np.float32)
+    protect = eye_protect(ctx_args["face"], W, H, 1.0, float(base.get("eye_feather", 0.5))) if ctx_args.get("face") else np.zeros((H, W), np.float32)
     quiet = float(P["base"].get("margin_quiet", 0.7))
 
     paper = wl.hex_rgb(bgc.get("color", "#f1eee8"))

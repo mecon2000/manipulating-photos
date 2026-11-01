@@ -42,6 +42,8 @@ import wall_layers as wl  # noqa: E402
 ROOT = Path("~/.openclaw/workspace/shared/deconstruct").expanduser()
 PIECES = ROOT / "pieces"
 PREVIEW = 1600
+# per-layer render cache on ext4 (studio/state is gitignored runtime state)
+LAYER_CACHE = HERE.parent.parent / "studio" / "state" / "layer_cache"
 LETTERS = "ABCDEFGH"
 
 
@@ -427,12 +429,50 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     stack = [{"id": "paper", "z": "base", "enabled": True,
               "layer": wl.Layer(out.copy(), np.ones((H, W), np.float32))}]
 
+    # per-layer cache (preview only): a slider move re-generates just that layer — the
+    # others come back from disk. Key = the layer + everything global it can see + code.
+    cdir = LAYER_CACHE / d.name
+    glob_key = json.dumps({k: v for k, v in P.items() if k not in ("layers", "decisions", "themes", "wildness")},
+                          sort_keys=True, default=str) + \
+        "".join(str(Path(f).stat().st_mtime_ns) for f in (wl.__file__, __file__, d / "source.jpg")) + \
+        str((W, H, bool(face), (d / "mask.png").stat().st_mtime_ns if (d / "mask.png").exists() else 0))
+
+    def layer_key(L):
+        import hashlib
+        return hashlib.sha1((glob_key + json.dumps(L, sort_keys=True, default=str)).encode()).hexdigest()[:16]
+
     def run(L):
-        ctx = wl.Ctx(rng=np.random.default_rng(int(L.get("seed", 1))), **ctx_args)
         g = wl.GENERATORS.get(L["kind"])
         if g is None:
             return None
-        return g(L, ctx)
+        use_cache = not full and not only
+        if use_cache:
+            L_ = {k: v for k, v in L.items() if k not in ("enabled", "note", "variants", "riff", "theme")}
+            key = layer_key(L_)
+            fp = cdir / f"{key}.npz"
+            if fp.exists():
+                try:
+                    z = np.load(fp)
+                    lay = wl.Layer(z["rgb"].astype(np.float32), z["alpha"].astype(np.float32),
+                                   blend=str(z["blend"]), clip=str(z["clip"]) or None)
+                    lay._key = key
+                    fp.touch()                       # recently used: survives the prune
+                    return lay
+                except Exception:
+                    pass
+        ctx = wl.Ctx(rng=np.random.default_rng(int(L.get("seed", 1))), **ctx_args)
+        lay = g(L, ctx)
+        if use_cache and lay is not None:
+            try:
+                cdir.mkdir(parents=True, exist_ok=True)
+                tmp = cdir / f".{key}.tmp.npz"
+                np.savez(tmp, rgb=lay.rgb.astype(np.float16), alpha=lay.alpha.astype(np.float16),
+                         blend=lay.blend, clip=lay.clip or "")
+                os.replace(tmp, fp)
+                lay._key = key
+            except OSError:
+                pass                                 # no cache: still renders, just slower
+        return lay
 
     live = [L for L in P["layers"] if L.get("enabled", True) and not L.get("removed")]
     gen_set = P["layers"] if (all_layers or only) else live
@@ -443,11 +483,13 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
 
     def emit(L, lay):
         nonlocal out
+        key = getattr(lay, "_key", None)
         lay = apply_boxes(L, lay, W, H, s)
         on = L.get("enabled", True) and not L.get("removed")
         if on and not only:
             out = composite(out, lay)
-        stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay, "seed": L.get("seed")})
+        stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay, "seed": L.get("seed"),
+                      "key": key})
 
     # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
     ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
@@ -547,11 +589,19 @@ def render(d, P, full=False, event="render", **meta):
         ld.mkdir(exist_ok=True)
         byid = {L["id"]: L for L in P["layers"]}
         entries, written = [], set()
+        try:
+            prev = {x["file"]: x.get("v") for x in json.loads((ld / "manifest.json").read_text())["layers"]}
+        except (OSError, ValueError, KeyError):
+            prev = {}
         for i, e in enumerate(stack):
             fn = f"{i:02d}_{e['id']}.png"
-            tmp = ld / f".{fn}.tmp.png"
-            save_rgba(tmp, e["layer"])
-            os.replace(tmp, ld / fn)                  # atomic: readers never see a gap
+            v = e.get("key")
+            # unchanged layer (same cache key, file there): keep the PNG — writes ~20 PNGs
+            # to the 9p share otherwise, and the browser re-downloads only what changed
+            if not (v and prev.get(fn) == v and (ld / fn).exists()):
+                tmp = ld / f".{fn}.tmp.png"
+                save_rgba(tmp, e["layer"])
+                os.replace(tmp, ld / fn)                  # atomic: readers never see a gap
             written.add(fn)
             L = byid.get(e["id"], {})
             entries.append({"id": e["id"], "file": fn, "kind": L.get("kind", e["id"]),
@@ -559,7 +609,7 @@ def render(d, P, full=False, event="render", **meta):
                             "removed": bool(L.get("removed")), "blend": e["layer"].blend,
                             "riff": bool(L.get("riff")), "note": L.get("note", ""),
                             "seed": L.get("seed"), "variants": L.get("variants", []),
-                            "params": (L or {}).get("params", {})})
+                            "params": (L or {}).get("params", {}), "v": e.get("key")})
     if full:
         from psd_layers import write_psd
         W, H = img.size
@@ -582,6 +632,11 @@ def render(d, P, full=False, event="render", **meta):
         for f in (d / "layers").glob("*.png"):         # stale files only after the new manifest
             if f.name not in written:
                 f.unlink()
+    cdir = LAYER_CACHE / d.name
+    if cdir.exists():                                  # keep the newest ~80 cached layers
+        old = sorted(cdir.glob("*.npz"), key=lambda f: f.stat().st_mtime)[:-80]
+        for f in old:
+            f.unlink(missing_ok=True)
     img.save(d / "history" / f"{n:03d}.jpg", quality=88)
     (d / "history" / f"{n:03d}.json").write_text(json.dumps(P, ensure_ascii=False))
     print(f"rendered in {time.time() - t:.1f}s  (history #{n})")

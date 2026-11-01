@@ -53,6 +53,16 @@ const post = (path, body) => api(`${P_API}${path}`, {
 
 function updateDots() {
   const syncing = inflight > 0 || serverPending;
+  // a visible "rendering…" chip on the picture while a change is saving / rendering
+  const chip = $("busy-chip"), txt = $("busy-text");
+  if (syncing && chip.classList.contains("hidden")) {
+    txt.textContent = "rendering…";
+    chip.classList.remove("hidden");
+    chip.dataset.sync = "1";
+  } else if (!syncing && chip.dataset.sync) {
+    delete chip.dataset.sync;
+    if (txt.textContent === "rendering…") chip.classList.add("hidden");
+  }
   $("sync-dot").classList.toggle("hidden", !syncing);
   $("sync-dot").title = state && state.sync && state.sync.error ? `render error: ${state.sync.error}` : "syncing…";
 }
@@ -97,7 +107,7 @@ function layerSrc(L) {
   const ov = overrides[L.id];
   if (ov != null && ov !== L.seed) return fileUrl(`layers/variants/${L.id}/s${ov}.png`, ov);
   const f = String(L.file || "");
-  return fileUrl(f.startsWith("layers/") ? f : `layers/${f}`, man.rev);
+  return fileUrl(f.startsWith("layers/") ? f : `layers/${f}`, L.v || man.rev);
 }
 
 let drawing = false, redrawAgain = false, firstPainted = false, layersShown = false;

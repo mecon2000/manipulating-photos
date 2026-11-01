@@ -556,7 +556,8 @@ def render(d, P, full=False, event="render", **meta):
                             "z": e["z"], "enabled": bool(L.get("enabled", True)) if L else bool(e["enabled"]),
                             "removed": bool(L.get("removed")), "blend": e["layer"].blend,
                             "riff": bool(L.get("riff")), "note": L.get("note", ""),
-                            "seed": L.get("seed"), "variants": L.get("variants", [])})
+                            "seed": L.get("seed"), "variants": L.get("variants", []),
+                            "params": (L or {}).get("params", {})})
     if full:
         from psd_layers import write_psd
         W, H = img.size

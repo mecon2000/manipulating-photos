@@ -302,6 +302,10 @@ const panelCtx = () => ({
     openNotes.has(id) ? openNotes.delete(id) : openNotes.add(id);
     renderAll();
   },
+  onRefresh() { renderAll(); },
+  onParam(L, key, value) {
+    persist("/quick-set", { kv: [`${L.id}.params.${key}=${value}`], note: `${L.id}: ${key} ${value}` });
+  },
 });
 
 // ---- render the side UI ----

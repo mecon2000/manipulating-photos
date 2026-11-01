@@ -1209,18 +1209,21 @@ def gen_motion_smear(L, ctx):
 
 
 def gen_embers(L, ctx):
-    """Glowing bonfire sparks caught in a wind around her: bright cores with fading
-    trails, denser close to the body, thinning outward. Follows the same motion as a
-    smear: params.mode=arc + pivot + sweep (curved wind), else params.direction (deg).
-    params.count, size, trail (0-1), spread (how far from her, fraction of short edge)."""
+    """Sparks blown about in wind around her: a general wind (params.direction deg, or
+    mode=arc + pivot + sweep for a curved wind) that each spark only loosely follows —
+    a turbulent flow field bends every path, and params.chaos (0-1, default 0.45) sets how
+    far sparks stray, a fraction tumbling off in their own direction. Nearly monochrome by
+    default: params.saturation (0-1, default 0.12) mixes params.color toward grey.
+    params.count, size, trail (0-1), spread (fraction of short edge, default 0.3)."""
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     H, W = ctx.H, ctx.W
     n = int(p.get("count", 160 * float(p.get("coverage", 0.5)) * 2))
     outside = distance_transform_edt(ctx.mask < 0.5)
-    spread = s * float(p.get("spread", 0.14))
-    w = np.exp(-outside / (spread * 0.45)) * (outside > s * 0.004) * (outside < spread * 2)
+    spread = s * float(p.get("spread", 0.3))
+    w = np.exp(-outside / (spread * 0.6)) * (outside > s * 0.004)
+    w = w / max(1e-9, w.sum()) * 0.8 + (outside > s * 0.004) / max(1, (outside > s * 0.004).sum()) * 0.2
     if L.get("z") == "over":
-        w = w + 0.25 * (ctx.mask > 0.5) * w.max()      # a few drift across her too
+        w = w + 0.15 * (ctx.mask > 0.5) * w.max()      # a few drift across her too
     flat = w.ravel() / max(1e-9, w.sum())
     idx = rng.choice(flat.size, size=max(1, n), p=flat)
     ys, xs = np.divmod(idx, W)
@@ -1228,40 +1231,52 @@ def gen_embers(L, ctx):
     if arc:
         px, py = [float(v) for v in str(p.get("pivot", "0.5,0.9")).split(",")[:2]]
         px, py = px * W, py * H
-        sweep = float(p.get("sweep", -30))
+        spin = -np.sign(float(p.get("sweep", -30)) or -1)   # cv2: +sweep = counter-clockwise
     else:
-        ang = np.deg2rad(_deg(p, "direction", 200))
+        ang0 = np.deg2rad(_deg(p, "direction", 200))
+    chaos = float(p.get("chaos", 0.45))
+    # turbulent wind: a smooth random angle field bends each path as it travels
+    ds = 4
+    turb = fbm((H // ds + 1, W // ds + 1), rng, s * 0.08 / ds, 3) * np.pi * 0.9 * chaos
+
+    def heading(x, y):
+        if arc:
+            th = np.arctan2(y - py, x - px) + spin * np.pi / 2
+        else:
+            th = ang0
+        yi, xi = int(np.clip(y, 0, H - 1)) // ds, int(np.clip(x, 0, W - 1)) // ds
+        return th + turb[yi, xi]
+
     core = np.zeros((H, W), np.float32)
     trail = float(p.get("trail", 0.5))
     size = float(p.get("size", 1.0))
+    steps = 22
     for x, y in zip(xs.astype(np.float32), ys.astype(np.float32)):
-        r0 = s * rng.uniform(0.0015, 0.005) * size * (1.6 if rng.random() < 0.08 else 1.0)
-        b = rng.uniform(0.5, 1.0)
-        steps = 14
-        if arc:
-            th = np.deg2rad(sweep * rng.uniform(0.05, 0.25) * trail)
-            c, sn = np.cos(th * np.linspace(0, 1, steps)), np.sin(th * np.linspace(0, 1, steps))
-            dx, dy = x - px, y - py
-            # cv2 sign convention: positive sweep = counter-clockwise on screen
-            tx = px + dx * c + dy * sn
-            ty = py - dx * sn + dy * c
-        else:
-            ln = s * rng.uniform(0.02, 0.09) * trail
-            t = np.linspace(0, 1, steps)
-            tx = x - np.cos(ang) * ln * t
-            ty = y - np.sin(ang) * ln * t
-        tx = tx + rng.normal(0, s * 0.002, steps).cumsum() * 0.3       # flicker in the wind
-        ty = ty + rng.normal(0, s * 0.002, steps).cumsum() * 0.3
+        r0 = s * rng.uniform(0.001, 0.0035) * size * (1.7 if rng.random() < 0.06 else 1.0)
+        b = rng.uniform(0.25, 1.0) ** 1.5             # most faint, a few bright
+        own = rng.normal(0, 0.35 * chaos)             # each spark's own drift
+        if rng.random() < 0.25 * chaos:
+            own = rng.uniform(-np.pi, np.pi)          # strays, tumbling their own way
+        ln = s * rng.uniform(0.015, 0.11) * trail
+        step = ln / steps
+        wob = rng.uniform(0.5, 2.5)                   # how much it flutters
+        tx, ty = [x], [y]
+        for k in range(1, steps):                     # walk back along where it came from
+            th = heading(tx[-1], ty[-1]) + own + rng.normal(0, 0.12 * wob)
+            tx.append(tx[-1] - np.cos(th) * step)
+            ty.append(ty[-1] - np.sin(th) * step)
         cv2.circle(core, (int(tx[0]), int(ty[0])), max(1, int(r0)), float(b), -1, cv2.LINE_AA)
         for k in range(1, steps):                    # continuous tapering streak
             f = 1 - k / steps
             cv2.line(core, (int(tx[k - 1]), int(ty[k - 1])), (int(tx[k]), int(ty[k])),
-                     float(b * f ** 1.5), max(1, int(2 * r0 * (0.25 + 0.75 * f))), cv2.LINE_AA)
+                     float(b * f ** 1.8), max(1, int(2 * r0 * (0.2 + 0.8 * f))), cv2.LINE_AA)
     core = np.clip(core, 0, 1)
-    glow = gaussian_filter(core, s * 0.006) * 2.2 + gaussian_filter(core, s * 0.02) * 1.5
-    a = np.clip(core + glow, 0, 1) * float(p.get("opacity", 0.95))
+    glow = gaussian_filter(core, s * 0.005) * 1.2 + gaussian_filter(core, s * 0.018) * 0.6
+    a = np.clip(core + glow, 0, 1) * float(p.get("opacity", 0.7))
     col = hex_rgb(p.get("color", "#ff6a1a"))
-    hot = np.array([1.0, 0.93, 0.7], np.float32)            # cores burn yellow-white
+    sat = float(p.get("saturation", 0.12))
+    col = col.mean() + (col - col.mean()) * sat
+    hot = np.array([1.0, 1.0, 0.97], np.float32)            # cores burn white
     rgb = col + (hot - col) * np.clip(core, 0, 1)[..., None]
     return Layer(rgb.astype(np.float32), a.astype(np.float32), blend="screen")
 

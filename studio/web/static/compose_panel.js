@@ -59,6 +59,40 @@ function removedSection(removed, ctx) {
   return det;
 }
 
+// Sliders per layer kind: [param, label, min, max, step, default]. Released → one quick-set.
+const SLIDERS = {
+  embers: [["saturation", "colour", 0, 1, 0.02, 0.12], ["opacity", "visibility", 0, 1, 0.02, 0.7],
+           ["spread", "spread", 0.05, 0.8, 0.01, 0.3], ["chaos", "wind wildness", 0, 1, 0.02, 0.45],
+           ["count", "amount", 40, 800, 10, 160], ["size", "spark size", 0.4, 3, 0.05, 1],
+           ["trail", "trail length", 0, 2, 0.05, 0.5]],
+  motion_smear: [["strength", "strength", 0, 5, 0.1, 1], ["length", "length", 0, 0.6, 0.01, 0.25],
+                 ["opacity", "visibility", 0, 1, 0.02, 0.8]],
+  ghost: [["strength", "strength", 0, 5, 0.1, 1], ["opacity", "visibility", 0, 1, 0.02, 0.4],
+          ["offset", "offset", 0, 0.2, 0.005, 0.05]],
+  light_leak: [["opacity", "visibility", 0, 1, 0.02, 0.5], ["width", "width", 0.1, 2, 0.05, 1]],
+  haze: [["opacity", "visibility", 0, 1, 0.02, 0.5]],
+  vignette: [["opacity", "visibility", 0, 1, 0.02, 0.6]],
+};
+const openSliders = new Set();   // survives panel re-renders
+
+function sliderBox(L, ctx) {
+  const box = el("div", "layer-sliders");
+  const P = L.params || (L.params = {});
+  for (const [k, label, lo, hi, step, def] of SLIDERS[L.kind]) {
+    const row = el("label", "slider-row");
+    const val = el("span", "slider-val");
+    const r = el("input");
+    r.type = "range"; r.min = lo; r.max = hi; r.step = step;
+    r.value = P[k] ?? def;
+    val.textContent = r.value;
+    r.oninput = () => { val.textContent = r.value; };
+    r.onchange = () => { P[k] = Number(r.value); ctx.onParam(L, k, Number(r.value)); };
+    row.append(el("span", "slider-label", label), r, val);
+    box.appendChild(row);
+  }
+  return box;
+}
+
 function pretty(id) {
   return String(id).replace(/_/g, " ");
 }
@@ -122,8 +156,18 @@ function layerRows(wrap, L, ctx, list) {
     });
     row.appendChild(chips);
   }
+  if (SLIDERS[L.kind]) {
+    const tune = el("button", "seedbtn" + (openSliders.has(L.id) ? " active" : ""), "⚙");
+    tune.title = "sliders: colour, visibility, spread …";
+    tune.onclick = () => {
+      openSliders.has(L.id) ? openSliders.delete(L.id) : openSliders.add(L.id);
+      ctx.onRefresh();
+    };
+    row.appendChild(tune);
+  }
   row.appendChild(roll);
   row.appendChild(rm);
+  if (openSliders.has(L.id) && SLIDERS[L.kind]) wrap.appendChild(sliderBox(L, ctx));
   if (ctx.openNotes.has(L.id)) {
     wrap.appendChild(el("div", "layer-note", L.note || "(no note)"));
   }

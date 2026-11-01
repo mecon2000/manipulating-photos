@@ -888,7 +888,7 @@ def main():
     i.add_argument("--crop", type=int)
     i.add_argument("--custom")
     i.add_argument("--disable")
-    i.add_argument("--set", nargs="*")
+    i.add_argument("--set", nargs="*", action="extend")
     i.add_argument("--seed", type=int)
     r = sub.add_parser("render"); r.add_argument("piece"); r.add_argument("--full", action="store_true")
     s = sub.add_parser("set"); s.add_argument("piece"); s.add_argument("kv", nargs="+"); s.add_argument("--note", default="")

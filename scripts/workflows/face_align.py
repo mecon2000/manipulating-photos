@@ -52,6 +52,7 @@ def landmarks(img_arr, _retry=True, max_edge=1600):
     and every caller that worked was already downscaling by accident.
     """
     import mediapipe as mp
+    full_arr = img_arr
     H, W = img_arr.shape[:2]
     scale = 1.0
     if max(H, W) > max_edge:
@@ -77,11 +78,40 @@ def landmarks(img_arr, _retry=True, max_edge=1600):
                             max_edge=max_edge)
             if got is not None and scale != 1.0:
                 got = {k: v / scale for k, v in got.items()}   # retry saw the small copy
+            if got is None:
+                got = _tiled(full_arr)
             return got
         return None
     lms = res.face_landmarks[0]
     return {k: np.array([lms[i].x * W / scale, lms[i].y * H / scale], dtype=np.float32)
             for k, i in IDX.items()}
+
+
+def _tiled(img_arr, fracs=(0.5, 0.35)):
+    """Last resort for small faces in wide full-body frames: search overlapping
+    tiles (half-stride), each upscaled so the face fills more of the detector's
+    input. Tiles nearer the top go first — that's where heads usually are."""
+    H, W = img_arr.shape[:2]
+    for f in fracs:
+        th, tw = int(H * f), int(W * f)
+        ys = range(0, H - th + 1, max(1, th // 2))
+        xs = range(0, W - tw + 1, max(1, tw // 2))
+        for y in ys:
+            for x in xs:
+                crop = img_arr[y:y + th, x:x + tw]
+                up = 1024 / max(th, tw)
+                if up > 1:
+                    crop = cv2.resize(crop, (int(tw * up), int(th * up)),
+                                      interpolation=cv2.INTER_CUBIC)
+                else:
+                    up = 1.0
+                got = landmarks(crop, _retry=False)
+                if got is None:
+                    got = landmarks(_normalize_for_detection(crop), _retry=False)
+                if got is not None:
+                    print(f"  face found in tile {f:.2f}@({x},{y})")
+                    return {k: v / up + np.array([x, y], np.float32) for k, v in got.items()}
+    return None
 
 
 def similarity_transform(src_pts, dst_pts):

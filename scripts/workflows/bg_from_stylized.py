@@ -119,8 +119,13 @@ def main():
                         "--param", f"image={d / 'bg_ai.jpg'}", "opacity=1", "brightness=1",
                         "--why", "background lifted from the AI-stylized version (figure cut + LaMa)",
                         "--no-render"], check=True)
-    # bottom of the stack: under everything else
+    # it's the recipe's pipeline step, not a random extra: clear the riff tag `add` sets
     P = json.loads((d / "piece.json").read_text())
+    for L in P["layers"]:
+        if L["id"] == a.id:
+            L["riff"] = False
+    (d / "piece.json").write_text(json.dumps(P, indent=2, ensure_ascii=False))
+    # bottom of the stack: under everything else
     under = [L["id"] for L in P["layers"] if L["z"] == "under" and L["id"] != a.id]
     over = [L["id"] for L in P["layers"] if L["z"] == "over"]
     subprocess.run([lc, "order", str(d), ",".join([a.id] + under + ["subject"] + over), "--no-render"],

@@ -38,10 +38,16 @@ def main():
 
     src_arr, sur_arr = np.asarray(src_pil), np.asarray(sur_pil)
     src_pts, dst_pts = FA.landmarks(src_arr), FA.landmarks(sur_arr)
+    if src_pts is None and dst_pts is None:
+        raise SystemExit("face not found in source or surreal")
     if src_pts is None or dst_pts is None:
-        raise SystemExit(f"face not found in {'source' if src_pts is None else 'surreal'}")
-
-    M = FA.similarity_transform(src_pts, dst_pts)
+        # Same fallback as surreal_with_face: heavily stylized faces (glowing
+        # eyes, duotone skin) defeat the detector; use the one geometry we have.
+        print(f"face not found in {'source' if src_pts is None else 'surreal'} — unwarped fallback")
+        dst_pts = dst_pts if dst_pts is not None else src_pts
+        M = None
+    else:
+        M = FA.similarity_transform(src_pts, dst_pts)
     warped = FA.warp(src_arr, M, src_pil.size) if M is not None else src_arr
 
     c, semi, ang = FA.ellipse_from_landmarks(dst_pts)

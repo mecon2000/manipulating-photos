@@ -58,7 +58,7 @@ def run_ai_version(d, cfg):
     stylized image (before any face overlay — only its background is used)."""
     out = d / "ai_version"
     out.mkdir(exist_ok=True)
-    cmd = [str(HERE / "surreal_with_face.py"), "--relit", str(d / "source.jpg"),
+    cmd = [sys.executable, str(HERE / "surreal_with_face.py"), "--relit", str(d / "source.jpg"),
            "--style", os.path.expanduser(cfg["style"]), "--color", "--no-face-overlay",
            "--upscale", "0", "--no-psd", "--out-dir", str(out),
            "--seed", str(int(cfg.get("seed", 23)))]

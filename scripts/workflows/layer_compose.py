@@ -168,6 +168,11 @@ def cmd_init(a):
     P["decisions"].append({"t": time.strftime("%F %T"), "init": {
         "disable": a.disable, "set": a.set, "wildness": a.wildness, "context": a.context}})
     save(d, P)
+    if recipe.get("ai_backdrop") and not a.no_ai_bg:   # recipe pipeline step: the AI version's BG
+        r = subprocess.run([str(HERE / "bg_from_stylized.py"), "--piece", str(d)],
+                           capture_output=True, text=True)
+        print(r.stdout[-600:] if r.returncode == 0 else f"ai_backdrop FAILED (piece still made):\n{r.stderr[-800:]}")
+        P = json.loads((d / "piece.json").read_text())
     print(f"Piece: {d}")
     for L in P["layers"]:
         print(f"  {'✓' if L.get('enabled', True) else '·'} {L['id']:<32} {L['kind']:<13} "
@@ -502,7 +507,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     for L in [x for x in gen_set if x["z"] == "under"]:
         lay = run(L)
         if lay is not None:
-            lay.alpha = lay.alpha * (1 - quiet + quiet * focus)
+            if L["kind"] != "backdrop":     # a full background must not fade at the margins
+                lay.alpha = lay.alpha * (1 - quiet + quiet * focus)
             emit(L, lay)
 
     # subject: B&W, highlights fall to paper (multiply onto paper colour), ragged edge
@@ -910,6 +916,8 @@ def cmd_to_recipe(a):
     for L in P["layers"]:
         if L.get("riff") and not L.get("enabled", True):
             continue
+        if L.get("kind") == "backdrop" and L.get("params", {}).get("image"):
+            continue        # this photo's own AI background — the recipe's ai_backdrop step makes one per piece
         L2 = {k: v for k, v in L.items() if k not in ("seed", "variants", "theme")}
         L2["riff"] = False
         if L2.get("kind") == "ink_smear":
@@ -1029,6 +1037,7 @@ def main():
     i = sub.add_parser("init")
     i.add_argument("--photo", required=True)
     i.add_argument("--recipe", required=True)
+    i.add_argument("--no-ai-bg", action="store_true", help="skip the recipe's ai_backdrop step")
     i.add_argument("--wildness", type=float, default=0.5)  # riffs: random extra layers, tagged riff=True
     i.add_argument("--context", default="")
     i.add_argument("--crop", type=int)

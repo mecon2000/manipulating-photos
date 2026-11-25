@@ -7,7 +7,13 @@ the stylized image, unioned with the piece's own subject mask so the hole covers
 silhouettes), fill the hole with LaMa, and add the result as a `backdrop` layer (bottom of
 the stack) under the real, untouched photo.
 
+  bg_from_stylized.py --piece PIECE_DIR                 # one command: run the AI version from the
+                                                        # recipe's "ai_backdrop" settings, then lift its BG
   bg_from_stylized.py --stylized STYLIZED.jpg --piece PIECE_DIR [--id ai_backdrop] [--dilate 0.02]
+
+The recipe's "ai_backdrop" block (shared/deconstruct/recipes/<name>.json):
+  {"style": "<ref image>", "prompt": "...", "negative": "...", "seed": 23}
+layer_compose.py init runs this automatically when the recipe has that block.
 
 Writes PIECE_DIR/bg_ai.jpg (+ bg_ai_mask.png). ~$0.002 (BiRefNet + LaMa on fal).
 """
@@ -47,15 +53,45 @@ def lama(image, mask):
     return out.resize((W, H), Image.LANCZOS)
 
 
+def run_ai_version(d, cfg):
+    """surreal_with_face on the piece's source, settings from the recipe. Returns the raw
+    stylized image (before any face overlay — only its background is used)."""
+    out = d / "ai_version"
+    out.mkdir(exist_ok=True)
+    cmd = [str(HERE / "surreal_with_face.py"), "--relit", str(d / "source.jpg"),
+           "--style", os.path.expanduser(cfg["style"]), "--color", "--no-face-overlay",
+           "--upscale", "0", "--no-psd", "--out-dir", str(out),
+           "--seed", str(int(cfg.get("seed", 23)))]
+    if cfg.get("prompt"):
+        cmd += ["--prompt", cfg["prompt"]]
+    if cfg.get("negative"):
+        cmd += ["--negative-prompt", cfg["negative"]]
+    print("AI version (for its background) …")
+    env = dict(os.environ, NOTIFY_DISABLE="1")
+    r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
+    hits = sorted(out.glob("*__surreal.jpg"), key=lambda f: f.stat().st_mtime)
+    if r.returncode != 0 or not hits:
+        raise SystemExit(f"AI version failed:\n{r.stdout[-1500:]}{r.stderr[-1500:]}")
+    return hits[-1]
+
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--stylized", required=True)
+    p.add_argument("--stylized", default=None,
+                   help="AI-stylized image; omit to generate it from the recipe's ai_backdrop block")
     p.add_argument("--piece", required=True)
     p.add_argument("--id", default="ai_backdrop")
     p.add_argument("--dilate", type=float, default=0.02, help="grow the hole, fraction of short edge")
     a = p.parse_args()
 
     d = Path(a.piece).expanduser()
+    if not a.stylized:
+        P0 = json.loads((d / "piece.json").read_text())
+        rp = Path("~/.openclaw/workspace/shared/deconstruct/recipes").expanduser() / f"{P0['recipe']}.json"
+        cfg = json.loads(rp.read_text()).get("ai_backdrop")
+        if not cfg:
+            raise SystemExit(f"recipe {P0['recipe']} has no ai_backdrop block — pass --stylized")
+        a.stylized = str(run_ai_version(d, cfg))
     src = Image.open(d / "source.jpg").convert("RGB")
     W, H = src.size
     sty = Image.open(a.stylized).convert("RGB").resize((W, H), Image.LANCZOS)

@@ -109,7 +109,7 @@ def api_init(body: dict = Body(...)):
         raise HTTPException(404, f"no such photo {photo}")
     try:
         job = compose.start_init(str(photo), str(body.get("recipe", "")),
-                                 float(body.get("wildness", 0.0)),
+                                 float(body.get("wildness", 0.5)),
                                  crop=body.get("crop"), custom=body.get("custom") or None,
                                  extra_set=body.get("set") or None)
     except FileExistsError as e:

@@ -921,6 +921,35 @@ def cmd_to_recipe(a):
                tuned_from=P.get("photo"), tuned_at=time.strftime("%F %T"))
     rp.write_text(json.dumps(new, indent=2))
     print(f"recipe {name}: {len(layers)} layers ({sum(L.get('enabled', True) for L in layers)} on) → {rp}")
+    # Other pieces of this recipe: never change what they have — only offer the layers
+    # they don't have yet, switched OFF, so he can turn them on when he goes back.
+    for od in sorted(PIECES.iterdir()):
+        pj = od / "piece.json"
+        if od == d or not pj.exists():
+            continue
+        Q = json.loads(pj.read_text())
+        if Q.get("recipe") != name:
+            continue
+        have = {L["id"] for L in Q["layers"]}
+        added = []
+        for k, L in enumerate(layers):
+            if L["id"] in have:
+                continue
+            L2 = copy.deepcopy(L)
+            L2.update(enabled=False, from_recipe=time.strftime("%F"),
+                      seed=(int(Q.get("seed", 1)) + 7919 * (len(Q["layers"]) + 1)) % 100000)
+            L2["note"] = ("[new in recipe, off] " + L2.get("note", "")).strip()
+            # keep the recipe's stacking: insert after the nearest preceding layer it has
+            prev = next((layers[j]["id"] for j in range(k - 1, -1, -1) if layers[j]["id"] in have), None)
+            idx = next((i + 1 for i, x in enumerate(Q["layers"]) if x["id"] == prev), len(Q["layers"]))
+            Q["layers"].insert(idx, L2)
+            have.add(L2["id"])
+            added.append(L2["id"])
+        if added:
+            Q.setdefault("decisions", []).append({"t": time.strftime("%F %T"),
+                                                  "recipe_sync": {"added_off": added}})
+            save(od, Q)
+            print(f"  {od.name}: +{len(added)} off ({', '.join(added)})")
 
 
 def cmd_options(a):
@@ -1000,7 +1029,7 @@ def main():
     i = sub.add_parser("init")
     i.add_argument("--photo", required=True)
     i.add_argument("--recipe", required=True)
-    i.add_argument("--wildness", type=float, default=0.0)  # recipe owns its layers; riffs only on request
+    i.add_argument("--wildness", type=float, default=0.5)  # riffs: random extra layers, tagged riff=True
     i.add_argument("--context", default="")
     i.add_argument("--crop", type=int)
     i.add_argument("--custom")

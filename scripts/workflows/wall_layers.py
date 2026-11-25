@@ -1329,7 +1329,37 @@ def gen_vignette(L, ctx):
     a = np.clip((r - float(p.get("inner", 0.45))) / 0.6, 0, 1) ** 1.6
     return solid(ctx, p.get("color", "#05050a"), a * float(p.get("opacity", 0.85)))
 
+def gen_rim_light(L, ctx):
+    """Coloured rim light on the subject's edges that face the light (shifted-mask rim):
+    pixels inside her where one step toward the light leaves the silhouette. One-sided,
+    follows the form, broken by dry-brush streaks like a painted rim — not a glow.
+    params: color, opacity, direction (deg the light comes FROM, screen: 180=left, 0=right,
+    90=top), direction2 (optional second light), width (fraction of short edge),
+    breakup (0-1 dry-brush gaps), lit_only (0-1: favour lit skin over shadows)."""
+    from scipy.ndimage import shift as _shift
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    inside = (gaussian_filter(ctx.mask, 0.004 * s) > 0.5).astype(np.float32)
+    w = float(p.get("width", 0.02)) * s
+    rim = np.zeros_like(inside)
+    dirs = [p.get("direction", 180)] + ([p["direction2"]] if p.get("direction2") not in (None, "") else [])
+    for d in dirs:
+        a = math.radians(float(re.sub(r"[^\d.-]", "", str(d)) or 180))
+        dx, dy = math.cos(a), -math.sin(a)
+        sh = _shift(inside, (-dy * w, -dx * w), order=0, mode="nearest")
+        rim = np.maximum(rim, inside * (1 - sh))
+    rim = gaussian_filter(rim, 0.003 * s) * inside
+    br = float(p.get("breakup", 0.4))
+    if br > 0:
+        n = gaussian_filter(rng.random((ctx.H, ctx.W)).astype(np.float32), (0.03 * s, 0.003 * s))
+        n = (n - n.min()) / (np.ptp(n) + 1e-6)
+        rim *= np.clip((n - 0.15 * br) * (1 + 3 * br), 0, 1)
+    lo = float(p.get("lit_only", 0.3))
+    rim *= np.clip((1 - lo) + lo * 1.5 * ctx.lum, 0, 1)
+    return solid(ctx, p.get("color", "#d3202f"), np.clip(rim * 1.5, 0, 1) * float(p.get("opacity", 0.9)))
+
+
 GENERATORS = {
+    "rim_light": gen_rim_light,
     "paint_pattern": lambda L, c: gen_runes(L, c, "block"),
     "calligraphy": lambda L, c: gen_runes(L, c, "brush"),
     "ink_smear": gen_ink_smear,

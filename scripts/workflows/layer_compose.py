@@ -394,6 +394,12 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         lo = wl.hex_rgb(lo_c or (pal[0] if pal else "#0a0a12"))
         hi = wl.hex_rgb(hi_c or "#dfe1e8")
         photo_t = (lo + (hi - lo) * lu[..., None]).astype(np.float32)
+        pref = base.get("palette_ref")
+        if pref:     # colour by the ref's own luminance->colour gradient (not a flat 2-stop duotone)
+            import face_align as FA
+            lu2 = bw(rgb, base, mask)
+            lut = FA.palette_lut(np.asarray(Image.open(os.path.expanduser(pref)).convert("RGB")))
+            photo_t = (FA.apply_palette(np.repeat(lu2[..., None] * 255, 3, 2), lut) / 255).astype(np.float32)
         soft = float(base.get("soften", 0)) * min(W, H)     # refs are never tack-sharp
         if soft > 0:
             from scipy.ndimage import gaussian_filter as _gf

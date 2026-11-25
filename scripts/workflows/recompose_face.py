@@ -27,6 +27,10 @@ def main():
                    help="where the target colour stats come from (see face_align)")
     p.add_argument("--match-strength", type=float, default=1.0,
                    help="0 = keep source tones, 1 = full transfer to stylized face")
+    p.add_argument("--palette-from", default=None,
+                   help="recolour the face by luminance through this image's main-hue "
+                        "gradient (e.g. the style ref) — kills leftover skin tone")
+    p.add_argument("--palette-strength", type=float, default=1.0)
     p.add_argument("--no-psd", action="store_true",
                    help="skip the layered PSD written next to --out")
     args = p.parse_args()
@@ -54,6 +58,9 @@ def main():
     mask = FA.radial_mask(src_pil.size, c, semi, ang, args.inner, args.outer, args.power)
     matched = FA.match_in_region(warped, sur_arr, mask, strength=args.match_strength,
                                  scope=args.match_scope)
+    if args.palette_from:
+        lut = FA.palette_lut(np.asarray(Image.open(args.palette_from).convert("RGB")))
+        matched = FA.apply_palette(matched, lut, args.palette_strength)
 
     m = mask[..., None]
     out = np.clip(sur_arr * (1 - m) + matched * m, 0, 255).astype(np.uint8)

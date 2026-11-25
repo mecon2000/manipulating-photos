@@ -263,6 +263,10 @@ def main():
                    help="where the face's target colour stats come from (see face_align)")
     p.add_argument("--match-strength", type=float, default=1.0,
                    help="0 = keep source tones, 1 = full transfer")
+    p.add_argument("--face-palette", choices=["off", "style"], default="off",
+                   help="'style': recolour the overlaid face by luminance through the style "
+                        "ref's main-hue gradient (duotone refs: no leftover skin tone)")
+    p.add_argument("--face-palette-strength", type=float, default=1.0)
     p.add_argument("--align-face", action="store_true",
                    help="detect the face in the stylized output too, warp the source "
                         "onto it, and build the mask from the TARGET face (fixes the "
@@ -435,6 +439,11 @@ def main():
                                         strength=args.match_strength,
                                         scope=args.match_scope)
         print("  histogram matched within face region only")
+        if args.face_palette == "style" and args.color:
+            lut = FA.palette_lut(np.asarray(Image.open(args.style).convert("RGB")))
+            bw_matched = np.clip(FA.apply_palette(bw_matched, lut, args.face_palette_strength),
+                                 0, 255).astype(np.uint8)
+            print("  face recoloured through style palette")
     elif args.color:
         bw_matched = match_histograms(src_work, surreal_work,
                                       channel_axis=-1).astype(np.uint8)

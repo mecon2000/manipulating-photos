@@ -114,6 +114,46 @@ def _tiled(img_arr, fracs=(0.5, 0.35)):
     return None
 
 
+def palette_lut(ref_arr, dominant="auto"):
+    """256-entry luminance -> RGB lookup sampled from a reference image.
+
+    Duotone references (blue skin, red rim) keep their *main* hue in one
+    channel family; mixing in the accent colour would average blue+red into
+    purple. So sample only pixels whose dominant channel matches the frame's
+    overall dominant one (or the one given), bin by luminance, take the mean,
+    interpolate empty bins and smooth.
+    """
+    a = np.asarray(ref_arr, np.float32).reshape(-1, 3)
+    L = a @ np.array([0.299, 0.587, 0.114], np.float32)
+    ch = {"r": 0, "g": 1, "b": 2}
+    if dominant == "auto":
+        lit = a[L > 30]
+        d = int(np.argmax(np.bincount(np.argmax(lit, 1), minlength=3)))
+    else:
+        d = ch[dominant]
+    keep = np.argmax(a, 1) == d
+    a, L = a[keep], L[keep]
+    bins = np.clip(L.astype(int), 0, 255)
+    cnt = np.bincount(bins, minlength=256)
+    lut = np.zeros((256, 3), np.float32)
+    have = cnt > 3
+    for c in range(3):
+        sm = np.bincount(bins, a[:, c], minlength=256)
+        lut[have, c] = sm[have] / cnt[have]
+        lut[:, c] = np.interp(np.arange(256), np.flatnonzero(have), lut[have, c])
+    lut[0] = 0
+    from scipy.ndimage import uniform_filter1d
+    return uniform_filter1d(lut, 9, axis=0)
+
+
+def apply_palette(img_arr, lut, strength=1.0):
+    """Recolour by luminance through a palette_lut, keeping tonal structure."""
+    img = np.asarray(img_arr, np.float32)
+    L = np.clip(img @ np.array([0.299, 0.587, 0.114], np.float32), 0, 255)
+    out = lut[L.astype(int)]
+    return img * (1 - strength) + out * strength
+
+
 def similarity_transform(src_pts, dst_pts):
     """2x3 affine (rotation+uniform scale+translation) mapping src onto dst."""
     s = np.stack([src_pts[k] for k in ALIGN_KEYS])

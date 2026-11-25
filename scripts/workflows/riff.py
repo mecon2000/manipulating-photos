@@ -30,6 +30,17 @@ PHOTOS = Path("~/.openclaw/workspace/_photos").expanduser()
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deconstruct import KINDS, REGIONS, _env, _parse  # noqa: E402
 
+
+def claude_bin():
+    """The `claude` CLI path. systemd units (Studio) run with a short PATH that lacks
+    ~/.local/bin, so a bare "claude" fails there with FileNotFoundError."""
+    import shutil
+    from pathlib import Path as _P
+    for c in (shutil.which("claude"), _P.home() / ".local/bin/claude", _P.home() / ".claude/local/claude"):
+        if c and _P(c).exists():
+            return str(c)
+    raise FileNotFoundError("claude CLI not found (looked on PATH, ~/.local/bin, ~/.claude/local)")
+
 # kinds the compositor can render for riffs; "asset" ones are generated images
 # (Flux on white, keyed to alpha) — the prompt describes the element itself.
 RIFF_KINDS = KINDS + ["glyph_rain", "asset", "print"]
@@ -123,7 +134,7 @@ def riff(photo: Path, recipe: dict, wild: float, context: str = "", model: str =
         prompt = PROMPT.format(photo=p, wild=wild, plan=plan(wild), model=name or "unknown",
                                notes=notes, recipe=json.dumps(slim, ensure_ascii=False),
                                kinds=", ".join(RIFF_KINDS), regions=", ".join(REGIONS))
-        r = subprocess.run(["claude", "-p", prompt, "--model", model, "--allowedTools", "Read",
+        r = subprocess.run([claude_bin(), "-p", prompt, "--model", model, "--allowedTools", "Read",
                             "--add-dir", str(tmp), "--output-format", "text"],
                            capture_output=True, text=True, timeout=600, env=_env(), cwd=str(tmp))
         if r.returncode != 0:

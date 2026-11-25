@@ -1358,7 +1358,75 @@ def gen_rim_light(L, ctx):
     return solid(ctx, p.get("color", "#d3202f"), np.clip(rim * 1.5, 0, 1) * float(p.get("opacity", 0.9)))
 
 
+def gen_backdrop(L, ctx):
+    """Full-frame painted background (Flux, generated once per prompt+bg_seed and cached),
+    cover-fit to the canvas. bg_seed is a RECIPE-level param on purpose: every piece of
+    the recipe gets the same backdrop, so a carousel reads as one series.
+    params: prompt, bg_seed (default 1), opacity, brightness."""
+    p = L.get("params", {})
+    prompt = p.get("prompt") or L.get("note") or "abstract dark painted background"
+    prompt += ", abstract background texture only, no people, no figure, no face, no text"
+    seed = int(p.get("bg_seed", 1))
+    land = ctx.W >= ctx.H
+    w, h = (1344, 896) if land else (896, 1344)
+    key = hashlib.sha1(f"backdrop|{prompt}|{seed}|{w}x{h}".encode()).hexdigest()[:12]
+    path = ASSETS / f"backdrop__{key}.png"
+    if not path.exists():
+        ASSETS.mkdir(parents=True, exist_ok=True)
+        _fal_flux(prompt, seed, w, h).save(path)
+        (ASSETS / "index.jsonl").open("a").write(
+            json.dumps({"file": path.name, "prompt": prompt, "seed": seed, "kind": "backdrop"}) + "\n")
+    im = Image.open(path).convert("RGB")
+    sc = max(ctx.W / im.width, ctx.H / im.height)               # cover-fit
+    im = im.resize((max(ctx.W, round(im.width * sc)), max(ctx.H, round(im.height * sc))), Image.LANCZOS)
+    x0, y0 = (im.width - ctx.W) // 2, (im.height - ctx.H) // 2
+    rgb = np.asarray(im.crop((x0, y0, x0 + ctx.W, y0 + ctx.H)), np.float32) / 255
+    rgb = np.clip(rgb * float(p.get("brightness", 1.0)), 0, 1)
+    return Layer(rgb, np.full((ctx.H, ctx.W), float(p.get("opacity", 1.0)), np.float32))
+
+
+def gen_dry_brush(L, ctx):
+    """Painted shadows on her body (subject-clipped), the way the ref does it: shadows
+    break into solid black whose boundary is a ragged dry-brush edge (bristle streaks
+    along one direction), and the silhouette edge gets eaten by strokes. Her shape and
+    clothes stay; only the shading turns into brushwork.
+    params: color, opacity, direction (deg), coverage (0-1: how far into the midtones
+    the black reaches), roughness (0-1 streak strength), edge (0-1 strokes eating the
+    outline from inside), length (stroke length, fraction of short edge)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    H, W = ctx.H, ctx.W
+    cov = float(p.get("coverage", 0.5))
+    rough = float(p.get("roughness", 0.6))
+    ang = float(re.sub(r"[^\d.-]", "", str(p.get("direction", "-60"))) or -60)
+    ln = float(p.get("length", 0.08)) * s
+
+    def _streaks(sig_along, sig_across):
+        n = gaussian_filter(rng.standard_normal((H + W, H + W)).astype(np.float32),
+                            (sig_across, sig_along))
+        r = rotate(n, ang)
+        y0, x0 = (r.shape[0] - H) // 2, (r.shape[1] - W) // 2
+        r = r[y0:y0 + H, x0:x0 + W]
+        return r / (r.std() + 1e-6)
+
+    bristle = _streaks(ln, 0.0015 * s)          # thin hairs of the brush
+    clump = _streaks(ln * 1.5, 0.012 * s)       # loaded vs dry passes
+    dark = 1 - gaussian_filter(ctx.lum, 0.002 * s)
+    field = dark + rough * (0.12 * bristle + 0.18 * clump)
+    inside = ctx.mask > 0.5
+    e = float(p.get("edge", 0.5))
+    if e > 0:
+        dist = distance_transform_edt(inside)
+        band = np.clip(1 - dist / (0.06 * s), 0, 1)
+        field += e * 0.45 * band * np.clip(0.6 + 0.5 * clump, 0, 1.5)
+    thr = 1.0 - 0.55 * cov
+    a = np.clip((field - thr) * 7, 0, 1)
+    a *= gaussian_filter(ctx.mask, 0.002 * s)
+    return solid(ctx, p.get("color", "#050609"), a * float(p.get("opacity", 0.95)))
+
+
 GENERATORS = {
+    "backdrop": gen_backdrop,
+    "dry_brush": gen_dry_brush,
     "rim_light": gen_rim_light,
     "paint_pattern": lambda L, c: gen_runes(L, c, "block"),
     "calligraphy": lambda L, c: gen_runes(L, c, "brush"),

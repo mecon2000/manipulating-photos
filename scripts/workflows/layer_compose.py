@@ -890,6 +890,39 @@ def cmd_restore(a):
 
 
 # ---------------------------------------------------------------- choice sets
+def cmd_to_recipe(a):
+    """Fold a tuned piece back into its recipe, so the next photo (another pose from the
+    set, another model) starts from the tuned state. Keeps base/background/palette and
+    the layer stack in order; drops disabled riffs (they were never the recipe's);
+    enabled riffs he kept become recipe layers. Per-photo seeds are not copied — each
+    piece re-seeds from its own photo — except recipe-level params like backdrop bg_seed.
+    The old recipe is kept as <name>.vN.json."""
+    d, P = load(a.piece)
+    name = a.name or P["recipe"]
+    rp = ROOT / "recipes" / f"{name}.json"
+    old = json.loads(rp.read_text()) if rp.exists() else {"schema": 1, "name": name}
+    if rp.exists():
+        n = 1
+        while (rp.parent / f"{name}.v{n}.json").exists():
+            n += 1
+        (rp.parent / f"{name}.v{n}.json").write_text(rp.read_text())
+    layers = []
+    for L in P["layers"]:
+        if L.get("riff") and not L.get("enabled", True):
+            continue
+        L2 = {k: v for k, v in L.items() if k not in ("seed", "variants", "theme")}
+        L2["riff"] = False
+        if L2.get("kind") == "ink_smear":
+            L2.get("params", {}).pop("brush_seed", None)
+        layers.append(L2)
+    new = dict(old, name=name, palette=P.get("palette", old.get("palette", [])),
+               base={k: v for k, v in P["base"].items()},
+               background=P["background"], layers=layers,
+               tuned_from=P.get("photo"), tuned_at=time.strftime("%F %T"))
+    rp.write_text(json.dumps(new, indent=2))
+    print(f"recipe {name}: {len(layers)} layers ({sum(L.get('enabled', True) for L in layers)} on) → {rp}")
+
+
 def cmd_options(a):
     d, P = load(a.piece)
     key, _, vals = a.vary.partition("=")
@@ -967,7 +1000,7 @@ def main():
     i = sub.add_parser("init")
     i.add_argument("--photo", required=True)
     i.add_argument("--recipe", required=True)
-    i.add_argument("--wildness", type=float, default=0.5)
+    i.add_argument("--wildness", type=float, default=0.0)  # recipe owns its layers; riffs only on request
     i.add_argument("--context", default="")
     i.add_argument("--crop", type=int)
     i.add_argument("--custom")
@@ -992,11 +1025,12 @@ def main():
     ad.add_argument("--after", default=""); ad.add_argument("--theme", default="added")
     ad.add_argument("--why", default=""); ad.add_argument("--off", action="store_true")
     ad.add_argument("--no-render", action="store_true")
+    tr = sub.add_parser("to-recipe"); tr.add_argument("piece"); tr.add_argument("--name", default="")
     p = sub.add_parser("pick"); p.add_argument("piece"); p.add_argument("--question", required=True)
     p.add_argument("--choice", required=True); p.add_argument("--comment", default="")
     a = ap.parse_args()
     {"init": cmd_init, "render": cmd_render, "set": cmd_set, "options": cmd_options,
-     "pick": cmd_pick, "variant": cmd_variant, "order": cmd_order, "save": cmd_save,
+     "pick": cmd_pick, "to-recipe": cmd_to_recipe, "variant": cmd_variant, "order": cmd_order, "save": cmd_save,
      "restore": cmd_restore, "fav": cmd_fav, "add": cmd_add, "recrop": cmd_recrop}[a.cmd](a)
 
 

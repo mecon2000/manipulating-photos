@@ -128,7 +128,13 @@ def cmd_init(a):
     photo = Path(a.photo).expanduser()
     rp = ROOT / "recipes" / f"{a.recipe}.json"
     recipe = json.loads(rp.read_text())
-    d = PIECES / f"{photo.stem}__{a.recipe}"
+    if a.name:                  # Studio reserves the folder (empty) and passes its name
+        d = PIECES / a.name
+    else:                       # CLI: never overwrite an existing piece — take the next free name
+        base = f"{photo.stem}__{a.recipe}"
+        d, n = PIECES / base, 2
+        while (d / "piece.json").exists():
+            d, n = PIECES / f"{base}_{n}", n + 1
     d.mkdir(parents=True, exist_ok=True)
     src = smart_crop(photo, d, a.crop, a.custom)
     im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
@@ -1040,6 +1046,7 @@ def main():
     i.add_argument("--photo", required=True)
     i.add_argument("--recipe", required=True)
     i.add_argument("--no-ai-bg", action="store_true", help="skip the recipe's ai_backdrop step")
+    i.add_argument("--name", default="", help="piece folder name (default <photo>__<recipe>, _2.. if taken)")
     i.add_argument("--wildness", type=float, default=0.5)  # riffs: random extra layers, tagged riff=True
     i.add_argument("--context", default="")
     i.add_argument("--crop", type=int)

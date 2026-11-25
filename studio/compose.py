@@ -315,11 +315,19 @@ def start_init(photo: str, recipe: str, wildness: float, crop=None,
     ntfy via activity.py (key 'compose:<piece>')."""
     if not (RECIPES / f"{recipe}.json").is_file():
         raise FileNotFoundError(f"no recipe {recipe}")
-    name = piece_name_for(photo, recipe)
-    # a piece.json without final.jpg = an init that died mid-render → allow a retry
-    if (PIECES / name / "final.jpg").exists():
-        raise FileExistsError(name)
-    args = ["init", "--photo", photo, "--recipe", recipe,
+    # Same photo + recipe twice (e.g. two wildness levels) = two pieces, never one
+    # overwriting the other: reserve a fresh folder atomically (mkdir) right now, so
+    # two clicks in a row can't race into the same name. <base>, <base>_2, <base>_3 …
+    base = piece_name_for(photo, recipe)
+    name, n = base, 2
+    PIECES.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            (PIECES / name).mkdir()
+            break
+        except FileExistsError:
+            name, n = f"{base}_{n}", n + 1
+    args = ["init", "--photo", photo, "--recipe", recipe, "--name", name,
             "--wildness", f"{min(max(float(wildness), 0.0), 1.0):.2f}"]
     if custom:
         if not re.match(r"^\d+,\d+,\d+,\d+$", custom):

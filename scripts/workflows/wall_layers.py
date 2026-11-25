@@ -1364,6 +1364,14 @@ def gen_backdrop(L, ctx):
     the recipe gets the same backdrop, so a carousel reads as one series.
     params: prompt, bg_seed (default 1), opacity, brightness."""
     p = L.get("params", {})
+    if p.get("image"):              # a ready background (e.g. bg_from_stylized.py's AI-version BG)
+        im = Image.open(os.path.expanduser(str(p["image"]))).convert("RGB")
+        sc = max(ctx.W / im.width, ctx.H / im.height)
+        im = im.resize((max(ctx.W, round(im.width * sc)), max(ctx.H, round(im.height * sc))), Image.LANCZOS)
+        x0, y0 = (im.width - ctx.W) // 2, (im.height - ctx.H) // 2
+        rgb = np.asarray(im.crop((x0, y0, x0 + ctx.W, y0 + ctx.H)), np.float32) / 255
+        rgb = np.clip(rgb * float(p.get("brightness", 1.0)), 0, 1)
+        return Layer(rgb, np.full((ctx.H, ctx.W), float(p.get("opacity", 1.0)), np.float32))
     prompt = p.get("prompt") or L.get("note") or "abstract dark painted background"
     prompt += ", abstract background texture only, no people, no figure, no face, no text"
     seed = int(p.get("bg_seed", 1))

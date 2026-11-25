@@ -216,6 +216,8 @@ def _safe_questions(piece):
 def list_recipes() -> list[dict]:
     out = []
     for f in sorted(RECIPES.glob("*.json")):
+        if re.search(r"\.v\d+$", f.stem):      # stray to-recipe backup (they live in _history/)
+            continue
         try:
             r = json.loads(f.read_text())
         except ValueError:

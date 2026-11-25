@@ -902,16 +902,18 @@ def cmd_to_recipe(a):
     the layer stack in order; drops disabled riffs (they were never the recipe's);
     enabled riffs he kept become recipe layers. Per-photo seeds are not copied — each
     piece re-seeds from its own photo — except recipe-level params like backdrop bg_seed.
-    The old recipe is kept as <name>.vN.json."""
+    The old recipe is kept as recipes/_history/<name>.vN.json."""
     d, P = load(a.piece)
     name = a.name or P["recipe"]
     rp = ROOT / "recipes" / f"{name}.json"
     old = json.loads(rp.read_text()) if rp.exists() else {"schema": 1, "name": name}
-    if rp.exists():
+    if rp.exists():            # backup → recipes/_history/ (kept out of the wizard's list)
+        hist = rp.parent / "_history"
+        hist.mkdir(exist_ok=True)
         n = 1
-        while (rp.parent / f"{name}.v{n}.json").exists():
+        while (hist / f"{name}.v{n}.json").exists():
             n += 1
-        (rp.parent / f"{name}.v{n}.json").write_text(rp.read_text())
+        (hist / f"{name}.v{n}.json").write_text(rp.read_text())
     layers = []
     for L in P["layers"]:
         if L.get("riff") and not L.get("enabled", True):

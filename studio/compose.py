@@ -376,8 +376,35 @@ def thumb(path: Path, w: int = 480) -> Path:
     return out
 
 
+UPLOADS = STATE / "uploads"     # photos sent from the wizard (phone or desktop)
+MAX_UPLOAD = 60 * 1024 * 1024
+
+
+def save_upload(filename: str, data: bytes) -> str:
+    """Store an uploaded photo as a normal JPEG (EXIF rotation applied, so phone
+    portraits aren't sideways) under state/uploads/, and return its path."""
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    if len(data) > MAX_UPLOAD:
+        raise ValueError("file too large (60 MB max)")
+    try:
+        im = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGB")
+    except Exception as e:
+        raise ValueError(f"not an image: {e}")
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename or "upload").stem).strip("._")[:60] or "upload"
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    out, n = UPLOADS / f"{stem}.jpg", 2
+    while out.exists():
+        out, n = UPLOADS / f"{stem}_{n}.jpg", n + 1
+    im.save(out, quality=95)
+    return str(out)
+
+
 def photo_choices(src: str, limit: int = 60) -> list[str]:
     """Photo pickers reused from Studio's existing pools."""
+    if src == "uploads":
+        files = sorted(UPLOADS.glob("*.jpg"), key=lambda p: -p.stat().st_mtime) if UPLOADS.exists() else []
+        return [str(p) for p in files][:limit]
     if src == "favorites":
         try:
             favs = json.loads((SHARED / "favorites" / "favorites.json").read_text()

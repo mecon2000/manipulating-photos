@@ -195,3 +195,8 @@
 .slider-row input[type=range] { width: 100%; min-height: 36px; touch-action: none; }  /* the list is pan-y: give the slider the horizontal drag */
 .slider-val { text-align: right; font-variant-numeric: tabular-nums; }
 .seedbtn.active { border-color: var(--fg-dim); }
+
+.path-row { display: flex; gap: 6px; align-items: stretch; }
+.path-row .text-in { flex: 1; min-width: 0; }
+.upload-btn { white-space: nowrap; display: inline-flex; align-items: center; cursor: pointer; min-height: 36px; }
+.upload-btn.busy { opacity: .6; pointer-events: none; }

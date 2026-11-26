@@ -8,7 +8,7 @@ Chat:   /api/compose/session/{piece}/chat[-history] — same shape as Studio's
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from . import activity, compose, compose_agent, compose_sync
@@ -80,9 +80,18 @@ def api_breakdown(name: str, w: int = 480):
 
 @router.get("/api/compose/photos")
 def api_photos(src: str = "candidates"):
-    if src not in ("candidates", "favorites", "finals"):
-        raise HTTPException(400, "src must be candidates|favorites|finals")
+    if src not in ("candidates", "favorites", "finals", "uploads"):
+        raise HTTPException(400, "src must be candidates|favorites|finals|uploads")
     return {"photos": compose.photo_choices(src)}
+
+
+@router.post("/api/compose/upload")
+async def api_upload(file: UploadFile = File(...)):
+    data = await file.read(compose.MAX_UPLOAD + 1)
+    try:
+        return {"path": compose.save_upload(file.filename or "upload", data)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/api/compose/thumb")

@@ -137,6 +137,30 @@ async function loadPhotos(src) {
   }
 }
 
+async function upload(file) {
+  const lab = $("upload-in").parentElement;
+  lab.classList.add("busy");
+  toast(`Uploading ${file.name}…`, 60000);
+  try {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const { path } = await api("/upload", { method: "POST", body: fd });
+    sel.picked = path;
+    sel.photo = path;            // so the grid highlights it
+    $("photo-path").value = "";
+    $("src-tabs").querySelectorAll(".mode-btn").forEach((x) =>
+      x.classList.toggle("active", x.dataset.src === "uploads"));
+    await loadPhotos("uploads");
+    updateSummary();
+    toast("Uploaded — picked");
+  } catch (e) {
+    toast(`Upload failed: ${e.message}`, 6000);
+  } finally {
+    lab.classList.remove("busy");
+    $("upload-in").value = "";
+  }
+}
+
 function updateSummary() {
   sel.photo = $("photo-path").value.trim() || sel.picked;
   $("sel-summary").textContent = sel.recipe && sel.photo
@@ -191,6 +215,7 @@ function init() {
     loadPhotos(b.dataset.src);
   });
   $("photo-path").addEventListener("input", updateSummary);
+  $("upload-in").addEventListener("change", (e) => { if (e.target.files[0]) upload(e.target.files[0]); });
   $("wildness").addEventListener("input", (e) => { $("wild-val").textContent = e.target.value; });
   $("start-btn").onclick = start;
   refresh();

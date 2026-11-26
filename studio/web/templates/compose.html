@@ -26,9 +26,15 @@
       <button class="mode-btn active" data-src="candidates">Candidates</button>
       <button class="mode-btn" data-src="favorites">Favorites</button>
       <button class="mode-btn" data-src="finals">Finals</button>
+      <button class="mode-btn" data-src="uploads">Uploads</button>
     </div>
     <div id="photo-grid" class="photo-grid"></div>
-    <input id="photo-path" class="text-in" type="text" placeholder="…or paste a photo path" autocomplete="off" value="{{ src }}">
+    <div class="path-row">
+      <input id="photo-path" class="text-in" type="text" placeholder="…or paste a photo path (I:\Photos\… works)" autocomplete="off" value="{{ src }}">
+      <label class="btn upload-btn" title="Upload a photo from this device">Upload
+        <input id="upload-in" type="file" accept="image/*" hidden>
+      </label>
+    </div>
 
     <h3 style="margin-top:14px">3 · How far</h3>
     <div class="wild-row">

@@ -881,7 +881,7 @@ def library_asset(L, ctx):
     ys, xs = np.nonzero(A > 0.05)
     if len(xs):
         C, A = C[ys.min():ys.max() + 1, xs.min():xs.max() + 1], A[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
-    cov = float(p.get("coverage", 0.12))
+    cov = min(float(p.get("coverage", 0.06)), 0.08)       # accents, never the main event
     target = int(math.sqrt(max(1, cov * ctx.W * ctx.H)) * 1.3)
     sc = target / max(C.shape[:2])
     w, h = max(8, int(C.shape[1] * sc)), max(8, int(C.shape[0] * sc))
@@ -894,7 +894,14 @@ def library_asset(L, ctx):
     A = rotate(A, ang)
     h, w = A.shape
     x0, y0, x1, y1 = region_box(L.get("region", "anywhere"), ctx)
-    cx, cy = rng.uniform(x0, max(x0 + 1, x1)), rng.uniform(y0, max(y0 + 1, y1))
+    fz = _face_soft(ctx, 2.0) > 0.05 if ctx.face else None
+    for _try in range(12):                                # keep clear of her face
+        cx, cy = rng.uniform(x0, max(x0 + 1, x1)), rng.uniform(y0, max(y0 + 1, y1))
+        if fz is None:
+            break
+        bx0, by0 = max(0, int(cx - w / 2)), max(0, int(cy - h / 2))
+        if not fz[by0:int(cy + h / 2), bx0:int(cx + w / 2)].any():
+            break
     rgb = np.zeros((ctx.H, ctx.W, 3), np.float32)
     al = np.zeros((ctx.H, ctx.W), np.float32)
     X, Y = int(cx - w / 2), int(cy - h / 2)

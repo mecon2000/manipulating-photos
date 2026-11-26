@@ -251,7 +251,7 @@ def _person_mask(im):
     return cv2.GaussianBlur(person, (0, 0), max(1.0, W * 0.002))
 
 
-HAIR_KINDS = ("pen_outline", "shutter_drag")
+HAIR_KINDS = ("pen_outline", "shutter_drag", "hair_tone", "line_screen")
 
 
 def hair_mask(d, im, size):
@@ -603,7 +603,11 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
                     return lay
                 except Exception:
                     pass
-        ctx = wl.Ctx(rng=np.random.default_rng(int(L.get("seed", 1))), **ctx_args)
+        try:
+            sd = int(L.get("seed") if L.get("seed") not in (None, "", "null", "None") else 1)
+        except (TypeError, ValueError):
+            sd = 1
+        ctx = wl.Ctx(rng=np.random.default_rng(sd), **ctx_args)
         lay = g(L, ctx)
         if use_cache and lay is not None:
             try:

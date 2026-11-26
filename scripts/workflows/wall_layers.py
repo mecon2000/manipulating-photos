@@ -1737,6 +1737,9 @@ def gen_line_screen(L, ctx):
         tone, reg = lum, np.clip((lum - float(p.get("threshold", 0.6))) * 4, 0, 1) * ctx.mask
     elif where == "shadows":
         tone, reg = 1 - lum, np.clip((float(p.get("threshold", 0.4)) - lum) * 4, 0, 1) * ctx.mask
+    elif where == "hair":
+        hm = ctx.hair if ctx.hair is not None else np.zeros_like(lum)
+        tone, reg = np.full_like(lum, 0.45), np.clip(gaussian_filter(hm, 0.002 * s) * 1.4, 0, 1)
     elif where == "background":
         tone, reg = np.full_like(lum, 0.5), 1 - ctx.mask
     elif where == "subject":
@@ -2097,7 +2100,25 @@ def gen_studio_arcs(L, ctx):
     return Layer(np.clip(rgb, 0, 1).astype(np.float32), a * float(p.get("opacity", 0.5)))
 
 
+def gen_hair_tone(L, ctx):
+    """Recolour her hair (MediaPipe hair mask) to one flat tone — the pop-art white hair —
+    keeping the strands as darker lines (high-pass of her own hair) so it still reads as hair.
+    params: color, opacity, strands (0-1 how much strand detail shows), soft (edge feather)."""
+    p, s = L.get("params", {}), ctx.s
+    if ctx.hair is None:
+        return None
+    lum = ctx.lum.astype(np.float32)
+    detail = lum - gaussian_filter(lum, 0.004 * s)
+    strands = float(p.get("strands", 0.5))
+    shade = 1 - strands * 0.6 * np.clip(-detail * 8, 0, 1)
+    col = hex_rgb(p.get("color", "#fbf8ff"))
+    rgb = (col[None, None] * shade[..., None]).astype(np.float32)
+    a = np.clip(gaussian_filter(ctx.hair, float(p.get("soft", 0.002)) * s) * 1.4, 0, 1)
+    return Layer(rgb, a * float(p.get("opacity", 1.0)))
+
+
 GENERATORS = {
+    "hair_tone": gen_hair_tone,
     "depth_trail": gen_depth_trail,
     "studio_arcs": gen_studio_arcs,
     "spike_burst": gen_spike_burst,

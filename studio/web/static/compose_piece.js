@@ -438,7 +438,8 @@ const panelCtx = () => ({
     L._pendingSeed = seed;
     usedSeeds[L.id] = seed;
     renderAll();
-    persist("/quick-set", { kv: [`${L.id}.seed=${seed}`], note: `use variant seed ${seed} for ${L.id}` });
+    // the original version may have no seed (null): send it empty, never the text "null"
+    persist("/quick-set", { kv: [`${L.id}.seed=${seed == null ? "" : seed}`], note: `use variant seed ${seed ?? "original"} for ${L.id}` });
   },
   onDragEnd() { if (panelStale) renderAll(); },
   onNote(id) {

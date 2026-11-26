@@ -147,6 +147,7 @@ function refit() {
   applyBaseTransform();
   rescaleMarkers();
   if (maskNode) { maskNode.position({ x: fitX, y: fitY }); maskNode.scale({ x: fitScale, y: fitScale }); }
+  if (shapePts) drawShape();
 }
 
 // Base transform bakes fit into layer positions; stage scale/pos handle user zoom/pan.
@@ -724,4 +725,95 @@ export function endMaskEdit() {
   maskNode = cursorNode = innerNode = maskCanvas = maskTint = null;
   container.style.cursor = "";
   overlayLayer.batchDraw();
+}
+
+
+// ---- Shape edit (Compose: free-transform the torn strip) ----
+// 6 points in image px: TL, TM, TR, BR, BM, BL. Corners distort (or scale evenly in "scale"
+// mode), the two middles bend, ✥ moves all, ↻ rotates all around the centre.
+let shapePts = null, shapeNodes = [], shapeLine = null, shapeMode = "distort";
+const QUAD = (p0, pm, p1, n = 32) => {
+  const c = { x: 2 * pm.x - 0.5 * (p0.x + p1.x), y: 2 * pm.y - 0.5 * (p0.y + p1.y) };
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, a = (1 - t) * (1 - t), b = 2 * (1 - t) * t, d = t * t;
+    out.push(a * p0.x + b * c.x + d * p1.x, a * p0.y + b * c.y + d * p1.y);
+  }
+  return out;
+};
+const centre = () => ({ x: shapePts.reduce((a, p) => a + p.x, 0) / 6, y: shapePts.reduce((a, p) => a + p.y, 0) / 6 });
+
+function drawShape() {
+  if (!shapePts) return;
+  const P = shapePts.map((p) => toStageCoords(p));
+  const top = QUAD(P[0], P[1], P[2]), bot = QUAD(P[3], P[4], P[5]);
+  shapeLine.points(top.concat(bot));
+  const k = 1 / stage.scaleX();
+  shapeLine.strokeWidth(2 * k);
+  const c = toStageCoords(centre());
+  const up = { x: (P[0].x + P[2].x) / 2 - c.x, y: (P[0].y + P[2].y) / 2 - c.y };
+  const L = Math.hypot(up.x, up.y) || 1;
+  const rot = { x: c.x + up.x / L * (L + 40 * k), y: c.y + up.y / L * (L + 40 * k) };
+  const where = P.concat([c, rot]);
+  shapeNodes.forEach((n, i) => { n.position(where[i]); n.scale({ x: k, y: k }); });
+  overlayLayer.batchDraw();
+}
+
+export function startShapeEdit(norm) {
+  endShapeEdit();
+  shapePts = norm.map(([x, y]) => ({ x: x * natW, y: y * natH }));
+  shapeLine = new Konva.Line({ points: [], closed: true, stroke: "#fff", dash: [6, 4], listening: false,
+                               shadowColor: "#000", shadowBlur: 3, shadowOpacity: 0.9, fill: "rgba(255,255,255,0.08)" });
+  overlayLayer.add(shapeLine);
+  const mk = (i) => {
+    const kind = i < 6 ? ([1, 4].includes(i) ? "bend" : "corner") : (i === 6 ? "move" : "rotate");
+    const n = kind === "corner" ? new Konva.Circle({ radius: 9, fill: "#fff", stroke: "#000", strokeWidth: 1.5 })
+      : kind === "bend" ? new Konva.Rect({ width: 14, height: 14, offsetX: 7, offsetY: 7, rotation: 45, fill: "#ffd60a", stroke: "#000", strokeWidth: 1.5 })
+      : kind === "move" ? new Konva.Circle({ radius: 13, fill: "rgba(10,132,255,0.85)", stroke: "#fff", strokeWidth: 2 })
+      : new Konva.Circle({ radius: 10, fill: "rgba(52,199,89,0.9)", stroke: "#fff", strokeWidth: 2 });
+    n.draggable(true);
+    let last = null, c0 = null, a0 = 0, d0 = 1, start = null;
+    n.on("dragstart", () => {
+      last = toImageCoords(n.position());
+      c0 = centre(); start = shapePts.map((p) => ({ ...p }));
+      a0 = Math.atan2(last.y - c0.y, last.x - c0.x);
+      d0 = Math.hypot(last.x - c0.x, last.y - c0.y) || 1;
+    });
+    n.on("dragmove", (e) => {
+      const p = toImageCoords(n.position());
+      if (kind === "move") {
+        const dx = p.x - last.x, dy = p.y - last.y;
+        shapePts.forEach((q) => { q.x += dx; q.y += dy; });
+      } else if (kind === "rotate") {
+        const a = Math.atan2(p.y - c0.y, p.x - c0.x) - a0, cs = Math.cos(a), sn = Math.sin(a);
+        shapePts = start.map((q) => ({ x: c0.x + (q.x - c0.x) * cs - (q.y - c0.y) * sn,
+                                       y: c0.y + (q.x - c0.x) * sn + (q.y - c0.y) * cs }));
+      } else if (kind === "corner" && (shapeMode === "scale" || (e.evt && e.evt.shiftKey))) {
+        const k = Math.hypot(p.x - c0.x, p.y - c0.y) / d0;
+        shapePts = start.map((q) => ({ x: c0.x + (q.x - c0.x) * k, y: c0.y + (q.y - c0.y) * k }));
+      } else {
+        shapePts[i] = p;
+      }
+      last = p;
+      drawShape();
+    });
+    n.on("dragend", drawShape);
+    n.on("mouseenter", () => { container.style.cursor = kind === "move" ? "move" : "pointer"; });
+    n.on("mouseleave", () => { container.style.cursor = ""; });
+    overlayLayer.add(n);
+    return n;
+  };
+  shapeNodes = [0, 1, 2, 3, 4, 5, 6, 7].map(mk);
+  setMode("shape");
+  drawShape();
+}
+export function setShapeMode(m) { shapeMode = m; }
+export function getShape() {
+  return shapePts ? shapePts.map((p) => [+(p.x / natW).toFixed(4), +(p.y / natH).toFixed(4)]) : null;
+}
+export function endShapeEdit() {
+  shapeNodes.forEach((n) => n.destroy());
+  if (shapeLine) shapeLine.destroy();
+  shapeNodes = []; shapeLine = null; shapePts = null;
+  if (overlayLayer) overlayLayer.batchDraw();
 }

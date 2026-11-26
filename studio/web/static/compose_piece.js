@@ -361,6 +361,41 @@ async function applyPaint(remove = false) {
   } catch (e) { toast(`Mask failed: ${e.message}`, 6000); quietLayers.delete(id); liveHold = null; }
   finally { inflight--; updateDots(); pollSoon(500); redraw(); }
 }
+// ---- free-transform the torn strip ----
+let shaping = null;
+function startShape(L) {
+  if (painting) endPaint();
+  const m = man && man.layers.find((x) => x.id === L.id);
+  const g = m && m.geom && m.geom.shape;
+  if (!g) { toast("Render the piece once first — the tear's handles come from the last render.", 4000); return; }
+  shaping = L.id;
+  canvas.startShapeEdit(g);
+  setShapeMode("distort");
+  $("shape-label").textContent = `“${L.id.replace(/_/g, " ")}”`;
+  $("shape-bar").classList.remove("hidden");
+  $("mode-toggle").classList.add("hidden");
+}
+function setShapeMode(m) {
+  canvas.setShapeMode(m);
+  $("shape-distort").classList.toggle("active", m === "distort");
+  $("shape-scale").classList.toggle("active", m === "scale");
+}
+function endShape() {
+  shaping = null;
+  canvas.endShapeEdit();
+  $("shape-bar").classList.add("hidden");
+  $("mode-toggle").classList.remove("hidden");
+  setMode("pan");
+}
+function applyShape(reset = false) {
+  const id = shaping;
+  if (!id) return;
+  const pts = reset ? null : canvas.getShape();
+  endShape();
+  const v = pts ? pts.map((p) => p.join(",")).join(";") : "";
+  persist("/quick-set", { kv: [`${id}.shape=${v}`], note: reset ? `tear ${id}: automatic placement` : `tear ${id}: reshaped` });
+}
+
 let liveHold = null;            // {id, mask}: applied mask shown live until the server's PNG lands
 function loadImgEl(url) {
   return new Promise((res, rej) => { const i = new Image(); i.crossOrigin = "anonymous";
@@ -369,6 +404,7 @@ function loadImgEl(url) {
 
 const panelCtx = () => ({
   onPaint(L) { startPaint(L); },
+  onShape(L) { startShape(L); },
   layers: man ? man.layers : [], overrides, rolling, openNotes,
   onRemove(L) {
     L.removed = true;
@@ -757,6 +793,11 @@ function boot() {
   $("paint-tint").onchange = (e) => canvas.setMaskTint(e.target.checked);
   $("paint-color").onchange = (e) => { canvas.setMaskColor(e.target.value); localStorage.setItem("maskColor", e.target.value); };
   $("paint-feather").oninput = (e) => { canvas.setMaskFeather(Number(e.target.value)); localStorage.setItem("maskFeather", e.target.value); };
+  $("shape-distort").onclick = () => setShapeMode("distort");
+  $("shape-scale").onclick = () => setShapeMode("scale");
+  $("shape-cancel").onclick = endShape;
+  $("shape-apply").onclick = () => applyShape(false);
+  $("shape-reset").onclick = () => applyShape(true);
   $("paint-cancel").onclick = endPaint;
   $("paint-apply").onclick = () => applyPaint(false);
   $("paint-remove").onclick = () => applyPaint(true);

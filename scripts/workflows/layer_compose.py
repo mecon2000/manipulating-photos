@@ -674,6 +674,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
                     lay = wl.Layer(z["rgb"].astype(np.float32), z["alpha"].astype(np.float32),
                                    blend=str(z["blend"]), clip=str(z["clip"]) or None)
                     lay._key = key
+                    if "geom" in z.files:
+                        lay.geom = json.loads(str(z["geom"]))
                     fp.touch()                       # recently used: survives the prune
                     return lay
                 except Exception:
@@ -689,7 +691,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
                 cdir.mkdir(parents=True, exist_ok=True)
                 tmp = cdir / f".{key}.tmp.npz"
                 np.savez(tmp, rgb=lay.rgb.astype(np.float16), alpha=lay.alpha.astype(np.float16),
-                         blend=lay.blend, clip=lay.clip or "")
+                         blend=lay.blend, clip=lay.clip or "",
+                         geom=json.dumps(getattr(lay, "geom", None)))
                 os.replace(tmp, fp)
                 lay._key = key
             except OSError:
@@ -706,6 +709,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     def emit(L, lay):
         nonlocal out
         key = getattr(lay, "_key", None)
+        geom = getattr(lay, "geom", None)
         raw_a = getattr(lay, "_raw_alpha", None)
         lay = apply_boxes(L, lay, W, H, s)
         raw = apply_boxes(L, wl.Layer(lay.rgb, raw_a, blend=lay.blend, clip=lay.clip), W, H, s) \
@@ -717,7 +721,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         if on and not only:
             out = composite(out, lay)
         stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay, "seed": L.get("seed"),
-                      "key": key, "raw": raw})
+                      "key": key, "raw": raw, "geom": geom})
 
     # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
     ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
@@ -731,7 +735,9 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
             from scipy.ndimage import gaussian_filter as _gf
             m = np.asarray(Image.open(d / pm).convert("L").resize((W, H), Image.BILINEAR), np.float32) / 255
             raw = lay.alpha
+            g0 = getattr(lay, "geom", None)
             lay = wl.Layer(lay.rgb, raw * _gf(m, 0.0015 * s), blend=lay.blend, clip=lay.clip)
+            lay.geom = g0
             lay._key = getattr(_run_raw, "_k", None)
             lay._raw_alpha = raw            # the unmasked layer: the browser previews repaints live
         return lay
@@ -864,7 +870,7 @@ def render(d, P, full=False, event="render", **meta):
                             "riff": bool(L.get("riff")), "note": L.get("note", ""),
                             "seed": L.get("seed"), "variants": L.get("variants", []),
                             "params": (L or {}).get("params", {}), "v": e.get("key"),
-                            "ink": _ink(e["layer"].alpha), "raw": rawrel})
+                            "ink": _ink(e["layer"].alpha), "raw": rawrel, "geom": e.get("geom")})
     if full:
         from psd_layers import write_psd
         W, H = img.size

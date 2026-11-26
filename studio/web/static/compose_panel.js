@@ -95,6 +95,9 @@ const SLIDERS = {
                 ["length", "length", 0.1, 1.2, 0.01, 0.55], ["width", "spike width", 0.03, 0.4, 0.01, 0.12],
                 ["core", "core", 0, 1.5, 0.02, 0.5], ["dry", "dry brush", 0, 1, 0.02, 0.6],
                 ["angle", "direction", 0, 360, 1, 90], ["spread", "fan width", 30, 360, 5, 220]],
+  torn_strip: [["speed", "tear speed", 0, 1, 0.05, 0.7], ["rough", "raggedness", 0, 1.5, 0.05, 0.5],
+               ["rim", "white paper edge", 0, 3, 0.1, 1], ["halftone", "dot size", 0.003, 0.02, 0.0005, 0.007],
+               ["height", "height (auto only)", 0.3, 2, 0.05, 0.75], ["tilt", "tilt (auto only)", -45, 45, 1, 0]],
   wash: [["opacity", "visibility", 0, 1, 0.02, 0.85], ["size", "size", 0.1, 1.2, 0.02, 0.45],
          ["angle", "angle", 0, 180, 1, 25], ["streak", "streaky", 0, 1, 0.02, 0.5]],
   drop_shadow: [["opacity", "darkness", 0, 1, 0.02, 0.55], ["distance", "distance", 0, 0.15, 0.002, 0.03],
@@ -224,6 +227,12 @@ function layerRows(wrap, L, ctx, list) {
   paint.title = (L.params || {}).paint_mask ? "painted mask (tap to repaint)" : "paint where this layer shows";
   paint.onclick = () => ctx.onPaint && ctx.onPaint(L);
   row.appendChild(paint);
+  if (L.kind === "torn_strip") {          // free transform of the strip (corners / bend / move / rotate)
+    const sh = el("button", "seedbtn" + ((L.params || {}).shape ? " active" : ""), "✥");
+    sh.title = "move / rotate / scale / skew / bend the tear on the picture";
+    sh.onclick = () => ctx.onShape && ctx.onShape(L);
+    row.appendChild(sh);
+  }
   row.appendChild(roll);
   row.appendChild(rm);
   if (chipLine) wrap.appendChild(chipLine);

@@ -2249,7 +2249,6 @@ def gen_torn_strip(L, ctx):
     under_l = top_l
     if p.get("under"):
         try:
-            import cv2
             from face_align import mesh as _mesh
             im = np.asarray(Image.open(os.path.expanduser(str(p["under"]))).convert("RGB"))
             m2 = _mesh(im)
@@ -2280,35 +2279,80 @@ def gen_torn_strip(L, ctx):
     inside_col = str(p.get("inside", "color")) != "bw"
     inside_img = colour_print(under_l) if inside_col else bw_print(under_l)
     outside_img = bw_print(top_l) if inside_col else colour_print(top_l)
-    # ---- the tear (coordinates along / across the strip)
-    ang = eang + np.deg2rad(float(p.get("tilt", 0)))
-    ctr = c + np.array([-np.sin(ang), np.cos(ang)]) * float(p.get("offset", 0.0)) * ed
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-    u = (xx - ctr[0]) * np.cos(ang) + (yy - ctr[1]) * np.sin(ang)
-    v = -(xx - ctr[0]) * np.sin(ang) + (yy - ctr[1]) * np.cos(ang)
-    n = int(np.hypot(W, H)) * 2 + 4
-    ui = np.clip((u + n / 2).astype(int), 0, n - 1)
-    h = float(p.get("height", 0.75)) * ed
+    # ---- the tear: a 6-point shape (TL, TM, TR, BR, BM, BL), normalized 0-1. params.shape
+    # sets it (the piece screen's free-transform handles); otherwise it is placed on the eyes.
     rough = float(p.get("rough", 0.5))
-    rs = [(0.004 * s, 0.010 * s * rough), (0.02 * s, 0.018 * s * rough), (0.0012 * s, 0.003 * s * rough)]
-    bend = _noise1d(n, rng, [(0.12 * s, 0.05 * s * float(p.get("bend", 0.4)))])
-    width = _noise1d(n, rng, [(0.1 * s, 0.18 * h * float(p.get("bend", 0.4)))])
-    top = -h / 2 + bend + _noise1d(n, rng, rs) - width / 2
-    bot = h / 2 + bend + _noise1d(n, rng, rs) + width / 2
-    vrel = v
-    inside = (vrel > top[ui]) & (vrel < bot[ui])
-    nv = int(h * 3) + 8
-    vi = np.clip((vrel + nv / 2).astype(int), 0, nv - 1)
-    lreach, rreach = float(p.get("left", 3.0)) * ed, float(p.get("right", 3.0)) * ed
-    lend = -lreach + _noise1d(nv, rng, [(0.02 * s, 0.05 * ed), (0.004 * s, 0.02 * ed * rough)])
-    rend = rreach + _noise1d(nv, rng, [(0.02 * s, 0.05 * ed), (0.004 * s, 0.02 * ed * rough)])
-    inside &= (u > lend[vi] + float(p.get("end_slant", 0.3)) * vrel) & (u < rend[vi] - float(p.get("end_slant", 0.3)) * vrel)
+    shp = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?(?:e-?\d+)?", str(p.get("shape") or ""))]
+    if len(shp) == 12:
+        pts = np.array(shp, np.float32).reshape(6, 2) * [W, H]
+    else:
+        ang = eang + np.deg2rad(float(p.get("tilt", 0)))
+        ax, nx = np.array([np.cos(ang), np.sin(ang)]), np.array([-np.sin(ang), np.cos(ang)])
+        ctr = c + nx * float(p.get("offset", 0.0)) * ed
+        h = float(p.get("height", 0.75)) * ed
+        lr, rr = float(p.get("left", 3.0)) * ed, float(p.get("right", 3.0)) * ed
+        sl = float(p.get("end_slant", 0.3)) * h / 2
+        bnd = float(p.get("bend", 0.4)) * rng.uniform(-0.25, 0.25) * h
+        pts = np.array([ctr - ax * (lr - sl) - nx * h / 2, ctr - nx * (h / 2 - bnd), ctr + ax * (rr + sl) - nx * h / 2,
+                        ctr + ax * (rr - sl) + nx * h / 2, ctr + nx * (h / 2 + bnd), ctr - ax * (lr + sl) + nx * h / 2],
+                       np.float32)
+    geom = (pts / [W, H]).round(4).tolist()
+
+    def curve(p0, pm, p1, n):          # quadratic through p0, pm (at the middle), p1
+        ctl = 2 * pm - 0.5 * (p0 + p1)
+        t = np.linspace(0, 1, n)[:, None]
+        return (1 - t) ** 2 * p0 + 2 * (1 - t) * t * ctl + t ** 2 * p1
+
+    def ragged(line, outward, amp_scales):
+        n = len(line)
+        seg = float(np.hypot(*(line[-1] - line[0]))) / max(1, n - 1) + 1e-6
+        prof = _noise1d(n, rng, [(sc / seg, am) for sc, am in amp_scales])
+        # torn FAST, not slow: the fine raggedness comes and goes (envelope), the line runs
+        # straight for a while then jumps (sparse steps), and here and there a chip is bitten out
+        sp = float(p.get("speed", 0.7))
+        if sp > 0:
+            big = max(am for _, am in amp_scales) + 1e-6
+            env = np.clip(0.25 + 1.6 * np.abs(_noise1d(n, rng, [(n / 7, 1.0)])), 0.1, 2.6)
+            fine = _noise1d(n, rng, [(1.2, big * 0.55), (3.5, big * 0.5)])
+            steps = np.zeros(n, np.float32)
+            for _ in range(rng.poisson(n / 55 * sp)):
+                steps[rng.integers(0, n):] += rng.normal(0, big * 1.6)
+            steps = gaussian_filter(steps, 1.2)
+            steps -= np.linspace(steps[0], steps[-1], n)          # keep the ends where they are
+            chips = np.zeros(n, np.float32)
+            for _ in range(rng.poisson(n / 120 * sp)):
+                i0, w = rng.integers(0, n), rng.integers(3, 14)
+                chips[i0:i0 + w] -= np.abs(rng.normal(0, big * 2.2)) * np.hanning(len(chips[i0:i0 + w]) + 2)[1:-1]
+            prof = prof * (1 - 0.5 * sp) + sp * (fine * env + steps + chips)
+        tg = np.gradient(line, axis=0)
+        nrm = np.stack([-tg[:, 1], tg[:, 0]], 1) / (np.hypot(tg[:, 0], tg[:, 1])[:, None] + 1e-6)
+        nrm *= np.sign((nrm * outward).sum(1, keepdims=True) + 1e-6)
+        return line + nrm * prof[:, None]
+    rs = [(0.006 * s, 0.006 * s * rough), (0.025 * s, 0.016 * s * rough), (0.0015 * s, 0.0018 * s * rough)]
+    N = 400
+    top = curve(pts[0], pts[1], pts[2], N)
+    bot = curve(pts[5], pts[4], pts[3], N)
+    mid_out = (top.mean(0) - bot.mean(0))
+    top = ragged(top, mid_out / (np.hypot(*mid_out) + 1e-6), rs)
+    bot = ragged(bot, -mid_out / (np.hypot(*mid_out) + 1e-6), rs)
+    ends = []
+    for a0, b0, sgn in ((top[0], bot[0], -1), (bot[-1], top[-1], 1)):
+        e = np.linspace(a0, b0, 40)
+        along = (top[-1] - top[0]); along = along / (np.hypot(*along) + 1e-6) * sgn
+        ends.append(ragged(e, along, [(0.01 * s, 0.01 * s * (0.4 + rough)), (0.002 * s, 0.002 * s * rough)]))
+    poly = np.concatenate([top, ends[1], bot[::-1], ends[0]])
+    up = 2
+    mk = np.zeros((H * up, W * up), np.uint8)
+    cv2.fillPoly(mk, [np.round(poly * up).astype(np.int32)], 255, lineType=cv2.LINE_AA)
+    inside = cv2.resize(mk, (W, H), interpolation=cv2.INTER_AREA) > 127
     ins = gaussian_filter(inside.astype(np.float32), 0.6)
     # ---- white paper core along the torn edge (on the TOP print) + fibres
     from scipy.ndimage import distance_transform_edt
     dout = distance_transform_edt(~inside)
     rimw = float(p.get("rim", 1.0)) * 0.006 * s
-    rimv = (1 + 0.8 * _noise1d(n, rng, [(0.006 * s, 1.0)])[ui]) * rimw
+    rv = gaussian_filter(rng.standard_normal((H, W)).astype(np.float32), 0.006 * s)
+    rv2 = gaussian_filter(rng.standard_normal((H, W)).astype(np.float32), 0.02 * s)
+    rimv = np.clip(1 + 0.8 * rv / (rv.std() + 1e-6) + 1.1 * rv2 / (rv2.std() + 1e-6), 0.15, 3.5) * rimw
     fib = gaussian_filter(rng.random((H, W)).astype(np.float32), (0.0008 * s, 0.002 * s))
     rim = np.clip((rimv - dout) / max(1.0, 0.25 * rimw), 0, 1) * (dout > 0)
     rim *= np.clip(0.55 + (fib - fib.mean()) / (fib.std() + 1e-6) * 0.6, 0, 1) ** 0.5
@@ -2317,7 +2361,9 @@ def gen_torn_strip(L, ctx):
     sh = np.exp(-din / (0.008 * s)) * 0.45
     img = outside_img * (1 - ins[..., None]) + inside_img * (1 - sh[..., None]) * ins[..., None]
     img = img * (1 - rim[..., None]) + hex_rgb(p.get("rim_color", "#f4f1ea"))[None, None] * rim[..., None]
-    return Layer(np.clip(img, 0, 1).astype(np.float32), np.ones((H, W), np.float32))
+    lay = Layer(np.clip(img, 0, 1).astype(np.float32), np.ones((H, W), np.float32))
+    lay.geom = {"shape": geom}          # the strip's 6 handles, for the piece screen's transform tool
+    return lay
 
 
 GENERATORS = {

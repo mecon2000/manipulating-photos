@@ -317,6 +317,10 @@ async function startPaint(L) {
   painting = L.id;
   canvas.setBrushSizePct(Number($("paint-size").value));
   canvas.startMaskEdit(init);          // first time: empty — paint where the layer should show
+  $("paint-color").value = localStorage.getItem("maskColor") || "red";      // remembered per device
+  $("paint-feather").value = localStorage.getItem("maskFeather") || "0.5";
+  canvas.setMaskColor($("paint-color").value);
+  canvas.setMaskFeather(Number($("paint-feather").value));
   $("paint-label").textContent = `“${L.id.replace(/_/g, " ")}”`;
   $("paint-bar").classList.remove("hidden");
   $("mode-toggle").classList.add("hidden");
@@ -750,6 +754,8 @@ function boot() {
   $("paint-clear").onclick = () => canvas.clearMask();
   $("paint-all").onclick = () => canvas.fillMask();
   $("paint-tint").onchange = (e) => canvas.setMaskTint(e.target.checked);
+  $("paint-color").onchange = (e) => { canvas.setMaskColor(e.target.value); localStorage.setItem("maskColor", e.target.value); };
+  $("paint-feather").oninput = (e) => { canvas.setMaskFeather(Number(e.target.value)); localStorage.setItem("maskFeather", e.target.value); };
   $("paint-cancel").onclick = endPaint;
   $("paint-apply").onclick = () => applyPaint(false);
   $("paint-remove").onclick = () => applyPaint(true);

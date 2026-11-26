@@ -652,7 +652,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
             from scipy.ndimage import gaussian_filter as _gf
             m = np.asarray(Image.open(d / pm).convert("L").resize((W, H), Image.BILINEAR), np.float32) / 255
             raw = lay.alpha
-            lay = wl.Layer(lay.rgb, raw * _gf(m, 0.006 * s), blend=lay.blend, clip=lay.clip)
+            lay = wl.Layer(lay.rgb, raw * _gf(m, 0.0015 * s), blend=lay.blend, clip=lay.clip)
             lay._key = getattr(_run_raw, "_k", None)
             lay._raw_alpha = raw            # the unmasked layer: the browser previews repaints live
         return lay

@@ -33,8 +33,11 @@
         <span class="paint-label">Mask <b id="paint-label"></b></span>
         <button id="paint-tool-paint" class="btn btn-small" title="paint: the layer shows here">Paint</button>
         <button id="paint-tool-erase" class="btn btn-small" title="erase: the layer hides here">Erase</button>
-        <input id="paint-size" type="range" min="0.5" max="15" step="0.5" value="5" title="brush size">
-        <label class="paint-tint" title="show the mask in red"><input id="paint-tint" type="checkbox" checked> red</label>
+        <label class="paint-tint" title="brush size">size <input id="paint-size" type="range" min="0.5" max="15" step="0.5" value="5"></label>
+        <label class="paint-tint" title="feather: 0 = hard edge, 1 = very soft">soft
+          <input id="paint-feather" type="range" min="0" max="1" step="0.05" value="0.5"></label>
+        <label class="paint-tint" title="show the mask"><input id="paint-tint" type="checkbox" checked>
+          <select id="paint-color"><option value="red">red</option><option value="green">green</option><option value="blue">blue</option></select></label>
         <button id="paint-all" class="btn btn-small" title="show the layer everywhere, then erase">All</button>
         <button id="paint-clear" class="btn btn-small" title="hide the layer everywhere, then paint">None</button>
         <button id="paint-remove" class="btn btn-small" title="drop the mask (layer shows everywhere)">No mask</button>

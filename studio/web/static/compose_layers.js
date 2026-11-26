@@ -71,7 +71,7 @@ export async function composite(W, H, layers, compare, onProgress) {
       tctx.clearRect(0, 0, W, H);
       tctx.drawImage(im, 0, 0, W, H);
       tctx.globalCompositeOperation = "destination-in";
-      tctx.filter = `blur(${Math.max(0.5, 0.006 * Math.min(W, H))}px)`;   // = the server's feather
+      tctx.filter = `blur(${Math.max(0.5, 0.0015 * Math.min(W, H))}px)`;   // = the server's feather
       tctx.drawImage(L.liveMask, 0, 0, W, H);
       tctx.filter = "none";
       src = tmp;

@@ -557,6 +557,10 @@ export function setMarkerLabel(n, label) {
 // brush follows the pointer. "maskChanged" fires (throttled) so the page can preview live.
 let maskCanvas = null, maskTint = null, maskNode = null, cursorNode = null;
 let maskTool = "paint", maskShowTint = true, maskLast = null, maskTimer = null;
+let maskColor = "rgba(255, 59, 48, 0.42)", maskFeather = 0.5, stampCanvas = null, stampKey = "";
+let innerNode = null;
+const MASK_COLORS = { red: "rgba(255, 59, 48, 0.42)", green: "rgba(52, 199, 89, 0.42)",
+                      blue: "rgba(10, 132, 255, 0.45)" };
 
 function retint() {
   if (!maskCanvas) return;
@@ -566,7 +570,7 @@ function retint() {
   if (maskShowTint) {
     t.drawImage(maskCanvas, 0, 0);
     t.globalCompositeOperation = "source-in";
-    t.fillStyle = "rgba(255, 59, 48, 0.42)";
+    t.fillStyle = maskColor;
     t.fillRect(0, 0, maskTint.width, maskTint.height);
   }
   maskNode.getLayer() && maskNode.getLayer().batchDraw();
@@ -577,16 +581,42 @@ function maskChangedSoon() {
   maskTimer = setTimeout(() => { maskTimer = null; emit("maskChanged"); }, 90);
 }
 
+// Soft round brush: a radial-gradient dab (full strength inside (1-feather)·r, fading to 0
+// at r), stamped along the stroke every ~r/5 — paint adds, erase removes, like Photoshop.
+function stamp() {
+  const r = Math.max(1, brushPxRadius());
+  const key = `${r.toFixed(1)}|${maskFeather}`;
+  if (stampKey === key && stampCanvas) return stampCanvas;
+  const d = Math.ceil(r * 2) + 2;
+  stampCanvas = document.createElement("canvas");
+  stampCanvas.width = stampCanvas.height = d;
+  const c = stampCanvas.getContext("2d");
+  const g = c.createRadialGradient(d / 2, d / 2, 0, d / 2, d / 2, r);
+  const hard = Math.max(0, Math.min(0.999, 1 - maskFeather));
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(hard, "rgba(255,255,255,1)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  c.fillStyle = g;
+  c.fillRect(0, 0, d, d);
+  stampKey = key;
+  return stampCanvas;
+}
+
 function maskDot(a, b) {
   const c = maskCanvas.getContext("2d");
   c.globalCompositeOperation = maskTool === "erase" ? "destination-out" : "source-over";
-  c.strokeStyle = c.fillStyle = "#fff";
-  c.lineCap = c.lineJoin = "round";
-  c.lineWidth = brushPxRadius() * 2;
-  c.beginPath();
-  c.moveTo(a.x, a.y);
-  c.lineTo(b.x, b.y);
-  c.stroke();
+  const st = stamp(), h = st.width / 2;
+  const r = Math.max(1, brushPxRadius());
+  const dist = Math.hypot(b.x - a.x, b.y - a.y);
+  const step = Math.max(1, r * (0.12 + 0.15 * (1 - maskFeather)));
+  const n = Math.max(1, Math.ceil(dist / step));
+  // soft brushes build up: lower per-dab strength so one pass ≈ one Photoshop stroke
+  c.globalAlpha = maskFeather > 0.05 ? 0.35 + 0.65 * (1 - maskFeather) : 1;
+  for (let i = (a === b ? 0 : 1); i <= n; i++) {
+    const t = i / n;
+    c.drawImage(st, a.x + (b.x - a.x) * t - h, a.y + (b.y - a.y) * t - h);
+  }
+  c.globalAlpha = 1;
 }
 
 function moveCursor() {
@@ -597,6 +627,12 @@ function moveCursor() {
   cursorNode.radius(brushPxRadius() * fitScale);
   cursorNode.strokeWidth(1.5 / stage.scaleX());
   cursorNode.visible(true);
+  if (innerNode) {               // where the brush is at full strength (hardness)
+    innerNode.position(pos);
+    innerNode.radius(Math.max(0.5, brushPxRadius() * fitScale * (1 - maskFeather)));
+    innerNode.strokeWidth(1 / stage.scaleX());
+    innerNode.visible(maskFeather > 0.05);
+  }
   overlayLayer.batchDraw();
 }
 
@@ -621,7 +657,9 @@ function wireMaskEdit() {
     if (mode !== "mask") return;
     if (maskLast) { maskLast = null; emit("maskChanged"); }
   });
-  stage.on("mouseleave", () => { if (cursorNode) { cursorNode.visible(false); overlayLayer.batchDraw(); } });
+  stage.on("mouseleave", () => {
+    if (cursorNode) { cursorNode.visible(false); if (innerNode) innerNode.visible(false); overlayLayer.batchDraw(); }
+  });
 }
 
 export function startMaskEdit(initial) {
@@ -646,12 +684,17 @@ export function startMaskEdit(initial) {
                                   shadowColor: "#000", shadowBlur: 2, shadowOpacity: 0.9,
                                   listening: false, visible: false });
   overlayLayer.add(cursorNode);
+  innerNode = new Konva.Circle({ radius: 5, stroke: "rgba(255,255,255,0.55)", strokeWidth: 1,
+                                 listening: false, visible: false });
+  overlayLayer.add(innerNode);
   container.style.cursor = "none";
   maskTool = "paint"; maskShowTint = true;
   setMode("mask");
   retint();
 }
 export function setMaskTool(t) { maskTool = t; }
+export function setMaskColor(name) { maskColor = MASK_COLORS[name] || MASK_COLORS.red; retint(); }
+export function setMaskFeather(f) { maskFeather = Math.max(0, Math.min(1, f)); }
 export function setMaskTint(on) { maskShowTint = on; retint(); }
 export function clearMask() {
   if (!maskCanvas) return;
@@ -677,7 +720,8 @@ export function maskPNG() {
 export function endMaskEdit() {
   if (maskNode) maskNode.destroy();
   if (cursorNode) cursorNode.destroy();
-  maskNode = cursorNode = maskCanvas = maskTint = null;
+  if (innerNode) innerNode.destroy();
+  maskNode = cursorNode = innerNode = maskCanvas = maskTint = null;
   container.style.cursor = "";
   overlayLayer.batchDraw();
 }

@@ -220,3 +220,5 @@
 .faint-badge { background: transparent; border: 1px dashed var(--fg-dim); color: var(--fg-dim); }
 .paint-bar .btn.active { border-color: var(--accent); color: var(--accent); }
 .paint-tint { font-size: 12px; display: inline-flex; align-items: center; gap: 3px; }
+.paint-tint select { background: var(--bg-3); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.paint-tint input[type=range] { width: 70px; }

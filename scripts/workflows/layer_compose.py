@@ -319,6 +319,13 @@ def face_points(d, src_full):
     return json.loads(fp.read_text())
 
 
+def _ink(alpha):
+    """How visible a layer is: share of the frame it really covers (alpha > 0.15),
+    weighted by strength. < ~0.003 means toggling it changes next to nothing."""
+    a = np.asarray(alpha, np.float32)[::4, ::4]
+    return round(float((a > 0.15).mean() * min(1.0, float(np.percentile(a, 99.5)) * 2)), 4)
+
+
 def face_mesh(d, src_full):
     """468-point face mesh on the full-res source, cached in face_mesh.json ([] = none)."""
     fp = d / "face_mesh.json"
@@ -747,7 +754,7 @@ def render(d, P, full=False, event="render", **meta):
             # unchanged layer (same cache key, file there): keep the PNG — writes ~20 PNGs
             # to the 9p share otherwise, and the browser re-downloads only what changed
             if not (v and prev.get(fn) == v and (ld / fn).exists()):
-                tmp = ld / f".{fn}.tmp.png"
+                tmp = ld / f".{fn}.{os.getpid()}.tmp.png"      # per process: two renders can't collide
                 save_rgba(tmp, e["layer"])
                 os.replace(tmp, ld / fn)                  # atomic: readers never see a gap
             written.add(fn)
@@ -757,7 +764,8 @@ def render(d, P, full=False, event="render", **meta):
                             "removed": bool(L.get("removed")), "blend": e["layer"].blend,
                             "riff": bool(L.get("riff")), "note": L.get("note", ""),
                             "seed": L.get("seed"), "variants": L.get("variants", []),
-                            "params": (L or {}).get("params", {}), "v": e.get("key")})
+                            "params": (L or {}).get("params", {}), "v": e.get("key"),
+                            "ink": _ink(e["layer"].alpha)})
     if full:
         from psd_layers import write_psd
         W, H = img.size

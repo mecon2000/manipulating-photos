@@ -165,6 +165,11 @@ function layerRows(wrap, L, ctx, list) {
   // one readable name; the generator type + blend live in the tooltip
   const name = el("button", "layer-name", pretty(L.id));
   name.title = `${L.id} · ${L.kind || ""}${L.blend && L.blend !== "normal" ? " · " + L.blend : ""} — tap for the note`;
+  if (L.ink != null && L.ink < 0.003 && L.enabled) {
+    const f = el("span", "riff-badge faint-badge", "faint");
+    f.title = "this layer barely shows — toggling it changes almost nothing. Raise its visibility in ⚙ or remove it.";
+    name.appendChild(f);
+  }
   if (L.riff) {
     const b = el("span", "riff-badge", "riff");
     b.title = RIFF_TIP;

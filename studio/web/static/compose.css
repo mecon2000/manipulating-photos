@@ -217,3 +217,4 @@
 .paint-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .paint-label { font-size: 12px; color: var(--accent); margin-right: 4px; }
 .paint-bar input[type=range] { width: 90px; }
+.faint-badge { background: transparent; border: 1px dashed var(--fg-dim); color: var(--fg-dim); }

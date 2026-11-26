@@ -51,24 +51,30 @@ const post = (path, body) => api(`${P_API}${path}`, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}),
 });
 
+// what the busy chip says while a change syncs: instant changes are only being saved
+let syncLabel = "rendering…";
+const isInstant = (path, body) => path === "/order" ||
+  (path === "/quick-set" && (body.kv || []).every((kv) => /\.(enabled|removed|seed)=/.test(kv)));
+
 function updateDots() {
   const syncing = inflight > 0 || serverPending;
   // a visible "rendering…" chip on the picture while a change is saving / rendering
   const chip = $("busy-chip"), txt = $("busy-text");
   if (syncing && chip.classList.contains("hidden")) {
-    txt.textContent = "rendering…";
+    txt.textContent = syncLabel;
     chip.classList.remove("hidden");
     chip.dataset.sync = "1";
   } else if (!syncing && chip.dataset.sync) {
     delete chip.dataset.sync;
-    if (txt.textContent === "rendering…") chip.classList.add("hidden");
+    if (txt.textContent === "rendering…" || txt.textContent === "saving…") chip.classList.add("hidden");
   }
   $("sync-dot").classList.toggle("hidden", !syncing);
-  $("sync-dot").title = state && state.sync && state.sync.error ? `render error: ${state.sync.error}` : "syncing…";
+  $("sync-dot").title = state && state.sync && state.sync.error ? `render error: ${state.sync.error}` : "saving — the picture you see is already up to date";
 }
 
 // Fire-and-forget persistence: the UI never waits on it.
 async function persist(path, body, failMsg) {
+  syncLabel = isInstant(path, body) ? "saving…" : "rendering…";
   inflight++;
   updateDots();
   try {

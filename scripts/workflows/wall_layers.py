@@ -2148,7 +2148,32 @@ def gen_subject_fill(L, ctx):
     return Layer(rgb.copy(), np.clip(m, 0, 1) * float(p.get("opacity", 0.3)), blend=p.get("blend", "normal"))
 
 
+def gen_wash(L, ctx):
+    """A broad, uneven paint/stain wash on the wall (the ochre patch in the cracked-statue ref):
+    an fbm-edged blob centred at params.at (x,y fractions, default top-left), dry-brush
+    streaks inside. params: color, opacity, size (fraction of short edge), at "x,y", angle,
+    streak (0-1 how streaky), blend (multiply|normal)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    at = [float(v) for v in str(p.get("at", "0.28,0.25")).split(",")[:2]]
+    cx, cy = at[0] * ctx.W, at[1] * ctx.H
+    R = float(p.get("size", 0.45)) * s
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W].astype(np.float32)
+    ang = np.deg2rad(float(p.get("angle", 25)))
+    u = (xx - cx) * np.cos(ang) + (yy - cy) * np.sin(ang)
+    v = -(xx - cx) * np.sin(ang) + (yy - cy) * np.cos(ang)
+    r = np.sqrt((u / 1.4) ** 2 + (v / 0.8) ** 2) / R
+    edge = fbm((ctx.H, ctx.W), rng, s * 0.12, 4) * 0.45
+    a = np.clip((1 - r + edge) * 3, 0, 1)
+    st = float(p.get("streak", 0.5))
+    streaks = gaussian_filter(rng.random((ctx.H, ctx.W)).astype(np.float32), (s * 0.002, s * 0.03))
+    streaks = (streaks - streaks.mean()) / (streaks.std() + 1e-6)
+    a = a * np.clip(0.85 + st * 0.35 * streaks + 0.25 * fbm((ctx.H, ctx.W), rng, s * 0.05, 3), 0, 1)
+    return solid(ctx, p.get("color", "#D9C25A"), np.clip(a, 0, 1) * float(p.get("opacity", 0.85)),
+                 blend=p.get("blend", "multiply"))
+
+
 GENERATORS = {
+    "wash": gen_wash,
     "drop_shadow": gen_drop_shadow,
     "subject_fill": gen_subject_fill,
     "hair_tone": gen_hair_tone,

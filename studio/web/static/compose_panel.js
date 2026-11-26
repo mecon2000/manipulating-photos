@@ -95,6 +95,8 @@ const SLIDERS = {
                 ["length", "length", 0.1, 1.2, 0.01, 0.55], ["width", "spike width", 0.03, 0.4, 0.01, 0.12],
                 ["core", "core", 0, 1.5, 0.02, 0.5], ["dry", "dry brush", 0, 1, 0.02, 0.6],
                 ["angle", "direction", 0, 360, 1, 90], ["spread", "fan width", 30, 360, 5, 220]],
+  wash: [["opacity", "visibility", 0, 1, 0.02, 0.85], ["size", "size", 0.1, 1.2, 0.02, 0.45],
+         ["angle", "angle", 0, 180, 1, 25], ["streak", "streaky", 0, 1, 0.02, 0.5]],
   drop_shadow: [["opacity", "darkness", 0, 1, 0.02, 0.55], ["distance", "distance", 0, 0.15, 0.002, 0.03],
                 ["angle", "direction", 0, 360, 1, 135], ["blur", "softness", 0, 0.06, 0.001, 0.012],
                 ["spread", "grow", 0, 0.03, 0.001, 0]],

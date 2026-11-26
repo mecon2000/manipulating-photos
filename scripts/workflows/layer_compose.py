@@ -664,7 +664,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     for L in [x for x in gen_set if x["z"] == "under"]:
         lay = run(L)
         if lay is not None:
-            if L["kind"] not in ("backdrop", "spike_burst", "drop_shadow"):     # a full background must not fade at the margins
+            if L["kind"] not in ("backdrop", "spike_burst", "drop_shadow", "wash"):     # a full background must not fade at the margins
                 lay.alpha = lay.alpha * (1 - quiet + quiet * focus)
             emit(L, lay)
 

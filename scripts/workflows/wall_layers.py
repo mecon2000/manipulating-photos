@@ -1424,6 +1424,25 @@ def gen_rim_light(L, ctx):
     return solid(ctx, p.get("color", "#d3202f"), np.clip(rim * 1.5, 0, 1) * float(p.get("opacity", 0.9)))
 
 
+def gradient_map(lum, stops):
+    """Luminance -> colour through evenly spaced stops ("#dark,…,#light")."""
+    cols = np.array([hex_rgb(c.strip()) for c in str(stops).split(",") if c.strip()], np.float32)
+    if len(cols) < 2:
+        return None
+    x = np.clip(lum, 0, 1) * (len(cols) - 1)
+    i = np.clip(np.floor(x).astype(int), 0, len(cols) - 2)
+    t = (x - i)[..., None]
+    return (cols[i] * (1 - t) + cols[i + 1] * t).astype(np.float32)
+
+
+def _recolor(rgb, p):
+    """params.recolor = gradient stops: repaint an image layer by its own luminance."""
+    if not p.get("recolor"):
+        return rgb
+    g = gradient_map(rgb @ np.array([0.299, 0.587, 0.114], np.float32), p["recolor"])
+    return rgb if g is None else g
+
+
 def gen_backdrop(L, ctx):
     """Full-frame painted background (Flux, generated once per prompt+bg_seed and cached),
     cover-fit to the canvas. bg_seed is a RECIPE-level param on purpose: every piece of
@@ -1436,7 +1455,7 @@ def gen_backdrop(L, ctx):
         im = im.resize((max(ctx.W, round(im.width * sc)), max(ctx.H, round(im.height * sc))), Image.LANCZOS)
         x0, y0 = (im.width - ctx.W) // 2, (im.height - ctx.H) // 2
         rgb = np.asarray(im.crop((x0, y0, x0 + ctx.W, y0 + ctx.H)), np.float32) / 255
-        rgb = np.clip(rgb * float(p.get("brightness", 1.0)), 0, 1)
+        rgb = _recolor(np.clip(rgb * float(p.get("brightness", 1.0)), 0, 1), p)
         return Layer(rgb, np.full((ctx.H, ctx.W), float(p.get("opacity", 1.0)), np.float32))
     prompt = p.get("prompt") or L.get("note") or "abstract dark painted background"
     prompt += ", abstract background texture only, no people, no figure, no face, no text"
@@ -1455,7 +1474,7 @@ def gen_backdrop(L, ctx):
     im = im.resize((max(ctx.W, round(im.width * sc)), max(ctx.H, round(im.height * sc))), Image.LANCZOS)
     x0, y0 = (im.width - ctx.W) // 2, (im.height - ctx.H) // 2
     rgb = np.asarray(im.crop((x0, y0, x0 + ctx.W, y0 + ctx.H)), np.float32) / 255
-    rgb = np.clip(rgb * float(p.get("brightness", 1.0)), 0, 1)
+    rgb = _recolor(np.clip(rgb * float(p.get("brightness", 1.0)), 0, 1), p)
     return Layer(rgb, np.full((ctx.H, ctx.W), float(p.get("opacity", 1.0)), np.float32))
 
 

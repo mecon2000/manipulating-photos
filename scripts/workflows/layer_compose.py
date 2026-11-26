@@ -123,6 +123,63 @@ def smart_crop(photo, d, crop=None, custom=None):
     return Path(m.group(1).strip())
 
 
+def photo_palettes(img, palettes):
+    """Per-photo palettes: the photo's own dominant hues poured into the recipe's colour roles.
+    Template = the recipe's first palette. Neutral roles (near-black / near-white) are kept;
+    chromatic roles keep their lightness but take a photo hue, the most colourful role getting
+    the photo's most present colourful hue. Chroma is lifted to at least the template's, so a
+    muted skin/wall hue becomes a usable paint colour. Returns {"photo": …, "photo-opposite": …}
+    (opposite = the same hues rotated 180°)."""
+    import cv2
+    if not palettes:
+        return {}
+    tmpl = next(iter(palettes.values()))
+    a = np.asarray(img.convert("RGB").resize((160, int(160 * img.height / img.width))), np.uint8)
+    lab = cv2.cvtColor(a, cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float32)
+    L, A, B = lab[:, 0] * 100 / 255, lab[:, 1] - 128, lab[:, 2] - 128
+    C = np.hypot(A, B)
+    sel = (C > 8) & (L > 12) & (L < 95)
+    if sel.sum() < 200:          # black-and-white photo: no colours of its own to offer
+        return {}
+    ab = np.stack([A[sel], B[sel]], 1)
+    k = int(min(5, max(1, len(ab) // 40)))
+    _, lab_k, cent = cv2.kmeans(ab, k, None, (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5),
+                                3, cv2.KMEANS_PP_CENTERS)
+    counts = np.bincount(lab_k.ravel(), minlength=k)
+    hues = [float(np.arctan2(c[1], c[0])) for c in cent]
+    weight = [counts[i] * (1 + np.hypot(*cent[i]) / 20) for i in range(k)]
+    order = [hues[i] for i in np.argsort(weight)[::-1]]
+    # spread: two hues closer than 25° count as one; fill with rotations so roles differ
+    picked = []
+    for h in order:
+        if all(abs(np.angle(np.exp(1j * (h - q)))) > np.deg2rad(25) for q in picked):
+            picked.append(h)
+    while len(picked) < 4:
+        picked.append(picked[0] + np.deg2rad(60 * len(picked)) if picked else 0.5)
+
+    def to_lab(hx):
+        rgb = np.array([[wl.hex_rgb(hx) * 255]], np.uint8)
+        l = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)[0, 0].astype(np.float32)
+        return l[0] * 100 / 255, l[1] - 128, l[2] - 128
+
+    def to_hex(Lv, Av, Bv):
+        px = np.array([[[Lv * 255 / 100, Av + 128, Bv + 128]]], np.float32).clip(0, 255).astype(np.uint8)
+        r, g, b = cv2.cvtColor(px, cv2.COLOR_LAB2RGB)[0, 0]
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    roles = [(r, *to_lab(h)) for r, h in tmpl.items()]
+    chrom = sorted([x for x in roles if np.hypot(x[2], x[3]) > 15], key=lambda x: -np.hypot(x[2], x[3]))
+    out = {}
+    for name, rot in (("photo", 0.0), ("photo-opposite", np.pi)):
+        pal = {r: h for r, h in tmpl.items()}
+        for i, (r, Lv, Av, Bv) in enumerate(chrom):
+            h = picked[i % len(picked)] + rot
+            c = max(np.hypot(Av, Bv), 40.0)
+            pal[r] = to_hex(Lv, c * np.cos(h), c * np.sin(h))
+        out[name] = pal
+    return out
+
+
 def cmd_init(a):
     import riff as R
     photo = Path(a.photo).expanduser()
@@ -150,6 +207,8 @@ def cmd_init(a):
          "base": copy.deepcopy(recipe["base"]),
          "background": copy.deepcopy(recipe["background"]),
          "layers": copy.deepcopy(recipe["layers"]), "themes": [], "decisions": []}
+    if P["palettes"]:                       # + this photo's own colours as palettes
+        P["palettes"].update(photo_palettes(im, P["palettes"]))
     P["base"]["edge_dissolve"] = 0   # Ronnie: no torn-edge effect — clean cut-out
     for i, L in enumerate(P["layers"]):
         L.setdefault("seed", seed + 101 * (i + 1))
@@ -463,6 +522,11 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
             return [_res(x) for x in v]
         return v
     base, bgc = _res(dict(P["base"])), _res(dict(P["background"]))
+    # base.gradient ("$ink,$mid,$key"): with any palette other than the recipe's first one,
+    # things painted from fixed images (palette_ref, an AI backdrop) are repainted through it,
+    # so the WHOLE picture follows the palette, not just the procedural layers
+    first = next(iter(pal_sets), None)
+    repaint = base.get("gradient") if (pal_name and pal_name != first) else None
     lum = bw(rgb, base, mask) if base.get("bw", True) else None
     look = base.get("look", "paper")     # paper: she is printed on paper | photo: dark photograph
     photo_t = None
@@ -489,6 +553,10 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
                 idx = np.where(idx == 0, 0, np.maximum(idx, 1))
             photo_t = cols[idx]
         pref = base.get("palette_ref")
+        if repaint:      # another palette picked: her colours come from the palette's gradient
+            g = wl.gradient_map(bw(rgb, base, mask), repaint)
+            if g is not None:
+                photo_t, pref = g, None
         if pref:     # colour by the ref's own luminance->colour gradient (not a flat 2-stop duotone)
             import face_align as FA
             lu2 = bw(rgb, base, mask)
@@ -583,6 +651,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
 
     def _run_raw(L):
         L = _numify(_res(L))
+        if repaint and L.get("kind") == "backdrop":
+            L = dict(L, params=dict(L.get("params") or {}, recolor=repaint))
         g = wl.GENERATORS.get(L["kind"])
         if g is None:
             return None
@@ -1093,7 +1163,8 @@ def cmd_to_recipe(a):
             L2.get("params", {}).pop("brush_seed", None)
         layers.append(L2)
     new = dict(old, name=name, palette=P.get("palette", old.get("palette", [])),
-               palettes=P.get("palettes", old.get("palettes", {})),
+               palettes={k: v for k, v in P.get("palettes", old.get("palettes", {})).items()
+                         if not k.startswith("photo")},          # per-photo palettes stay per piece
                base={k: v for k, v in P["base"].items()},
                background=P["background"], layers=layers,
                tuned_from=P.get("photo"), tuned_at=time.strftime("%F %T"))

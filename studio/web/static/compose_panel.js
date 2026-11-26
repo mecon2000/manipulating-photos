@@ -72,13 +72,42 @@ const SLIDERS = {
   light_leak: [["opacity", "visibility", 0, 1, 0.02, 0.5], ["width", "width", 0.1, 2, 0.05, 1]],
   haze: [["opacity", "visibility", 0, 1, 0.02, 0.5]],
   vignette: [["opacity", "visibility", 0, 1, 0.02, 0.6]],
+  studio_arcs: [["opacity", "visibility", 0, 1, 0.02, 0.85], ["count", "arcs", 1, 4, 1, 2],
+                ["size", "size", 0.2, 0.9, 0.01, 0.55], ["thickness", "thickness", 0.005, 0.08, 0.001, 0.03],
+                ["softness", "blur", 0, 0.04, 0.001, 0.008], ["sweep", "arc length", 60, 360, 5, 180]],
+  depth_trail: [["opacity", "visibility", 0, 1, 0.02, 1], ["depth", "how far behind", 0, 0.9, 0.01, 0.5],
+                ["defocus", "defocus", 0, 1, 0.02, 0.6], ["haze", "fade into backdrop", 0, 1, 0.02, 0.6],
+                ["darks", "darks dominate", 0, 1, 0.02, 0.85], ["steps", "smoothness", 8, 64, 1, 40]],
+  shutter_drag: [["strength", "strength", 0, 1, 0.02, 0.8], ["hair", "hair", 0, 1, 0.02, 1],
+                 ["body", "body", 0, 1, 0.02, 1], ["edges", "edges", 0, 1, 0.02, 0],
+                 ["face_keep", "face sharp", 0, 1, 0.02, 0.8], ["length", "length", 0, 0.4, 0.01, 0.12],
+                 ["angle", "rotation", 0, 40, 0.5, 8], ["spread", "spread", 0, 2, 0.05, 0.6]],
+  pen_outline: [["opacity", "visibility", 0, 1, 0.02, 0.9], ["weight", "line weight", 0.5, 3, 0.1, 1],
+                ["detail", "inner lines", 0, 1, 0.02, 0.5], ["repeat", "gone over", 0, 1, 0.02, 0.5],
+                ["wobble", "wobble", 0, 1, 0.02, 0.5], ["gaps", "gaps", 0, 1, 0.02, 0.3]],
+  shards: [["opacity", "visibility", 0, 1, 0.02, 0.95], ["coverage", "amount", 0, 1.5, 0.02, 0.5],
+           ["size", "size", 0.05, 0.6, 0.01, 0.25], ["paint", "painted paper", 0, 1, 0.02, 0.45],
+           ["shadow", "shadows", 0, 1, 0.02, 0.5], ["rough", "torn edges", 0, 1, 0.02, 0.7],
+           ["hatch", "hatched", 0, 1, 0.02, 0.3]],
+  spike_burst: [["opacity", "visibility", 0, 1, 0.02, 0.95], ["count", "spikes", 3, 50, 1, 18],
+                ["length", "length", 0.1, 1.2, 0.01, 0.55], ["width", "spike width", 0.03, 0.4, 0.01, 0.12],
+                ["core", "core", 0, 1.5, 0.02, 0.5], ["dry", "dry brush", 0, 1, 0.02, 0.6],
+                ["angle", "direction", 0, 360, 1, 90], ["spread", "fan width", 30, 360, 5, 220]],
+  cracks: [["opacity", "visibility", 0, 1, 0.02, 0.9], ["count", "cracks", 1, 15, 1, 4],
+           ["length", "length", 0.05, 0.8, 0.01, 0.35], ["branch", "branching", 0, 1, 0.02, 0.5]],
+  paper_scraps: [["opacity", "visibility", 0, 1, 0.02, 0.9], ["count", "amount", 1, 40, 1, 8],
+                 ["shadow", "shadows", 0, 1, 0.02, 0.4]],
+  asset: [["opacity", "visibility", 0, 1, 0.02, 0.9], ["coverage", "size", 0.01, 0.08, 0.002, 0.06],
+          ["shadow", "shadow", 0, 1, 0.02, 0.6]],
 };
+const GENERIC_SLIDERS = [["opacity", "visibility", 0, 1, 0.02, 0.8]];   // every layer gets at least this
+const slidersFor = (kind) => SLIDERS[kind] || GENERIC_SLIDERS;
 const openSliders = new Set();   // survives panel re-renders
 
 function sliderBox(L, ctx) {
   const box = el("div", "layer-sliders");
   const P = L.params || (L.params = {});
-  for (const [k, label, lo, hi, step, def] of SLIDERS[L.kind]) {
+  for (const [k, label, lo, hi, step, def] of slidersFor(L.kind)) {
     const row = el("label", "slider-row");
     const val = el("span", "slider-val");
     const r = el("input");
@@ -151,6 +180,7 @@ function layerRows(wrap, L, ctx, list) {
   rm.onclick = () => ctx.onRemove(L);
 
   const seeds = [L.seed, ...(L.variants || []).filter((s) => s !== L.seed)];
+  let chipLine = null;
   if (seeds.length > 1) {
     const chips = el("span", "seed-chips");   // inline, on the layer's own line
     const active = ctx.overrides[L.id] ?? L.seed;
@@ -161,9 +191,10 @@ function layerRows(wrap, L, ctx, list) {
       c.onclick = () => ctx.onChip(L, s);
       chips.appendChild(c);
     });
-    row.appendChild(chips);
+    chipLine = el("div", "seed-line");    // own line under the layer: never pushes ⚙ 🎲 ✕ off-screen
+    chipLine.append(el("span", "seed-line-label", "versions"), chips);
   }
-  if (SLIDERS[L.kind]) {
+  {
     const tune = el("button", "seedbtn" + (openSliders.has(L.id) ? " active" : ""), "⚙");
     tune.title = "sliders: colour, visibility, spread …";
     tune.onclick = () => {
@@ -174,7 +205,8 @@ function layerRows(wrap, L, ctx, list) {
   }
   row.appendChild(roll);
   row.appendChild(rm);
-  if (openSliders.has(L.id) && SLIDERS[L.kind]) wrap.appendChild(sliderBox(L, ctx));
+  if (chipLine) wrap.appendChild(chipLine);
+  if (openSliders.has(L.id)) wrap.appendChild(sliderBox(L, ctx));
   if (ctx.openNotes.has(L.id)) {
     wrap.appendChild(el("div", "layer-note", L.note || "(no note)"));
   }

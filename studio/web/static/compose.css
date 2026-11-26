@@ -209,3 +209,7 @@
 .pal-chip i:first-child { border-radius: 9px 0 0 9px; }
 .pal-chip span { margin-left: 6px; }
 .pal-chip.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+.seed-line { display: flex; align-items: center; gap: 8px; padding: 2px 0 8px 34px; flex-wrap: wrap; }
+.seed-line-label { font-size: 11px; color: var(--fg-dim); }
+.layer-row > .seedbtn, .layer-row > .rmbtn { flex: none; }

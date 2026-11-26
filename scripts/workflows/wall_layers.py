@@ -54,6 +54,8 @@ class Ctx:
     focus: np.ndarray | None = None   # 1 near/behind the figure -> 0 in the quiet margins
     face: dict | None = None          # face_align landmarks in canvas px (eye_l, eye_r, nose, mouth_l...)
     photo: np.ndarray | None = None   # toned photo HxWx3 (base.look=photo): ghosts/smears are made of it
+    hair: np.ndarray | None = None    # MediaPipe hair mask HxW 0-1 (only built when a layer needs it)
+    mesh: np.ndarray | None = None    # 468-pt face mesh (N,2) canvas px (pen sketches)
 
     @property
     def s(self):
@@ -784,6 +786,11 @@ def _scraps(L, ctx, src, gray=True):
         if X1 <= X0 or Y1 <= Y0:
             continue
         mm = pm[Y0 - y0:Y1 - y0, X0 - x0:X1 - x0, None]
+        if rng.random() < float(p.get("shadow", 0.4)):     # paper lifts off the wall a little
+            off = max(1, int(rng.uniform(0.003, 0.007) * s))
+            shd = gaussian_filter(np.pad(mm[..., 0], ((off, 0), (off, 0)))[:Y1 - Y0, :X1 - X0], 0.004 * s) * 0.4
+            rgb[Y0:Y1, X0:X1] *= (1 - shd[..., None])
+            al[Y0:Y1, X0:X1] = np.maximum(al[Y0:Y1, X0:X1], shd)
         rgb[Y0:Y1, X0:X1] = rgb[Y0:Y1, X0:X1] * (1 - mm) + pr[Y0 - y0:Y1 - y0, X0 - x0:X1 - x0] * mm
         al[Y0:Y1, X0:X1] = np.maximum(al[Y0:Y1, X0:X1], mm[..., 0])
     return Layer(rgb, al * float(p.get("opacity", 0.9)))
@@ -859,8 +866,55 @@ def gen_paper_scraps(L, ctx):
     return _scraps(L, ctx, src, gray=not p.get("keep_color"))
 
 
+LIBRARY = ASSETS / "library"
+
+
+def library_asset(L, ctx):
+    """A pre-made cut-out from assets/library/ (RGBA, real alpha from BiRefNet), placed in
+    the layer's region with an optional drop shadow. params: library (id = <cat>/<slug>),
+    coverage, opacity, gray (default false: library items keep their colour), shadow
+    (0-1 chance), angle (deg, default random +-15)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    im = Image.open(LIBRARY / f"{p['library']}.png").convert("RGBA")
+    a = np.asarray(im, np.float32) / 255
+    C, A = a[..., :3], a[..., 3]
+    ys, xs = np.nonzero(A > 0.05)
+    if len(xs):
+        C, A = C[ys.min():ys.max() + 1, xs.min():xs.max() + 1], A[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    cov = float(p.get("coverage", 0.12))
+    target = int(math.sqrt(max(1, cov * ctx.W * ctx.H)) * 1.3)
+    sc = target / max(C.shape[:2])
+    w, h = max(8, int(C.shape[1] * sc)), max(8, int(C.shape[0] * sc))
+    A = cv2.resize(A, (w, h), interpolation=cv2.INTER_AREA)
+    C = cv2.resize(C, (w, h), interpolation=cv2.INTER_AREA)
+    if p.get("gray") in (True, "true", 1, "1"):
+        C[:] = C.mean(2, keepdims=True)
+    ang = float(p.get("angle", rng.uniform(-15, 15)))
+    C = np.dstack([rotate(C[..., c], ang) for c in range(3)])
+    A = rotate(A, ang)
+    h, w = A.shape
+    x0, y0, x1, y1 = region_box(L.get("region", "anywhere"), ctx)
+    cx, cy = rng.uniform(x0, max(x0 + 1, x1)), rng.uniform(y0, max(y0 + 1, y1))
+    rgb = np.zeros((ctx.H, ctx.W, 3), np.float32)
+    al = np.zeros((ctx.H, ctx.W), np.float32)
+    X, Y = int(cx - w / 2), int(cy - h / 2)
+    X0, Y0, X1, Y1 = max(0, X), max(0, Y), min(ctx.W, X + w), min(ctx.H, Y + h)
+    if X1 > X0 and Y1 > Y0:
+        A_ = A[Y0 - Y:Y1 - Y, X0 - X:X1 - X]
+        if rng.random() < float(p.get("shadow", 0.6)):
+            off = max(1, int(0.006 * s))
+            shd = gaussian_filter(np.pad(A_, ((off, 0), (off, 0)))[:Y1 - Y0, :X1 - X0], 0.005 * s) * 0.45
+            al[Y0:Y1, X0:X1] = shd
+        rgb[Y0:Y1, X0:X1] = C[Y0 - Y:Y1 - Y, X0 - X:X1 - X] * A_[..., None]
+        al[Y0:Y1, X0:X1] = A_ + al[Y0:Y1, X0:X1] * (1 - A_)
+        rgb[Y0:Y1, X0:X1] /= np.maximum(al[Y0:Y1, X0:X1], 1e-3)[..., None]
+    return Layer(np.clip(rgb, 0, 1), al * float(p.get("opacity", 0.95)))
+
+
 def gen_asset(L, ctx):
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    if p.get("library") and (LIBRARY / f"{p['library']}.png").exists():
+        return library_asset(L, ctx)
     prompt = p.get("prompt") or L.get("note") or L["id"].replace("_", " ")
     src = asset_image(prompt, L.get("seed", 1))
     if PAPERISH.search(prompt) and not p.get("tint"):
@@ -1493,36 +1547,148 @@ def gen_shutter_drag(L, ctx):
     return Layer(blur.astype(np.float32), alpha.astype(np.float32))
 
 
+def _chaikin(pts, it=2):
+    for _ in range(it):
+        q = 0.75 * pts[:-1] + 0.25 * pts[1:]
+        r = 0.25 * pts[:-1] + 0.75 * pts[1:]
+        pts = np.vstack([pts[:1], np.stack([q, r], 1).reshape(-1, 2), pts[-1:]])
+    return pts
+
+
+# (mesh indices, drawn whole?) — upper lids firm, lower lids/jaw only partly, like a quick sketch
+SKETCH_FEATURES = [
+    ([33, 246, 161, 160, 159, 158, 157, 173, 133], True),          # upper lid L
+    ([263, 466, 388, 387, 386, 385, 384, 398, 362], True),         # upper lid R
+    ([33, 7, 163, 144, 145, 153, 154, 155, 133], False),           # lower lid L
+    ([263, 249, 390, 373, 374, 380, 381, 382, 362], False),        # lower lid R
+    ([70, 63, 105, 66, 107], True),                                # brow L
+    ([300, 293, 334, 296, 336], True),                             # brow R
+    ([98, 97, 2, 326, 327], True),                                 # nostrils
+    ([193, 168, 6, 197, 195, 5], False),                           # bridge (one side)
+    ([61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291], True),     # upper lip
+    ([78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308], True),    # mouth line
+    ([61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291], False),  # lower lip
+    ([234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365,
+      397, 288, 361, 323, 454], False),                            # jaw
+]
+
+
 def gen_pen_outline(L, ctx):
-    """Black pen drawing of her: XDoG edges of her own photo (contour + inner lines, face
-    features), drawn twice with a small jitter so it reads hand-drawn, broken in places.
-    params: color, opacity, weight (line thickness), detail (0-1 inner lines vs contour
-    only), jitter (0-1), breaks (0-1)."""
+    """A human sketch of her in a thin ballpoint: vector strokes along her silhouette plus a
+    few long inner lines (face features, folds) — minimal, a little off, some lines gone
+    over twice. Each stroke wobbles, tapers, sometimes overshoots; gaps where the hand
+    lifted. Skips the hair. Drawn at 2x and scaled down so the line stays fine.
+    params: color (default blue ballpoint), opacity, weight (1 = fine ballpoint),
+    detail (0-1: how many inner lines), repeat (0-1: share of strokes redrawn),
+    wobble (0-1), gaps (0-1), hair (true to draw over hair too)."""
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
-    lum = ctx.lum.astype(np.float32)
-    det = float(p.get("detail", 0.5))
-    g1 = gaussian_filter(lum, 0.0015 * s)
-    g2 = gaussian_filter(lum, 0.0015 * s * 1.8)
-    dog = g1 - 0.98 * g2
-    inner = np.clip(-dog * (40 + 80 * det), 0, 1)
-    edge = np.abs(np.gradient(gaussian_filter(ctx.mask, 0.002 * s))[0]) + \
-        np.abs(np.gradient(gaussian_filter(ctx.mask, 0.002 * s))[1])
-    contour = np.clip(edge * s * 0.25, 0, 1)
-    lines = np.maximum(contour, inner * det * 1.4)
-    lines *= gaussian_filter((ctx.mask > 0.3).astype(np.float32), 0.004 * s) > 0.05
-    w = max(1, int(float(p.get("weight", 1.0)) * 0.0012 * s))
-    lines = cv2.dilate(lines, np.ones((w, w), np.uint8)) if w > 1 else lines
-    j = float(p.get("jitter", 0.5)) * 0.004 * s
-    out = lines.copy()
-    if j > 0:
-        M = np.float32([[1, 0, rng.uniform(-j, j)], [0, 1, rng.uniform(-j, j)]])
-        out = np.maximum(out, 0.7 * cv2.warpAffine(lines, M, (ctx.W, ctx.H)))
-    br = float(p.get("breaks", 0.3))
-    if br > 0:
-        n = fbm((ctx.H, ctx.W), rng, 0.02 * s, 2)
-        out *= np.clip((n + 1.2 - 2.4 * br) * 2, 0, 1)
-    out = np.clip((out - 0.15) * 1.8, 0, 1)
-    return solid(ctx, p.get("color", "#0b0b0e"), out * float(p.get("opacity", 0.95)))
+    H, W = ctx.H, ctx.W
+    K = 2                                             # supersample
+    hair = None
+    if ctx.hair is not None and p.get("hair") not in (True, "true", 1, "1"):
+        hair = gaussian_filter(ctx.hair, 0.004 * s) > 0.25
+    det, rep = float(p.get("detail", 0.5)), float(p.get("repeat", 0.5))
+    wob, gaps = float(p.get("wobble", 0.5)), float(p.get("gaps", 0.35))
+    wt = float(p.get("weight", 1.0))
+
+    paths = []
+    m8 = (gaussian_filter(ctx.mask, 0.003 * s) > 0.5).astype(np.uint8)
+    cs, _ = cv2.findContours(m8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    for c in cs:
+        if len(c) > 0.05 * s:
+            paths.append(c[:, 0, :].astype(np.float32))
+    if det > 0:                                        # inner lines: long Canny edges on her
+        lu = (gaussian_filter(ctx.lum, 0.002 * s) * 255).astype(np.uint8)
+        ed = cv2.Canny(lu, 40, 110) * (cv2.erode(m8, np.ones((7, 7), np.uint8)) > 0)
+        ci, _ = cv2.findContours(ed, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+        ci = sorted(ci, key=len, reverse=True)
+        keep = int(4 + 26 * det)
+        for c in ci[:keep * 3]:
+            pts = c[:, 0, :].astype(np.float32)
+            pts = pts[: max(2, len(pts) // 2 + 1)]     # open contour: one side of the edge loop
+            if len(pts) > 0.08 * s:
+                paths.append(pts)
+            if len(paths) > keep + len(cs):
+                break
+    feats = []
+    if ctx.mesh is not None and len(ctx.mesh) >= 468:     # face drawn the way a sketcher does
+        M = ctx.mesh
+        for idx, full in SKETCH_FEATURES:
+            pts = M[idx].copy()
+            if not full:                                  # partial: a random stretch of it
+                n = len(pts)
+                a0 = int(rng.uniform(0, 0.35) * n)
+                pts = pts[a0:a0 + max(3, int(rng.uniform(0.5, 0.9) * n))]
+            feats.append(pts)
+    elif ctx.face:                                     # face: eyes, brows, nose, lips — short lines ok
+            face = _face_soft(ctx, 1.0) > 0.25
+            luf = (gaussian_filter(ctx.lum, 0.0012 * s) * 255).astype(np.uint8)
+            ef = cv2.Canny(luf, 30, 90) * face
+            cf, _ = cv2.findContours(ef.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+            cf = sorted(cf, key=len, reverse=True)[:int(6 + 10 * det)]
+            for c in cf:
+                pts = c[:, 0, :].astype(np.float32)
+                pts = pts[: max(2, len(pts) // 2 + 1)]
+                if len(pts) > 0.012 * s:
+                    paths.append(pts)
+
+    canvas = np.zeros((H * K, W * K), np.float32)
+    nf = len(paths)
+    paths = paths + feats
+    for pi, pts in enumerate(paths):
+        feat = pi >= nf
+        if feat:
+            pts = np.vstack([pts[0] + (pts[0] - pts[1]) * 0.3, pts]) if len(pts) > 1 else pts
+            pts = _chaikin(pts, 2)
+        step = max(1, int(0.004 * s)) if not feat and len(pts) > 0.06 * s else 1
+        pts = pts[::step]
+        if len(pts) < 3:
+            continue
+        # break into strokes of random length (the hand lifts), drop some (gaps)
+        i = 0
+        while i < len(pts) - 2:
+            ln = int(rng.uniform(0.06, 0.25) * s / step)
+            seg = pts[i:i + ln + 1]
+            i += ln + int(rng.uniform(0, 0.02) * s / step)
+            if feat:                                    # features: one whole stroke each
+                seg, i = pts, len(pts)
+            if len(seg) < 3 or rng.random() < gaps * (0.12 if feat else 0.6):
+                continue
+            if hair is not None and not feat:
+                inh = hair[np.clip(seg[:, 1].astype(int), 0, H - 1), np.clip(seg[:, 0].astype(int), 0, W - 1)]
+                if inh.mean() > 0.3:
+                    continue
+            passes = 1 + (rng.random() < rep) + (rng.random() < rep * 0.35)
+            for k in range(passes):
+                q = seg.copy()
+                n = len(q)
+                t = np.linspace(0, 1, n)
+                # low-frequency wobble perpendicular-ish + a small offset per redraw
+                amp = (0.002 + 0.004 * wob) * s
+                if feat:                                # small features: wobble scales with them
+                    amp = min(amp, 0.04 * float(np.ptp(seg, 0).max()) + 0.3)
+                ph = rng.uniform(0, 6.28, 2)
+                q[:, 0] += amp * np.sin(t * rng.uniform(1, 3) * 3.14 + ph[0]) + (k and rng.normal(0, 0.003 * s))
+                q[:, 1] += amp * np.sin(t * rng.uniform(1, 3) * 3.14 + ph[1]) + (k and rng.normal(0, 0.003 * s))
+                if rng.random() < 0.4:                 # overshoot past the end
+                    d = q[-1] - q[-2]
+                    q = np.vstack([q, q[-1] + d * rng.uniform(2, 6)])
+                if k:                                  # redraws are shorter, start late / end early
+                    a0, a1 = int(rng.uniform(0, 0.3) * n), int(rng.uniform(0.7, 1.0) * n)
+                    q = q[a0:max(a0 + 3, a1)]
+                q = _chaikin(q, 2) * K
+                m = len(q)
+                taper = np.sin(np.linspace(0, np.pi, m)) ** 0.5
+                ink = rng.uniform(0.55, 0.95) * (0.75 if k else 1.0)
+                for j in range(0, m - 1, 2):           # pressure: thickness + ink follow the taper
+                    th = max(1, int(round(K * wt * (0.6 + 0.8 * taper[j]))))
+                    cv2.line(canvas, tuple(np.int32(q[j])), tuple(np.int32(q[min(j + 2, m - 1)])),
+                             float(ink * (0.5 + 0.5 * taper[j])), th, cv2.LINE_AA)
+    # ballpoint: ink builds up where lines cross, faint skips along the line
+    canvas = cv2.resize(canvas, (W, H), interpolation=cv2.INTER_AREA)
+    skip = gaussian_filter(rng.random((H, W)).astype(np.float32), 0.8)
+    a = np.clip(canvas * 1.6, 0, 1) * np.clip(0.6 + 1.2 * skip, 0, 1)
+    return solid(ctx, p.get("color", "#1f3a9e"), np.clip(a, 0, 1) * float(p.get("opacity", 0.9)))
 
 
 def gen_line_screen(L, ctx):
@@ -1551,36 +1717,125 @@ def gen_line_screen(L, ctx):
     return solid(ctx, p.get("color", "#111111"), ink * reg * float(p.get("opacity", 0.6)))
 
 
+def _torn_poly(pts, rng, s, rough):
+    """Polygon edges made imperfect: midpoint-displaced (torn, jagged), the odd small rip
+    (a notch cut into an edge)."""
+    out = []
+    n = len(pts)
+    for i in range(n):
+        a, b = np.array(pts[i], float), np.array(pts[(i + 1) % n], float)
+        seg = [a, b]
+        amp = np.linalg.norm(b - a) * 0.035 * rough
+        for _ in range(5):                                   # fractal midpoint displacement
+            nxt = [seg[0]]
+            for u, v in zip(seg[:-1], seg[1:]):
+                d = v - u
+                nrm = np.array([-d[1], d[0]]) / (np.linalg.norm(d) + 1e-6)
+                nxt += [(u + v) / 2 + nrm * rng.normal(0, amp), v]
+            seg, amp = nxt, amp * 0.55
+        if rng.random() < 0.35 * rough:                     # a rip: small V notch inward
+            k = rng.integers(2, len(seg) - 2)
+            u, v = seg[k - 1], seg[k + 1]
+            d = v - u
+            nrm = np.array([-d[1], d[0]]) / (np.linalg.norm(d) + 1e-6)
+            seg[k] = seg[k] - nrm * rng.uniform(0.004, 0.012) * s * rng.choice([-1, 1])
+        out += seg[:-1]
+    return np.int32(out)
+
+
+def _brush_tex(h, w, rng, ang):
+    """Thick-brush paint texture: long streaks + clumps, as a -1..1 relief field."""
+    n = rng.standard_normal((h, w)).astype(np.float32)
+    t = gaussian_filter(n, (max(1, h * 0.002), max(1, w * 0.06)))
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), ang, 1.0)
+    t = cv2.warpAffine(t, M, (w, h), borderMode=cv2.BORDER_REFLECT)
+    t += 0.5 * gaussian_filter(n, max(1, w * 0.01))
+    return t / (np.abs(t).max() + 1e-6)
+
+
 def gen_shards(L, ctx):
-    """Torn geometric shards (long triangles / quads) in palette colours, some hatched,
-    scattered over her and the background — collage paper cut with scissors.
-    params: colors (comma list), coverage, opacity, hatch (0-1 share hatched), size."""
+    """Torn collage shards: almost-triangles cut from painted paper. Imperfect on purpose —
+    torn jagged edges, small rips, a tip sometimes cut off, the odd quad. Some are thick
+    brush-painted paper (streaky relief + a lit/shaded torn edge), some hatched, many cast
+    a soft drop shadow. Fills the background; on 'over' layers keep coverage low.
+    params: colors (comma list), coverage (0-1, ~count), size (fraction of short edge),
+    opacity, hatch (share hatched), paint (share brush-textured), shadow (share with a drop
+    shadow), rough (edge tear 0-1), avoid_subject (0-1: keep off her)."""
     p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     cols = [c.strip() for c in str(p.get("colors", "#ff2fd0,#6a3cff,#ffffff")).split(",") if c.strip()]
-    cov = float(p.get("coverage", 0.3))
+    cov = float(p.get("coverage", 0.5))
     size = float(p.get("size", 0.25)) * s
-    rgb = np.zeros((ctx.H, ctx.W, 3), np.float32)
-    al = np.zeros((ctx.H, ctx.W), np.float32)
-    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W]
-    for k in range(int(4 + cov * 30)):
-        cx, cy = region_pt(L.get("region", "anywhere"), ctx, 1)[0]
+    rough = float(p.get("rough", 0.7))
+    avoid = float(p.get("avoid_subject", 0.0))
+    H, W = ctx.H, ctx.W
+    rgb = np.zeros((H, W, 3), np.float32)
+    al = np.zeros((H, W), np.float32)
+    n_sh = int(6 + cov * 70)
+    face_zone = _face_soft(ctx, 2.2) > 0.05 if (ctx.face and L.get("z") == "over") else None
+    for k in range(n_sh):
+        for _try in range(6):                                  # placement (optionally off her)
+            cx, cy = rng.uniform(-0.05, 1.05) * W, rng.uniform(-0.05, 1.05) * H
+            mi = ctx.mask[int(np.clip(cy, 0, H - 1)), int(np.clip(cx, 0, W - 1))]
+            if rng.random() > avoid * mi:
+                break
         ang = rng.uniform(0, 2 * math.pi)
-        ln, wd = size * rng.uniform(0.5, 1.6), size * rng.uniform(0.08, 0.35)
-        pts = [(cx + math.cos(ang) * ln / 2, cy + math.sin(ang) * ln / 2),
-               (cx - math.cos(ang) * ln / 2 + math.sin(ang) * wd, cy - math.sin(ang) * ln / 2 - math.cos(ang) * wd),
-               (cx - math.cos(ang) * ln / 2 - math.sin(ang) * wd * rng.uniform(0, 1),
-                cy - math.sin(ang) * ln / 2 + math.cos(ang) * wd * rng.uniform(0, 1))]
-        m = np.zeros((ctx.H, ctx.W), np.uint8)
-        cv2.fillPoly(m, [np.int32(pts)], 1)
+        ln = size * rng.uniform(0.35, 1.5)
+        wd = ln * rng.uniform(0.15, 0.6)
+        tip = np.array([cx + math.cos(ang) * ln / 2, cy + math.sin(ang) * ln / 2])
+        bse = np.array([cx - math.cos(ang) * ln / 2, cy - math.sin(ang) * ln / 2])
+        nrm = np.array([-math.sin(ang), math.cos(ang)])
+        b1 = bse + nrm * wd * rng.uniform(0.3, 1.0)
+        b2 = bse - nrm * wd * rng.uniform(0.0, 1.0)
+        pts = [tip, b1, b2]
+        if rng.random() < 0.4:                                 # tip cut off
+            c = rng.uniform(0.08, 0.3)
+            pts = [tip + (b1 - tip) * c, b1, b2, tip + (b2 - tip) * c * rng.uniform(0.5, 1.5)]
+        elif rng.random() < 0.2:                               # an odd quad
+            pts.insert(2, bse + nrm * wd * rng.uniform(-0.3, 0.3) - (tip - bse) * rng.uniform(0.05, 0.2))
+        poly = _torn_poly(pts, rng, s, rough)
+        x0, y0 = np.maximum(poly.min(0) - int(0.03 * s), 0)
+        x1, y1 = np.minimum(poly.max(0) + int(0.03 * s), [W, H])
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            continue
+        h, w = y1 - y0, x1 - x0
+        m = np.zeros((h, w), np.uint8)
+        cv2.fillPoly(m, [poly - [x0, y0]], 1)
         m = m.astype(np.float32)
-        if rng.random() < float(p.get("hatch", 0.4)):
-            per = 0.005 * s
-            m *= (np.sin((xx + yy) / per) > 0).astype(np.float32)
-        c = hex_rgb(cols[rng.integers(len(cols))])
-        a = m * rng.uniform(0.6, 1.0)
-        rgb = rgb * (1 - a[..., None]) + c * a[..., None]
-        al = np.maximum(al, a)
-    return Layer(rgb, al * float(p.get("opacity", 0.85)))
+        if m.sum() < 10:
+            continue
+        if face_zone is not None and (m * face_zone[y0:y1, x0:x1]).any():
+            continue                                           # over her: never on the face
+        col = hex_rgb(cols[rng.integers(len(cols))])
+        c3 = np.broadcast_to(col, (h, w, 3)).copy()
+        if rng.random() < float(p.get("paint", 0.45)):          # thick brush-painted paper
+            t = _brush_tex(h, w, rng, rng.uniform(0, 180))
+            gy, gx = np.gradient(gaussian_filter(t, 1.0))
+            shade = np.clip(1 + 0.12 * t - 2.5 * (gx + gy), 0.7, 1.25)
+            c3 = np.clip(c3 * shade[..., None], 0, 1)
+            # thickness: a lit lip on one torn edge, a dark one on the other
+            er = cv2.erode(m, np.ones((3, 3), np.uint8), iterations=max(1, int(0.002 * s)))
+            lip = m - er
+            sh = np.roll(np.roll(m, 2, 0), 2, 1)
+            c3 = c3 * (1 - lip[..., None] * 0.35 * (sh[..., None] < 0.5)) + \
+                lip[..., None] * 0.25 * (sh[..., None] >= 0.5)
+            c3 = np.clip(c3, 0, 1)
+        elif rng.random() < float(p.get("hatch", 0.3)):        # printed hatch
+            yy, xx = np.mgrid[0:h, 0:w]
+            m = m * (np.sin((xx + yy) / (0.005 * s)) > -0.2).astype(np.float32)
+        if rng.random() < 0.5 and col.mean() < 0.9:            # white torn paper core on an edge
+            core = m - cv2.erode(m, np.ones((3, 3), np.uint8), iterations=max(1, int(0.0025 * s)))
+            core *= gaussian_filter(rng.random((h, w)).astype(np.float32), 2) > 0.5
+            c3 = c3 * (1 - core[..., None]) + 0.96 * core[..., None]
+        a = gaussian_filter(m, 0.6) * rng.uniform(0.95, 1.0)     # paper is opaque
+        sl = (slice(y0, y1), slice(x0, x1))
+        if rng.random() < float(p.get("shadow", 0.5)):         # drop shadow under the shard
+            off = int(rng.uniform(0.003, 0.008) * s)
+            shd = gaussian_filter(np.pad(m, ((off, 0), (off, 0)))[:h, :w], 0.004 * s) * 0.45
+            rgb[sl] *= (1 - shd[..., None])
+            al[sl] = np.maximum(al[sl], shd)
+        rgb[sl] = rgb[sl] * (1 - a[..., None]) + c3 * a[..., None]
+        al[sl] = np.maximum(al[sl], a)
+    return Layer(rgb, al * float(p.get("opacity", 0.95)))
 
 
 def gen_cracks(L, ctx):
@@ -1631,7 +1886,99 @@ def gen_grunge_frame(L, ctx):
     return solid(ctx, p.get("color", "#0a0a0a"), a * float(p.get("opacity", 1.0)))
 
 
+def gen_spike_burst(L, ctx):
+    """Poster 'explosion' behind her head: sharp jagged spikes radiating from a point,
+    dry-brush streaks running along each ray (so edges break up like paint dragged
+    outward), a rough solid core and droplets flung along the rays.
+    params: color, opacity, count (spikes), length (fraction of short edge), width (base
+    width, fraction of length), angle (deg, centre of the fan; 90 = up), spread (deg fan
+    width, 360 = all round), core (0-1 core size), dry (0-1 streak breakup),
+    drops (0-1), center (head|subject|x,y fractions)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    H, W = ctx.H, ctx.W
+    c = str(p.get("center", "head"))
+    if "," in c:
+        fx, fy = map(float, c.split(","))
+        cx, cy = fx * W, fy * H
+    elif c == "subject":
+        x0, y0, x1, y1 = ctx.sbox
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    else:
+        cx, cy = ctx.head
+        cy += 0.04 * s
+    count = int(p.get("count", 18))
+    ln = float(p.get("length", 0.55)) * s
+    wd = float(p.get("width", 0.12))
+    ang0 = math.radians(float(p.get("angle", 90)))
+    spread = math.radians(float(p.get("spread", 220)))
+    m = np.zeros((H, W), np.float32)
+    for _ in range(count):
+        a = ang0 + rng.uniform(-0.5, 0.5) * spread
+        L1 = ln * rng.uniform(0.35, 1.15) * (1.3 if rng.random() < 0.15 else 1.0)
+        r0 = ln * rng.uniform(0.0, 0.2)
+        bw = L1 * wd * rng.uniform(0.4, 1.4)
+        dx, dy = math.cos(a), -math.sin(a)
+        nx, ny = -dy, dx
+        bx, by = cx + dx * r0, cy + dy * r0
+        tip = (bx + dx * L1 + nx * rng.normal(0, bw * 0.3), by + dy * L1 + ny * rng.normal(0, bw * 0.3))
+        kink = rng.uniform(0.3, 0.7)                     # a bent edge: spikes aren't clean triangles
+        mid = (bx + dx * L1 * kink + nx * bw * rng.uniform(0.2, 0.6), by + dy * L1 * kink + ny * bw * rng.uniform(0.2, 0.6))
+        poly = np.int32([(bx + nx * bw / 2, by + ny * bw / 2), mid, tip, (bx - nx * bw / 2, by - ny * bw / 2)])
+        cv2.fillPoly(m, [poly], 1.0)
+    core = float(p.get("core", 0.5))
+    if core > 0:
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        d = np.hypot(xx - cx, yy - cy) / (ln * 0.35 * core + 1)
+        m = np.maximum(m, (d + 0.5 * fbm((H, W), rng, 0.03 * s, 3) < 1).astype(np.float32))
+    # dry-brush streaks along the rays: noise in polar coordinates (fine in angle, long in radius)
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    th = (np.arctan2(yy - cy, xx - cx) + np.pi) / (2 * np.pi)       # 0..1
+    rr = np.hypot(xx - cx, yy - cy) / s
+    N = gaussian_filter(rng.standard_normal((64, 1400)).astype(np.float32), (1.2, 1.0))
+    N /= N.std() + 1e-6
+    streak = cv2.remap(N, (th * 1399).astype(np.float32), (rr * 30).astype(np.float32) % 63,
+                       cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+    dist = distance_transform_edt(m > 0.5) / (0.012 * s)               # 0 at edge -> 1 inside
+    dry = float(p.get("dry", 0.6))
+    keep = np.clip((streak + 2.2 * np.clip(dist, 0, 1.5) - 0.6 * dry + 0.4 - rr * dry) * 2.5, 0, 1)
+    a = m * keep
+    # flecks beyond the edges, along the rays
+    if float(p.get("drops", 0.5)) > 0:
+        fl = (streak > 2.0 - 0.6 * float(p.get("drops", 0.5))) & (rr * s < ln * 1.25)
+        fl &= gaussian_filter(m, 0.03 * s) > 0.05
+        a = np.maximum(a, fl.astype(np.float32) * 0.9)
+    a = gaussian_filter(a, 0.5)
+    return solid(ctx, p.get("color", "#E0103C"), a * float(p.get("opacity", 0.95)))
+
+
+def gen_scrape_streaks(L, ctx):
+    """Squeegee / scraped dry paint: a band of streaks dragged in one direction, dense at
+    the start, running dry toward the end, ragged ends. params: color, opacity, region,
+    direction (deg: 90 = vertical drag), width (band width, fraction of short edge),
+    length (fraction), density (0-1), count (bands)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    H, W = ctx.H, ctx.W
+    acc = np.zeros((H, W), np.float32)
+    bw = int(float(p.get("width", 0.12)) * s)
+    bl = int(float(p.get("length", 0.6)) * s)
+    dens = float(p.get("density", 0.6))
+    for _ in range(int(p.get("count", 2))):
+        n = rng.standard_normal((bl, bw)).astype(np.float32)
+        st = gaussian_filter(n, (bl * 0.08, max(0.6, 0.0012 * s)))     # long along the drag
+        st /= st.std() + 1e-6
+        t = np.linspace(0, 1, bl)[:, None]
+        ink = np.clip((st + 1.6 * dens - 2.2 * t ** 1.5) * 2, 0, 1)      # runs dry toward the end
+        edge = np.clip(np.minimum(np.arange(bw), bw - 1 - np.arange(bw)) / (0.15 * bw + 1), 0, 1)[None]
+        ink *= np.clip(edge + 0.3 * gaussian_filter(rng.standard_normal((bl, bw)).astype(np.float32), 3), 0, 1)
+        tile = rotate(ink, float(p.get("direction", 90)) - 90)
+        cx, cy = region_pt(L.get("region", "left"), ctx, 1)[0]
+        stamp(acc, tile, cx, cy)
+    return solid(ctx, p.get("color", "#111111"), np.clip(acc, 0, 1) * float(p.get("opacity", 0.9)))
+
+
 GENERATORS = {
+    "spike_burst": gen_spike_burst,
+    "scrape_streaks": gen_scrape_streaks,
     "shutter_drag": gen_shutter_drag,
     "pen_outline": gen_pen_outline,
     "line_screen": gen_line_screen,

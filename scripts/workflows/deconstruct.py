@@ -42,7 +42,7 @@ KINDS = ["paint_pattern", "calligraphy", "splatter", "ink_smear", "dot_rows", "p
          "haze", "ghost", "motion_smear", "light_leak", "vignette",
          # newer kinds (wall_layers.py has the params):
          "rim_light", "dry_brush", "shutter_drag", "pen_outline", "line_screen", "shards",
-         "cracks", "grunge_frame"]
+         "cracks", "grunge_frame", "spike_burst", "scrape_streaks"]
 REGIONS = ["behind-head", "around", "left", "right", "top", "bottom", "edges", "anywhere"]
 BW_PRESETS = ["tri-x-punch", "high-key", "low-key", "soft-matte", "newsprint"]
 

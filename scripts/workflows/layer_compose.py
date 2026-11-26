@@ -251,6 +251,28 @@ def _person_mask(im):
     return cv2.GaussianBlur(person, (0, 0), max(1.0, W * 0.002))
 
 
+HAIR_KINDS = ("pen_outline",)
+
+
+def hair_mask(d, im, size):
+    """MediaPipe multiclass hair (category 1), cached per piece as hair.png."""
+    hp = d / "hair.png"
+    if not hp.exists():
+        import cv2
+        import mediapipe as mp
+        small = im.convert("RGB").copy()
+        small.thumbnail((1024, 1024))
+        model = Path("~/openclaw-venv/mediapipe_models/selfie_multiclass.tflite").expanduser()
+        with mp.tasks.vision.ImageSegmenter.create_from_options(mp.tasks.vision.ImageSegmenterOptions(
+                base_options=mp.tasks.BaseOptions(model_asset_path=str(model)),
+                output_category_mask=True)) as seg:
+            cm = seg.segment(mp.Image(image_format=mp.ImageFormat.SRGB,
+                                      data=np.ascontiguousarray(np.asarray(small)))).category_mask
+            cm = cm.numpy_view().squeeze()
+        Image.fromarray(((cm == 1) * 255).astype(np.uint8)).save(hp)
+    return np.asarray(Image.open(hp).convert("L").resize(size), np.float32) / 255
+
+
 def subject_mask(d, im, boost=False):
     """BiRefNet subject mask, cached. boost (base.mask_boost): union with BiRefNet on a
     brightened copy and a MediaPipe person mask — recovers hair/skin lost in a dark room."""
@@ -282,6 +304,16 @@ def face_points(d, src_full):
         from face_align import landmarks
         pts = landmarks(np.asarray(src_full))
         fp.write_text(json.dumps({k: [float(v[0]), float(v[1])] for k, v in (pts or {}).items()}))
+    return json.loads(fp.read_text())
+
+
+def face_mesh(d, src_full):
+    """468-point face mesh on the full-res source, cached in face_mesh.json ([] = none)."""
+    fp = d / "face_mesh.json"
+    if not fp.exists():
+        from face_align import mesh
+        m = mesh(np.asarray(src_full.convert("RGB")))
+        fp.write_text(json.dumps([] if m is None else m.round(1).tolist()))
     return json.loads(fp.read_text())
 
 
@@ -457,6 +489,13 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
                     face={k: (ox + v[0] * W / src_full_size[0] * min(sc, 1.0),
                               oy + v[1] * W / src_full_size[0] * min(sc, 1.0))
                           for k, v in face.items()} if face else None)
+    if sc >= 0.999 and any(L.get("kind") in HAIR_KINDS and L.get("enabled", True)
+                           for L in P["layers"]):
+        ctx_args["hair"] = hair_mask(d, src, (W, H))
+        fm = face_mesh(d, Image.open(d / "source.jpg"))
+        if fm:
+            k = W / src_full_size[0]
+            ctx_args["mesh"] = np.array(fm, np.float32) * k
     # (face landmarks follow her when subject_scale shrinks/moves her)
     # eyes are protected at any subject_scale: use the landmarks already moved with her
     protect = eye_protect(ctx_args["face"], W, H, 1.0, float(base.get("eye_feather", 0.5))) if ctx_args.get("face") else np.zeros((H, W), np.float32)
@@ -577,7 +616,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     for L in [x for x in gen_set if x["z"] == "under"]:
         lay = run(L)
         if lay is not None:
-            if L["kind"] != "backdrop":     # a full background must not fade at the margins
+            if L["kind"] not in ("backdrop", "spike_burst"):     # a full background must not fade at the margins
                 lay.alpha = lay.alpha * (1 - quiet + quiet * focus)
             emit(L, lay)
 
@@ -599,7 +638,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         if lay is not None:
             fade = 1.0 if L["kind"] in ("dot_rows", "micro_text", "print") else \
                 (1 - quiet * 0.5 + quiet * 0.5 * focus)
-            lay.alpha = lay.alpha * (1 - protect) * fade
+            # a pen drawing of her eyes doesn't cover them — it's exempt from the guard
+            lay.alpha = lay.alpha * (1 if L["kind"] == "pen_outline" else (1 - protect)) * fade
             emit(L, lay)
     if only:
         return None, stack

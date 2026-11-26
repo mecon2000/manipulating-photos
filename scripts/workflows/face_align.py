@@ -87,6 +87,28 @@ def landmarks(img_arr, _retry=True, max_edge=1600):
             for k, i in IDX.items()}
 
 
+def mesh(img_arr, max_edge=1600):
+    """All 468 FaceLandmarker points as an (N, 2) pixel array, or None. No retries —
+    used for drawing features (pen sketches), not alignment."""
+    import mediapipe as mp
+    H, W = img_arr.shape[:2]
+    sc = min(1.0, max_edge / max(H, W))
+    small = cv2.resize(img_arr, (int(W * sc), int(H * sc)), interpolation=cv2.INTER_AREA) if sc < 1 else img_arr
+    for arr in (small, _normalize_for_detection(small)):
+        try:
+            det = mp.tasks.vision.FaceLandmarker.create_from_options(
+                mp.tasks.vision.FaceLandmarkerOptions(
+                    base_options=mp.tasks.BaseOptions(model_asset_path=str(FACE_MODEL)), num_faces=1))
+            res = det.detect(mp.Image(image_format=mp.ImageFormat.SRGB,
+                                      data=np.ascontiguousarray(arr).astype(np.uint8)))
+            det.close()
+        except Exception:
+            return None
+        if res.face_landmarks:
+            return np.array([[p.x * W, p.y * H] for p in res.face_landmarks[0]], np.float32)
+    return None
+
+
 def _tiled(img_arr, fracs=(0.5, 0.35)):
     """Last resort for small faces in wide full-body frames: search overlapping
     tiles (half-stride), each upscaled so the face fills more of the detector's

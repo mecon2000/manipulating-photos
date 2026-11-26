@@ -131,6 +131,12 @@ async function redraw() {
     });
     if (txt.textContent.startsWith("loading layers")) chip.classList.add("hidden");
     layersShown = true;
+    if (revealGate) {             // rendered change: wait for the cue, then show + low beep
+      const g = revealGate;
+      await g;
+      if (revealGate === g) revealGate = null;
+      cueReveal();
+    }
     canvas.setImageSource(c);
   } catch (e) {
     toast(`draw: ${e.message}`);
@@ -140,9 +146,50 @@ async function redraw() {
   }
 }
 
+// ---- render cue ----
+// A server render (any layer image changed) announces itself: two quick high beeps, then
+// ~700ms later the new picture appears with a lower beep — time to look where the change
+// should land. Instant changes (toggle, reorder, picking a variant) show at once, silently.
+let audioCtx = null;
+function audio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (e) { /* no audio */ }
+  return audioCtx;
+}
+document.addEventListener("pointerdown", audio, { passive: true });   // unlock (iOS needs a tap)
+function beep(freq, dur, t0) {
+  const c = audioCtx;
+  if (!c) return;
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = "sine";
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g).connect(c.destination);
+  o.start(t0);
+  o.stop(t0 + dur + 0.03);
+}
+let revealGate = null;          // set while a rendered change waits to be shown
+function cueRender() {
+  const c = audio();
+  if (c) { const t = c.currentTime; beep(1760, 0.07, t); beep(1760, 0.07, t + 0.12); }
+  revealGate = new Promise((r) => setTimeout(r, 190 + 700));
+}
+function cueReveal() { const c = audio(); if (c) beep(880, 0.14, c.currentTime); }
+const layerVersions = (m) => Object.fromEntries((m ? m.layers : []).map((L) => [L.id, L.v]));
+function wasRendered(oldMan, newMan) {
+  if (!oldMan || !newMan) return false;
+  const a = layerVersions(oldMan);
+  return newMan.layers.some((L) => L.v && L.v !== a[L.id]);
+}
+
 // ---- state ----
 let lastKey = "";
 async function apply(s, force = false) {
+  if (s.manifest && wasRendered(man, s.manifest)) cueRender();
   state = s;
   serverPending = !!(s.sync && s.sync.pending);
   updateDots();

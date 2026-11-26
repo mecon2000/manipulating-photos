@@ -117,6 +117,39 @@ Return ONLY JSON, no prose, no code fence:
              "coverage": 0-1, "opacity": 0-1, ...}}, "why": "one line"}}]}}"""
 
 
+LIBRARY = ROOT / "assets" / "library"
+
+
+def library_offer(n: int = 36) -> list[dict]:
+    """The least-used library cut-outs (random among ties), so pieces don't all get the
+    same wolf. usage.json counts how often each id was handed to a piece."""
+    try:
+        idx = json.loads((LIBRARY / "index.json").read_text())
+    except (OSError, ValueError):
+        return []
+    try:
+        use = json.loads((LIBRARY / "usage.json").read_text())
+    except (OSError, ValueError):
+        use = {}
+    import random
+    random.shuffle(idx)
+    idx.sort(key=lambda x: use.get(x["id"], 0))
+    return idx[:n]
+
+
+def library_mark(ids: list[str]) -> None:
+    if not ids:
+        return
+    f = LIBRARY / "usage.json"
+    try:
+        use = json.loads(f.read_text())
+    except (OSError, ValueError):
+        use = {}
+    for i in ids:
+        use[i] = use.get(i, 0) + 1
+    f.write_text(json.dumps(use, indent=1, sort_keys=True))
+
+
 def riff(photo: Path, recipe: dict, wild: float, context: str = "", model: str = "sonnet") -> dict:
     if wild <= 0.15:
         return {"wildness": wild, "themes": [], "riffs": []}
@@ -125,7 +158,14 @@ def riff(photo: Path, recipe: dict, wild: float, context: str = "", model: str =
     # stickers or drawings): "riff_kinds": [...], "riff_note": "style guidance"
     kinds = [k for k in (recipe.get("riff_kinds") or RIFF_KINDS) if k in RIFF_KINDS] or RIFF_KINDS
     rnote = f"Recipe rule for riffs: {recipe['riff_note']}" if recipe.get("riff_note") else ""
-    notes = "\n".join(x for x in (model_notes(name), context, rnote) if x) or "(none)"
+    offer = library_offer() if "asset" in kinds else []
+    lib = ""
+    if offer:
+        lib = ("Cut-out library — for any 'asset' riff, PICK ONE OF THESE by setting params.library "
+               "to its id (no params.prompt); invent a new asset prompt only if none fits. "
+               "Choose for meaning with this photo, not the first in the list:\n" +
+               "\n".join(f"- {o['id']}: {o['what']}" for o in offer))
+    notes = "\n".join(x for x in (model_notes(name), context, rnote, lib) if x) or "(none)"
     slim = {k: recipe[k] for k in ("summary", "palette", "base", "background") if k in recipe}
     slim["layers"] = [{k: L[k] for k in ("id", "kind", "z", "region", "params")}
                       for L in recipe.get("layers", []) if L.get("enabled", True)]
@@ -156,6 +196,12 @@ def riff(photo: Path, recipe: dict, wild: float, context: str = "", model: str =
         R["enabled"] = True
         R["riff"] = True
         R["note"] = R.pop("why", "")
+    ok = {o["id"] for o in offer}
+    for R in out.get("riffs", []):          # a library id the model made up -> drop the id
+        lid = R.get("params", {}).get("library")
+        if lid and lid not in ok and not (LIBRARY / f"{lid}.png").exists():
+            R["params"].pop("library")
+    library_mark([R["params"]["library"] for R in out.get("riffs", []) if R.get("params", {}).get("library")])
     out["wildness"] = wild
     return out
 

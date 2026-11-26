@@ -200,3 +200,12 @@
 .path-row .text-in { flex: 1; min-width: 0; }
 .upload-btn { white-space: nowrap; display: inline-flex; align-items: center; cursor: pointer; min-height: 36px; }
 .upload-btn.busy { opacity: .6; pointer-events: none; }
+
+.palette-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 10px; }
+.palette-row .pal-label { font-size: 12px; color: var(--fg-dim, #999); margin-right: 2px; }
+.pal-chip { display: inline-flex; align-items: center; gap: 0; padding: 3px 8px 3px 3px; border-radius: 14px;
+  background: var(--bg-3); border: 1px solid var(--border); color: var(--fg); font-size: 12px; cursor: pointer; min-height: 30px; }
+.pal-chip i { width: 14px; height: 18px; display: inline-block; }
+.pal-chip i:first-child { border-radius: 9px 0 0 9px; }
+.pal-chip span { margin-left: 6px; }
+.pal-chip.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }

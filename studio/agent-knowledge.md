@@ -124,3 +124,17 @@ Tools: `compose_get` (stack, base/background, open questions, open pinned notes 
 - `dry_brush` (kind, z=over, subject-clipped): her shadows break into solid black with ragged bristle edges + strokes eating the outline from inside. coverage (how far into midtones), roughness, edge, direction, length. Put `rim_light` ABOVE it or the brush eats the rim.
 - Recipes own their layers; riffs (wildness, default 0.5) are random extra layers per piece, tagged riff=True — Ronnie likes them, keep them on. After tuning a piece, `layer_compose.py to-recipe PIECE` folds it back (old recipe kept in recipes/_history/<name>.vN.json; disabled riffs dropped, kept riffs become recipe layers) so the next pose/model starts from the tuned state. Other pieces of the recipe are never changed — they only get the recipe layers they lack, added OFF and noted "[new in recipe, off]".
 - AI-version background: `scripts/workflows/bg_from_stylized.py --stylized <surreal_with_face output> --piece PIECE` cuts the AI figure (BiRefNet ∪ piece mask, dilated), LaMa-fills the hole, adds `ai_backdrop` (kind backdrop, params.image) at the bottom. Much wilder than a Flux `backdrop` — Ronnie prefers it. Turn grunge_backdrop off (it's opaque and sits above) and keep the vignette ≤0.3 or the BG goes muted again. Per photo it needs one style-imitation run (~$0.01) + ~$0.002.
+
+## Compose — palettes, new layer kinds (2026-11-26)
+- **Named palettes.** A recipe may carry `"palettes": {name: {role: "#hex"}}`; any param (or base/background value) written as `"$role"` resolves through the active one. Switch with `layer_compose.py set PIECE base.palette_name=<name>` (the piece screen shows palette chips when there are ≥2). cracked-statue ships 6: red-yellow, cobalt-orange, teal-coral, magenta-acid, ultramarine-gold, oxblood-sepia. pen-outline: neon, acid, sunset.
+- **base.posterize** `"#c1,#c2,…"` (look=photo): flat colour patches by tone, dark→light; `posterize_swap` (0-1) lets some patches take the next colour — the screenprint/pop-art read.
+- **background.mode "flat"** (look=photo): flat colour ground instead of her own darkened BG. `background.lift` (0-1) pushes her own BG toward white.
+- **shutter_drag** — slow-shutter smear of HER (premultiplied, so her silhouette trails into the BG, her old BG doesn't): mode linear|rotate|zoom, direction, length, angle, strength, face_keep (face stays sharp), spread.
+- **pen_outline** — black pen drawing from her own edges (contour + inner lines): weight, detail, jitter, breaks.
+- **line_screen** — diagonal engraving hatch: where (highlights|shadows|subject|background|all), threshold, angle, period.
+- **shards** — collage triangles in `colors` (comma list), coverage, size, hatch (share hatched).
+- **cracks** — branching stone cracks across her (eyes protected): count, length, width, branch.
+- **grunge_frame** — rough black border: width, roughness.
+- **ink_smear `burst: true`** — strokes radiate from her head (the poster "explosion").
+- **Riff limits.** recipe `riff_kinds` (allow-list) + `riff_note` keep riffs in the recipe's world — blurred-bw allows only photographic riffs (ghost/haze/motion/grain/scratches/vignette); stickers and drawings wrecked it.
+- deconstruct drafts may write words for numbers ("long", "wide, uneven"); the renderer maps spread/length/offset/ribs words to numbers.

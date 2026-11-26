@@ -435,7 +435,11 @@ def gen_ink_smear(L, ctx):
                         interpolation=cv2.INTER_AREA)
         if rng.random() < 0.5:
             st = st[:, ::-1]
-        stamp(acc, rotate(np.ascontiguousarray(st), base_dir + rng.normal(0, 35)), cx, cy)
+        d = base_dir + rng.normal(0, 35)
+        if p.get("burst") not in (None, False, "false", 0, "0"):   # strokes radiate from her head
+            hx, hy = ctx.head
+            d = -math.degrees(math.atan2(cy - hy, cx - hx)) + rng.normal(0, 8)
+        stamp(acc, rotate(np.ascontiguousarray(st), d), cx, cy)
     return solid(ctx, p.get("color", "#101015"), acc * float(p.get("opacity", 0.9)))
 
 
@@ -1432,7 +1436,208 @@ def gen_dry_brush(L, ctx):
     return solid(ctx, p.get("color", "#050609"), a * float(p.get("opacity", 0.95)))
 
 
+def _face_soft(ctx, grow=1.6):
+    """Soft 0-1 mask over the face (from landmarks), 0 elsewhere."""
+    m = np.zeros((ctx.H, ctx.W), np.float32)
+    f = ctx.face or {}
+    if not f or "nose" not in f:
+        return m
+    pts = np.array([v for v in f.values()], np.float32)
+    cx, cy = pts.mean(0)
+    r = max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1])) * 0.5 * grow + 1
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W]
+    d = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / r
+    return np.clip(1.6 - d, 0, 1).astype(np.float32)
+
+
+def gen_shutter_drag(L, ctx):
+    """Slow-shutter smear of HER OWN photo (not added copies): a directional or rotational
+    blur of the toned frame laid over her, kept off the face so it stays readable — the
+    'dragged shutter + flash' look. params: mode (linear|rotate|zoom), direction (deg,
+    linear), length (fraction of short edge), angle (deg, rotate), strength (0-1),
+    face_keep (0-1: how sharp the face stays), spread (0-1: how far the smear leaves her)."""
+    p, s = L.get("params", {}), ctx.s
+    src = ctx.photo if ctx.photo is not None else np.repeat(ctx.lum[..., None], 3, 2)
+    mode = p.get("mode", "linear")
+    n = 28                          # enough steps that the smear never shows copies
+    m3 = ctx.mask[..., None].astype(np.float32)
+    src = np.concatenate([src * m3, m3], 2)          # premultiplied: smear her, not her old BG
+    acc = np.zeros_like(src)
+    H, W = ctx.H, ctx.W
+    if mode == "rotate":
+        hx, hy = ctx.head
+        cx, cy = (hx, hy + 0.25 * (ctx.sbox[3] - ctx.sbox[1]))
+        ang = float(p.get("angle", 8))
+        for k in range(n):
+            M = cv2.getRotationMatrix2D((cx, cy), ang * (k / (n - 1) - 0.5), 1.0)
+            acc += cv2.warpAffine(src, M, (W, H), borderMode=cv2.BORDER_REFLECT)
+    elif mode == "zoom":
+        hx, hy = ctx.head
+        z = float(p.get("length", 0.08))
+        for k in range(n):
+            sc = 1 + z * k / (n - 1)
+            M = cv2.getRotationMatrix2D((hx, hy), 0, sc)
+            acc += cv2.warpAffine(src, M, (W, H), borderMode=cv2.BORDER_REFLECT)
+    else:
+        a = math.radians(float(re.sub(r"[^\d.-]", "", str(p.get("direction", "0"))) or 0))
+        ln = float(p.get("length", 0.12)) * s
+        for k in range(n):
+            t = (k / (n - 1) - 0.5) * ln
+            M = np.float32([[1, 0, math.cos(a) * t], [0, 1, -math.sin(a) * t]])
+            acc += cv2.warpAffine(src, M, (W, H), borderMode=cv2.BORDER_REFLECT)
+    acc /= n
+    a_sm = acc[..., 3]
+    blur = acc[..., :3] / np.maximum(a_sm, 1e-3)[..., None]
+    alpha = np.clip(a_sm * (1 + float(p.get("spread", 0.6))), 0, 1) * float(p.get("strength", 0.8))
+    alpha *= 1 - float(p.get("face_keep", 0.8)) * _face_soft(ctx)
+    return Layer(blur.astype(np.float32), alpha.astype(np.float32))
+
+
+def gen_pen_outline(L, ctx):
+    """Black pen drawing of her: XDoG edges of her own photo (contour + inner lines, face
+    features), drawn twice with a small jitter so it reads hand-drawn, broken in places.
+    params: color, opacity, weight (line thickness), detail (0-1 inner lines vs contour
+    only), jitter (0-1), breaks (0-1)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    lum = ctx.lum.astype(np.float32)
+    det = float(p.get("detail", 0.5))
+    g1 = gaussian_filter(lum, 0.0015 * s)
+    g2 = gaussian_filter(lum, 0.0015 * s * 1.8)
+    dog = g1 - 0.98 * g2
+    inner = np.clip(-dog * (40 + 80 * det), 0, 1)
+    edge = np.abs(np.gradient(gaussian_filter(ctx.mask, 0.002 * s))[0]) + \
+        np.abs(np.gradient(gaussian_filter(ctx.mask, 0.002 * s))[1])
+    contour = np.clip(edge * s * 0.25, 0, 1)
+    lines = np.maximum(contour, inner * det * 1.4)
+    lines *= gaussian_filter((ctx.mask > 0.3).astype(np.float32), 0.004 * s) > 0.05
+    w = max(1, int(float(p.get("weight", 1.0)) * 0.0012 * s))
+    lines = cv2.dilate(lines, np.ones((w, w), np.uint8)) if w > 1 else lines
+    j = float(p.get("jitter", 0.5)) * 0.004 * s
+    out = lines.copy()
+    if j > 0:
+        M = np.float32([[1, 0, rng.uniform(-j, j)], [0, 1, rng.uniform(-j, j)]])
+        out = np.maximum(out, 0.7 * cv2.warpAffine(lines, M, (ctx.W, ctx.H)))
+    br = float(p.get("breaks", 0.3))
+    if br > 0:
+        n = fbm((ctx.H, ctx.W), rng, 0.02 * s, 2)
+        out *= np.clip((n + 1.2 - 2.4 * br) * 2, 0, 1)
+    out = np.clip((out - 0.15) * 1.8, 0, 1)
+    return solid(ctx, p.get("color", "#0b0b0e"), out * float(p.get("opacity", 0.95)))
+
+
+def gen_line_screen(L, ctx):
+    """Diagonal line-screen (engraving/halftone hatch). Line thickness follows tone so it
+    reads as printed. params: color, opacity, angle, period (fraction of short edge),
+    where (highlights|shadows|subject|background|all), threshold."""
+    p, s = L.get("params", {}), ctx.s
+    a = math.radians(float(p.get("angle", 45)))
+    per = max(2.0, float(p.get("period", 0.006)) * s)
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W].astype(np.float32)
+    wave = 0.5 + 0.5 * np.sin((xx * math.cos(a) + yy * math.sin(a)) / per * 2 * math.pi)
+    where = p.get("where", "highlights")
+    lum = ctx.lum
+    if where == "highlights":
+        tone, reg = lum, np.clip((lum - float(p.get("threshold", 0.6))) * 4, 0, 1) * ctx.mask
+    elif where == "shadows":
+        tone, reg = 1 - lum, np.clip((float(p.get("threshold", 0.4)) - lum) * 4, 0, 1) * ctx.mask
+    elif where == "background":
+        tone, reg = np.full_like(lum, 0.5), 1 - ctx.mask
+    elif where == "subject":
+        tone, reg = 1 - lum, ctx.mask
+    else:
+        tone, reg = np.full_like(lum, 0.5), np.ones_like(lum)
+    ink = (wave < 0.25 + 0.5 * tone).astype(np.float32)
+    ink = gaussian_filter(ink, 0.5)
+    return solid(ctx, p.get("color", "#111111"), ink * reg * float(p.get("opacity", 0.6)))
+
+
+def gen_shards(L, ctx):
+    """Torn geometric shards (long triangles / quads) in palette colours, some hatched,
+    scattered over her and the background — collage paper cut with scissors.
+    params: colors (comma list), coverage, opacity, hatch (0-1 share hatched), size."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    cols = [c.strip() for c in str(p.get("colors", "#ff2fd0,#6a3cff,#ffffff")).split(",") if c.strip()]
+    cov = float(p.get("coverage", 0.3))
+    size = float(p.get("size", 0.25)) * s
+    rgb = np.zeros((ctx.H, ctx.W, 3), np.float32)
+    al = np.zeros((ctx.H, ctx.W), np.float32)
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W]
+    for k in range(int(4 + cov * 30)):
+        cx, cy = region_pt(L.get("region", "anywhere"), ctx, 1)[0]
+        ang = rng.uniform(0, 2 * math.pi)
+        ln, wd = size * rng.uniform(0.5, 1.6), size * rng.uniform(0.08, 0.35)
+        pts = [(cx + math.cos(ang) * ln / 2, cy + math.sin(ang) * ln / 2),
+               (cx - math.cos(ang) * ln / 2 + math.sin(ang) * wd, cy - math.sin(ang) * ln / 2 - math.cos(ang) * wd),
+               (cx - math.cos(ang) * ln / 2 - math.sin(ang) * wd * rng.uniform(0, 1),
+                cy - math.sin(ang) * ln / 2 + math.cos(ang) * wd * rng.uniform(0, 1))]
+        m = np.zeros((ctx.H, ctx.W), np.uint8)
+        cv2.fillPoly(m, [np.int32(pts)], 1)
+        m = m.astype(np.float32)
+        if rng.random() < float(p.get("hatch", 0.4)):
+            per = 0.005 * s
+            m *= (np.sin((xx + yy) / per) > 0).astype(np.float32)
+        c = hex_rgb(cols[rng.integers(len(cols))])
+        a = m * rng.uniform(0.6, 1.0)
+        rgb = rgb * (1 - a[..., None]) + c * a[..., None]
+        al = np.maximum(al, a)
+    return Layer(rgb, al * float(p.get("opacity", 0.85)))
+
+
+def gen_cracks(L, ctx):
+    """Fractal cracks running across her like split stone: branching random-walk lines,
+    dark core with a pale chipped lip. The compositor keeps them off the eyes.
+    params: color, opacity, count, length (fraction of short edge), width, branch (0-1)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    lines = np.zeros((ctx.H, ctx.W), np.float32)
+    ys, xs = np.nonzero(ctx.mask > 0.6)
+    if not len(xs):
+        return solid(ctx, "#000000", lines)
+    w = max(1, int(float(p.get("width", 1.0)) * 0.0018 * s))
+
+    def walk(x, y, ang, ln, depth):
+        step = 0.006 * s
+        pts = [(x, y)]
+        for _ in range(int(ln / step)):
+            ang += rng.normal(0, 0.35)
+            x, y = x + math.cos(ang) * step, y + math.sin(ang) * step
+            pts.append((x, y))
+            if depth < 3 and rng.random() < 0.04 * float(p.get("branch", 0.5)):
+                walk(x, y, ang + rng.choice([-1, 1]) * rng.uniform(0.4, 1.1), ln * 0.45, depth + 1)
+        cv2.polylines(lines, [np.int32(pts)], False, 1.0, max(1, w - depth), cv2.LINE_AA)
+
+    for _ in range(int(p.get("count", 4))):
+        i = rng.integers(len(xs))
+        walk(float(xs[i]), float(ys[i]), rng.uniform(0, 2 * math.pi),
+             float(p.get("length", 0.35)) * s, 0)
+    lines *= ctx.mask
+    lip = np.clip(cv2.dilate(lines, np.ones((3, 3), np.uint8)) - lines, 0, 1) * 0.5
+    rgb = np.empty((ctx.H, ctx.W, 3), np.float32)
+    rgb[:] = hex_rgb(p.get("color", "#0a0a0a"))
+    rgb = rgb * (1 - lip[..., None]) + np.array([0.92, 0.9, 0.86], np.float32) * lip[..., None]
+    return Layer(rgb, np.clip(lines + lip, 0, 1) * float(p.get("opacity", 0.9)))
+
+
+def gen_grunge_frame(L, ctx):
+    """Rough black border eating in from the edges: noisy distance-to-edge threshold with
+    dry vertical streaks. params: color, opacity, width (fraction of short edge), roughness."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    yy, xx = np.mgrid[0:ctx.H, 0:ctx.W].astype(np.float32)
+    d = np.minimum.reduce([xx, yy, ctx.W - 1 - xx, ctx.H - 1 - yy]) / s
+    w = float(p.get("width", 0.04))
+    n = fbm((ctx.H, ctx.W), rng, 0.01 * s, 4) * float(p.get("roughness", 0.6)) * w
+    streak = gaussian_filter(rng.standard_normal((ctx.H, ctx.W)).astype(np.float32), (0.05 * s, 0.002 * s))
+    streak /= streak.std() + 1e-6
+    a = np.clip((w + n + 0.008 * streak - d) / (0.004 + 1e-6), 0, 1)
+    return solid(ctx, p.get("color", "#0a0a0a"), a * float(p.get("opacity", 1.0)))
+
+
 GENERATORS = {
+    "shutter_drag": gen_shutter_drag,
+    "pen_outline": gen_pen_outline,
+    "line_screen": gen_line_screen,
+    "shards": gen_shards,
+    "cracks": gen_cracks,
+    "grunge_frame": gen_grunge_frame,
     "backdrop": gen_backdrop,
     "dry_brush": gen_dry_brush,
     "rim_light": gen_rim_light,

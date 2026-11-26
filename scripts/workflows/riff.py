@@ -121,7 +121,11 @@ def riff(photo: Path, recipe: dict, wild: float, context: str = "", model: str =
     if wild <= 0.15:
         return {"wildness": wild, "themes": [], "riffs": []}
     name = model_name(photo)
-    notes = "\n".join(x for x in (model_notes(name), context) if x) or "(none)"
+    # a recipe can narrow what riffs may be (a photographic look has no room for
+    # stickers or drawings): "riff_kinds": [...], "riff_note": "style guidance"
+    kinds = [k for k in (recipe.get("riff_kinds") or RIFF_KINDS) if k in RIFF_KINDS] or RIFF_KINDS
+    rnote = f"Recipe rule for riffs: {recipe['riff_note']}" if recipe.get("riff_note") else ""
+    notes = "\n".join(x for x in (model_notes(name), context, rnote) if x) or "(none)"
     slim = {k: recipe[k] for k in ("summary", "palette", "base", "background") if k in recipe}
     slim["layers"] = [{k: L[k] for k in ("id", "kind", "z", "region", "params")}
                       for L in recipe.get("layers", []) if L.get("enabled", True)]
@@ -133,7 +137,7 @@ def riff(photo: Path, recipe: dict, wild: float, context: str = "", model: str =
         im.save(p, quality=90)
         prompt = PROMPT.format(photo=p, wild=wild, plan=plan(wild), model=name or "unknown",
                                notes=notes, recipe=json.dumps(slim, ensure_ascii=False),
-                               kinds=", ".join(RIFF_KINDS), regions=", ".join(REGIONS))
+                               kinds=", ".join(kinds), regions=", ".join(REGIONS))
         r = subprocess.run([claude_bin(), "-p", prompt, "--model", model, "--allowedTools", "Read",
                             "--add-dir", str(tmp), "--output-format", "text"],
                            capture_output=True, text=True, timeout=600, env=_env(), cwd=str(tmp))
@@ -142,6 +146,8 @@ def riff(photo: Path, recipe: dict, wild: float, context: str = "", model: str =
         out = _parse(r.stdout)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    out["riffs"] = [R for R in out.get("riffs", []) if R.get("kind") in kinds or
+                    ("asset" in kinds and R.get("kind") not in RIFF_KINDS)]
     for R in out.get("riffs", []):
         R["kind"] = R.get("kind") if R.get("kind") in RIFF_KINDS else "asset"
         R["z"] = R.get("z") if R.get("z") in ("under", "over") else "over"

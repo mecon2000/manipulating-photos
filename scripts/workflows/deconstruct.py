@@ -39,7 +39,10 @@ KINDS = ["paint_pattern", "calligraphy", "splatter", "ink_smear", "dot_rows", "p
          "scribbles", "paper_scraps", "micro_text", "skin_overlay", "subject_cut",
          "scratches", "stain", "grain",
          # photographic (base.look=photo — dark photo, not a print on paper):
-         "haze", "ghost", "motion_smear", "light_leak", "vignette"]
+         "haze", "ghost", "motion_smear", "light_leak", "vignette",
+         # newer kinds (wall_layers.py has the params):
+         "rim_light", "dry_brush", "shutter_drag", "pen_outline", "line_screen", "shards",
+         "cracks", "grunge_frame"]
 REGIONS = ["behind-head", "around", "left", "right", "top", "bottom", "edges", "anywhere"]
 BW_PRESETS = ["tri-x-punch", "high-key", "low-key", "soft-matte", "newsprint"]
 

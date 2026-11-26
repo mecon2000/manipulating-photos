@@ -146,7 +146,8 @@ def cmd_init(a):
     seed = (seed + zlib.crc32(photo.stem.encode())) % 100000
     P = {"schema": 1, "photo": str(photo), "crop": {"n": a.crop, "custom": a.custom},
          "recipe": a.recipe, "seed": seed, "wildness": a.wildness,
-         "palette": recipe.get("palette", []), "base": copy.deepcopy(recipe["base"]),
+         "palette": recipe.get("palette", []), "palettes": copy.deepcopy(recipe.get("palettes", {})),
+         "base": copy.deepcopy(recipe["base"]),
          "background": copy.deepcopy(recipe["background"]),
          "layers": copy.deepcopy(recipe["layers"]), "themes": [], "decisions": []}
     P["base"]["edge_dissolve"] = 0   # Ronnie: no torn-edge effect — clean cut-out
@@ -394,7 +395,23 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         ox, oy = x0, H - h2
     s = min(W, H)
     rng0 = np.random.default_rng(P["seed"])
-    base, bgc = P["base"], P["background"]
+    # Named palettes (recipe["palettes"] = {name: {role: "#hex"}}), picked with
+    # base.palette_name: any param written as "$role" resolves to the active palette,
+    # so one recipe can be rendered in several colour schemes.
+    pal_sets = P.get("palettes") or {}
+    pal_name = P["base"].get("palette_name") or next(iter(pal_sets), None)
+    roles = pal_sets.get(pal_name, {}) if pal_name else {}
+
+    def _res(v):
+        if isinstance(v, str) and "$" in v:
+            return ",".join(roles.get(x.strip()[1:], x.strip()) if x.strip().startswith("$") else x
+                            for x in v.split(","))
+        if isinstance(v, dict):
+            return {k: _res(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [_res(x) for x in v]
+        return v
+    base, bgc = _res(dict(P["base"])), _res(dict(P["background"]))
     lum = bw(rgb, base, mask) if base.get("bw", True) else None
     look = base.get("look", "paper")     # paper: she is printed on paper | photo: dark photograph
     photo_t = None
@@ -405,6 +422,21 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         lo = wl.hex_rgb(lo_c or (pal[0] if pal else "#0a0a12"))
         hi = wl.hex_rgb(hi_c or "#dfe1e8")
         photo_t = (lo + (hi - lo) * lu[..., None]).astype(np.float32)
+        post = base.get("posterize")    # "#dark,#..,#light": flat colour patches by tone
+        if post:
+            import cv2
+            cols = np.array([wl.hex_rgb(c.strip()) for c in str(post).split(",") if c.strip()], np.float32)
+            lu2 = bw(rgb, base, mask)
+            lu8 = (lu2 * 255).astype(np.uint8)
+            for _ in range(2):
+                lu8 = cv2.bilateralFilter(lu8, 0, 25, max(3, 0.005 * min(W, H)))
+            idx = np.clip((lu8 / 255.0 * len(cols)).astype(int), 0, len(cols) - 1)
+            sw = float(base.get("posterize_swap", 0.3))     # some patches take the next colour
+            if sw > 0:
+                n = wl.fbm((H, W), np.random.default_rng(P["seed"] + 5), 0.08 * min(W, H), 2)
+                idx = np.where((n > 1.0 - 1.6 * sw) & (idx > 0), (idx + 1) % len(cols), idx)
+                idx = np.where(idx == 0, 0, np.maximum(idx, 1))
+            photo_t = cols[idx]
         pref = base.get("palette_ref")
         if pref:     # colour by the ref's own luminance->colour gradient (not a flat 2-stop duotone)
             import face_align as FA
@@ -439,10 +471,13 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     out *= (tone * vig)[..., None]
     if bgc.get("mode") == "keep":
         out = rgb.copy()
-    if photo_t is not None:     # her own background, defocused and pushed down into the dark
+    if photo_t is not None and bgc.get("mode") != "flat":     # her own BG, defocused + darkened
         from scipy.ndimage import gaussian_filter as _gf
         bl = float(bgc.get("blur", 0.02)) * s
         out = _gf(photo_t, (bl, bl, 0)) * float(bgc.get("brightness", 0.55))
+        lift = float(bgc.get("lift", 0))          # toward white: high-key milky backgrounds
+        if lift > 0:
+            out = 1 - (1 - np.clip(out, 0, 1)) * (1 - lift)
     stack = [{"id": "paper", "z": "base", "enabled": True,
               "layer": wl.Layer(out.copy(), np.ones((H, W), np.float32))}]
 
@@ -458,7 +493,36 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         import hashlib
         return hashlib.sha1((glob_key + json.dumps(L, sort_keys=True, default=str)).encode()).hexdigest()[:16]
 
+    # deconstruct drafts sometimes write words where generators want numbers
+    # ("long", "wide, uneven", "large, 4-8% of width") — map them to a number.
+    _NUM = {"spread": (0.06, 0.12, 0.25), "length": (0.06, 0.12, 0.22),
+            "offset": (0.03, 0.06, 0.1), "ribs": (0.3, 0.6, 0.9)}
+
+    def _numify(L):
+        pr = dict(L.get("params") or {})
+        for k, (lo, mid, hi) in _NUM.items():
+            v = pr.get(k)
+            if not isinstance(v, str):
+                continue
+            try:
+                float(v)
+                continue
+            except ValueError:
+                pass
+            w = v.lower()
+            pct = re.findall(r"(\d+(?:\.\d+)?)\s*%", w)
+            if pct:
+                pr[k] = float(pct[-1]) / 100
+            elif any(x in w for x in ("small", "short", "tight", "fine", "few", "subtle")):
+                pr[k] = lo
+            elif any(x in w for x in ("large", "long", "wide", "big", "many", "dense", "far")):
+                pr[k] = hi
+            else:
+                pr[k] = mid
+        return {**L, "params": pr}
+
     def run(L):
+        L = _numify(_res(L))
         g = wl.GENERATORS.get(L["kind"])
         if g is None:
             return None
@@ -932,6 +996,7 @@ def cmd_to_recipe(a):
             L2.get("params", {}).pop("brush_seed", None)
         layers.append(L2)
     new = dict(old, name=name, palette=P.get("palette", old.get("palette", [])),
+               palettes=P.get("palettes", old.get("palettes", {})),
                base={k: v for k, v in P["base"].items()},
                background=P["background"], layers=layers,
                tuned_from=P.get("photo"), tuned_at=time.strftime("%F %T"))

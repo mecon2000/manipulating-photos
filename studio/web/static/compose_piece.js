@@ -337,6 +337,7 @@ function renderAll() {
     api: P_API, lightbox: lb,
     onPick: (q, letter, comment) => mutate("/pick", { question: q.id, choice: letter, comment }, `picking ${letter}…`),
   });
+  renderPalettes();
   renderPins();
   renderHistory($("hist-body"), state, { api: P_API, lightbox: lb });
   renderSavepoints();
@@ -346,6 +347,28 @@ function renderAll() {
     $("psd-link").href = `${P_API}/file/${encodeURIComponent(psd.rel)}`;
     $("psd-link").textContent = `PSD ${psd.mb}MB`;
     $("psd-link").title = psd.path;
+  }
+}
+
+// Palette picker: a recipe can ship several named colour schemes (recipe.palettes);
+// base.palette_name picks one. Hidden when the recipe has only one.
+function renderPalettes() {
+  const row = $("palette-row");
+  const pals = state.palettes || {};
+  const names = Object.keys(pals);
+  row.classList.toggle("hidden", names.length < 2);
+  if (names.length < 2) return;
+  row.innerHTML = '<span class="pal-label">Palette</span>';
+  for (const n of names) {
+    const b = document.createElement("button");
+    b.className = "pal-chip" + (n === state.palette_name ? " active" : "");
+    b.title = n;
+    b.innerHTML = pals[n].map((c) => `<i style="background:${c}"></i>`).join("") + `<span>${n}</span>`;
+    b.onclick = () => {
+      if (n === state.palette_name) return;
+      mutate("/set", { kv: [`base.palette_name=${n}`], note: `palette → ${n}` }, `palette ${n}…`);
+    };
+    row.appendChild(b);
   }
 }
 

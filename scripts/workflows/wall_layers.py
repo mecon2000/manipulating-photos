@@ -2357,8 +2357,18 @@ def gen_torn_strip(L, ctx):
     rim = np.clip((rimv - dout) / max(1.0, 0.25 * rimw), 0, 1) * (dout > 0)
     rim *= np.clip(0.55 + (fib - fib.mean()) / (fib.std() + 1e-6) * 0.6, 0, 1) ** 0.5
     # ---- shadow the top print casts into the tear
+    # the top print sits ABOVE the photo underneath: it casts a drop shadow into the hole
+    # (light from the top-left: a band under the upper torn edge, little along the lower one)
+    from scipy.ndimage import shift as _shift
+    shd = float(p.get("shadow", 0.6))
+    sa = np.deg2rad(float(p.get("shadow_angle", 115)))       # direction the shadow falls (deg, 90 = down)
+    dist = float(p.get("shadow_dist", 0.007)) * s
+    top_paper = (~inside).astype(np.float32)
+    cast = _shift(top_paper, (dist * np.sin(sa), dist * np.cos(sa)), order=1, mode="nearest")
+    cast = gaussian_filter(cast, float(p.get("shadow_soft", 0.005)) * s)
     din = distance_transform_edt(inside)
-    sh = np.exp(-din / (0.008 * s)) * 0.45
+    occl = np.exp(-din / (0.0025 * s)) * 0.25                     # contact darkening right at the edge
+    sh = np.clip(cast * 0.85 * shd + occl * shd, 0, 0.9)
     img = outside_img * (1 - ins[..., None]) + inside_img * (1 - sh[..., None]) * ins[..., None]
     img = img * (1 - rim[..., None]) + hex_rgb(p.get("rim_color", "#f4f1ea"))[None, None] * rim[..., None]
     lay = Layer(np.clip(img, 0, 1).astype(np.float32), np.ones((H, W), np.float32))

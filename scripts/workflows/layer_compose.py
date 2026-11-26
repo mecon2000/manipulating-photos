@@ -251,7 +251,7 @@ def _person_mask(im):
     return cv2.GaussianBlur(person, (0, 0), max(1.0, W * 0.002))
 
 
-HAIR_KINDS = ("pen_outline",)
+HAIR_KINDS = ("pen_outline", "shutter_drag")
 
 
 def hair_mask(d, im, size):

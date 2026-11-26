@@ -1550,6 +1550,16 @@ def gen_shutter_drag(L, ctx):
     a_sm = acc[..., 3]
     blur = acc[..., :3] / np.maximum(a_sm, 1e-3)[..., None]
     alpha = np.clip(a_sm * (1 + float(p.get("spread", 0.6))), 0, 1) * float(p.get("strength", 0.8))
+    # selective: where the drag lands — hair / body / outer edges, each 0-1 (default: everywhere)
+    if any(k in p for k in ("hair", "body", "edges")):
+        hair = ctx.hair if ctx.hair is not None else np.zeros_like(ctx.mask)
+        hair = gaussian_filter(hair, 0.01 * s)
+        edge = np.clip(1 - distance_transform_edt(ctx.mask > 0.5) / (0.06 * s), 0, 1)
+        sel = np.maximum.reduce([float(p.get("hair", 1)) * hair,
+                                 float(p.get("body", 1)) * ctx.mask * (1 - hair),
+                                 float(p.get("edges", 0)) * edge])
+        out_reach = gaussian_filter(sel, 0.03 * s) * (1 - ctx.mask)     # trails leave her too
+        alpha *= np.clip(np.maximum(sel, out_reach * 1.5), 0, 1)
     alpha *= 1 - float(p.get("face_keep", 0.8)) * _face_soft(ctx)
     return Layer(blur.astype(np.float32), alpha.astype(np.float32))
 
@@ -1983,7 +1993,99 @@ def gen_scrape_streaks(L, ctx):
     return solid(ctx, p.get("color", "#111111"), np.clip(acc, 0, 1) * float(p.get("opacity", 0.9)))
 
 
+def gen_depth_trail(L, ctx):
+    """Dragged exposure with depth: copies of her travel along a curved 3D path that ends
+    BEHIND her — each copy shrinks with depth (perspective), defocuses and fades into the
+    backdrop, farthest drawn first; darks (hair, clothes) leave the strongest trail. Lives
+    under the subject, so her sharp self stays in front.
+    params: end (x,y: where the trail ends, fractions of short edge from her centre),
+    bend (x,y: control point of the curve, same units), depth (how far behind: 0.5 = half
+    size at the end), steps, opacity, defocus (0-1), haze (0-1 fade toward the backdrop),
+    darks (0-1: how much darks dominate), backdrop (hex the trail fades into)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    H, W = ctx.H, ctx.W
+    src = ctx.photo if ctx.photo is not None else np.repeat(ctx.lum[..., None], 3, 2)
+    m = ctx.mask.astype(np.float32)
+    lum = src.mean(2)
+    wdark = float(p.get("darks", 0.7))
+    a0 = m * ((1 - wdark) + wdark * np.clip((0.85 - lum) / 0.7, 0, 1))
+    rgba = np.dstack([src * a0[..., None], a0]).astype(np.float32)
+    x0, y0, x1, y1 = ctx.sbox
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    def pt(v, d):
+        try:
+            a, b = map(float, str(v).split(","))
+        except ValueError:
+            a, b = d
+        return np.array([a * s, b * s])
+    P2 = pt(p.get("end", "0.35,-0.12"), (0.35, -0.12))
+    P1 = pt(p.get("bend", "0.25,0.1"), (0.25, 0.1))
+    depth = float(p.get("depth", 0.6))
+    n = int(p.get("steps", 36))
+    defocus = float(p.get("defocus", 0.6))
+    haze = float(p.get("haze", 0.6))
+    bd = hex_rgb(p.get("backdrop", "#ECEBE8"))
+    out = np.zeros((H, W, 3), np.float32)
+    al = np.zeros((H, W), np.float32)
+    for k in range(n, 0, -1):                                # far -> near
+        t = k / n
+        off = 2 * (1 - t) * t * P1 + t * t * P2             # quadratic bezier from her (t=0)
+        sc = 1 / (1 + (1 / max(1e-3, 1 - min(depth, 0.95)) - 1) * t)
+        M = np.float32([[sc, 0, (1 - sc) * cx + off[0]], [0, sc, (1 - sc) * cy + off[1]]])
+        w = cv2.warpAffine(rgba, M, (W, H), flags=cv2.INTER_LINEAR, borderValue=0)
+        sig = defocus * t * 0.012 * s
+        if sig > 0.6:
+            w = cv2.GaussianBlur(w, (0, 0), sig)
+        a = w[..., 3] * (1 - t) ** 0.6 * 0.5
+        c = w[..., :3] / np.maximum(w[..., 3:], 1e-3)
+        c = c * (1 - haze * t) + bd * (haze * t)             # recedes into the backdrop
+        out = out * (1 - a[..., None]) + c * a[..., None]
+        al = al + a * (1 - al)
+    rgb = out / np.maximum(al, 1e-3)[..., None]
+    return Layer(np.clip(rgb, 0, 1).astype(np.float32), np.clip(al, 0, 1) * float(p.get("opacity", 1.0)))
+
+
+def gen_studio_arcs(L, ctx):
+    """Soft arcs/rings in the backdrop — studio gear (ring light, reflector rim) smeared by a
+    long exposure. Shaded like tubes (darker rim, lighter core) so they have volume.
+    params: count, color (tube tone), opacity, size (radius, fraction of short edge),
+    thickness, softness, center (head|x,y fractions), sweep (deg of each arc)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    H, W = ctx.H, ctx.W
+    c = str(p.get("center", "head"))
+    if "," in c:
+        fx, fy = map(float, c.split(","))
+        cx, cy = fx * W, fy * H
+    else:
+        cx, cy = ctx.head
+        cy += 0.12 * s
+    K = 2
+    rim = np.zeros((H // K, W // K), np.float32)
+    core = np.zeros_like(rim)
+    for _ in range(int(p.get("count", 3))):
+        r = float(p.get("size", 0.45)) * s * rng.uniform(0.7, 1.3)
+        th = max(2, int(float(p.get("thickness", 0.035)) * s * rng.uniform(0.6, 1.4)))
+        ccx, ccy = cx + rng.normal(0, 0.08 * s), cy + rng.normal(0, 0.08 * s)
+        sweep = float(p.get("sweep", 200)) * rng.uniform(0.6, 1.2)
+        st = rng.uniform(150, 260) - sweep / 2
+        ax = (int(r / K), int(r / K * rng.uniform(0.75, 1.1)))
+        cv2.ellipse(rim, (int(ccx / K), int(ccy / K)), ax, rng.uniform(-20, 20), st, st + sweep, 1.0, max(1, th // K))
+        cv2.ellipse(core, (int(ccx / K), int(ccy / K)), ax, rng.uniform(-3, 3), st + 5, st + sweep - 5, 1.0, max(1, th // (3 * K)))
+    rim = cv2.resize(rim, (W, H))
+    core = cv2.resize(core, (W, H))
+    soft = float(p.get("softness", 0.012)) * s
+    rim = gaussian_filter(rim, soft)
+    core = gaussian_filter(core, soft * 0.7)
+    a = np.clip(rim * 1.4, 0, 1)
+    tone = hex_rgb(p.get("color", "#9e9c98"))
+    rgb = tone[None, None] * (1 - 0.5 * np.clip(core * 1.5, 0, 1))[..., None] + \
+        np.array([1, 1, 1], np.float32) * 0.5 * np.clip(core * 1.5, 0, 1)[..., None]
+    return Layer(np.clip(rgb, 0, 1).astype(np.float32), a * float(p.get("opacity", 0.5)))
+
+
 GENERATORS = {
+    "depth_trail": gen_depth_trail,
+    "studio_arcs": gen_studio_arcs,
     "spike_burst": gen_spike_burst,
     "scrape_streaks": gen_scrape_streaks,
     "shutter_drag": gen_shutter_drag,

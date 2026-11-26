@@ -2191,7 +2191,137 @@ def gen_wash(L, ctx):
                  blend=p.get("blend", "multiply"))
 
 
+EYE_L, EYE_R = [33, 133, 159, 145], [362, 263, 386, 374]
+
+
+def _eyes(pts):
+    pts = np.asarray(pts, np.float32)
+    return pts[EYE_L].mean(0), pts[EYE_R].mean(0)
+
+
+def _noise1d(n, rng, scales):
+    """Rough 1-D edge profile: sum of smoothed white noise at several scales (px), 0-mean."""
+    out = np.zeros(n, np.float32)
+    for sc, amp in scales:
+        w = gaussian_filter(rng.standard_normal(n + 64).astype(np.float32), max(0.5, sc))[32:32 + n]
+        out += amp * w / (w.std() + 1e-6)
+    return out
+
+
+def _halftone(lum, s, ang=45.0, period=0.007):
+    """Round-dot screen: 1 where ink. Dot area follows darkness."""
+    H, W = lum.shape
+    P = max(3.0, period * s)
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    a = np.deg2rad(ang)
+    u = (xx * np.cos(a) + yy * np.sin(a)) / P
+    v = (-xx * np.sin(a) + yy * np.cos(a)) / P
+    d = np.hypot(u - np.round(u), v - np.round(v))           # 0 at dot centre .. ~0.707
+    r = np.sqrt(np.clip(1 - lum, 0, 1)) * 0.62
+    return np.clip((r - d) * P * 0.9 + 0.5, 0, 1)
+
+
+def _tone(lum, ink, paper, contrast=1.35):
+    l = np.clip((lum - 0.5) * contrast + 0.5, 0, 1)
+    return (hex_rgb(ink)[None, None] * (1 - l[..., None]) + hex_rgb(paper)[None, None] * l[..., None]).astype(np.float32)
+
+
+def gen_torn_strip(L, ctx):
+    """The torn-eyes collage: the top print (her, B&W) has a torn strip ripped out over the
+    eyes, showing a second print underneath — one colour, halftone — of the same photo or a
+    sibling frame aligned on the eyes. Opaque full frame (it IS the picture).
+    params: inside "color"|"bw" (what shows in the tear; the outside is the other), ink, accent,
+    paper, height (x eye distance), tilt (deg added to the eye line), offset (x eye dist,
+    + = down toward the cheeks), left/right (strip reach from the eye midpoint, x eye dist;
+    big = edge to edge), rough (edge raggedness 0-1), bend (0-1 wobble), rim (white fibre rim),
+    under (path of another photo for the tear; aligned on the two eyes), halftone (dot period)."""
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
+    H, W = ctx.H, ctx.W
+    if ctx.mesh is None:
+        return None
+    el, er = _eyes(ctx.mesh)
+    c = (el + er) / 2
+    ed = float(np.hypot(*(er - el)))
+    eang = float(np.arctan2(er[1] - el[1], er[0] - el[0]))
+    ink, acc, paper = p.get("ink", "#141210"), p.get("accent", "#ff4b1f"), p.get("paper", "#e6e1d6")
+    # ---- the two prints
+    top_l = np.clip(ctx.lum.astype(np.float32), 0, 1)
+    under_l = top_l
+    if p.get("under"):
+        try:
+            import cv2
+            from face_align import mesh as _mesh
+            im = np.asarray(Image.open(os.path.expanduser(str(p["under"]))).convert("RGB"))
+            m2 = _mesh(im)
+            if m2 is not None:
+                a2, b2 = _eyes(m2)
+                ed2 = float(np.hypot(*(b2 - a2)))
+                ang2 = float(np.arctan2(b2[1] - a2[1], b2[0] - a2[0]))
+                k, rot = ed / ed2, eang - ang2
+                M = cv2.getRotationMatrix2D(tuple(map(float, (a2 + b2) / 2)), -np.rad2deg(rot), k)
+                M[:, 2] += c - (a2 + b2) / 2
+                g = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
+                g = cv2.warpAffine(g, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+                g = g.astype(np.float32) / 255
+                # match its tones to the top print (same contrast, same exposure)
+                src_s, ref_s = np.sort(g.ravel()), np.sort(top_l.ravel())
+                under_l = np.interp(g, src_s, ref_s[np.linspace(0, len(ref_s) - 1, len(src_s)).astype(int)])
+        except Exception as e:
+            print(f"torn_strip: under photo failed ({e}); same photo underneath")
+    hp = float(p.get("halftone", 0.007))
+
+    def colour_print(l):
+        dots = _halftone(gaussian_filter(l, 0.0012 * s), s, 45, hp)
+        return (hex_rgb(acc)[None, None] * (1 - dots[..., None]) + hex_rgb(ink)[None, None] * dots[..., None]).astype(np.float32)
+
+    def bw_print(l):
+        g = _tone(l, ink, paper, float(p.get("contrast", 1.35)))
+        return np.clip(g + (rng.standard_normal((H, W, 1)).astype(np.float32) * 0.035), 0, 1)
+    inside_col = str(p.get("inside", "color")) != "bw"
+    inside_img = colour_print(under_l) if inside_col else bw_print(under_l)
+    outside_img = bw_print(top_l) if inside_col else colour_print(top_l)
+    # ---- the tear (coordinates along / across the strip)
+    ang = eang + np.deg2rad(float(p.get("tilt", 0)))
+    ctr = c + np.array([-np.sin(ang), np.cos(ang)]) * float(p.get("offset", 0.0)) * ed
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    u = (xx - ctr[0]) * np.cos(ang) + (yy - ctr[1]) * np.sin(ang)
+    v = -(xx - ctr[0]) * np.sin(ang) + (yy - ctr[1]) * np.cos(ang)
+    n = int(np.hypot(W, H)) * 2 + 4
+    ui = np.clip((u + n / 2).astype(int), 0, n - 1)
+    h = float(p.get("height", 0.75)) * ed
+    rough = float(p.get("rough", 0.5))
+    rs = [(0.004 * s, 0.010 * s * rough), (0.02 * s, 0.018 * s * rough), (0.0012 * s, 0.003 * s * rough)]
+    bend = _noise1d(n, rng, [(0.12 * s, 0.05 * s * float(p.get("bend", 0.4)))])
+    width = _noise1d(n, rng, [(0.1 * s, 0.18 * h * float(p.get("bend", 0.4)))])
+    top = -h / 2 + bend + _noise1d(n, rng, rs) - width / 2
+    bot = h / 2 + bend + _noise1d(n, rng, rs) + width / 2
+    vrel = v
+    inside = (vrel > top[ui]) & (vrel < bot[ui])
+    nv = int(h * 3) + 8
+    vi = np.clip((vrel + nv / 2).astype(int), 0, nv - 1)
+    lreach, rreach = float(p.get("left", 3.0)) * ed, float(p.get("right", 3.0)) * ed
+    lend = -lreach + _noise1d(nv, rng, [(0.02 * s, 0.05 * ed), (0.004 * s, 0.02 * ed * rough)])
+    rend = rreach + _noise1d(nv, rng, [(0.02 * s, 0.05 * ed), (0.004 * s, 0.02 * ed * rough)])
+    inside &= (u > lend[vi] + float(p.get("end_slant", 0.3)) * vrel) & (u < rend[vi] - float(p.get("end_slant", 0.3)) * vrel)
+    ins = gaussian_filter(inside.astype(np.float32), 0.6)
+    # ---- white paper core along the torn edge (on the TOP print) + fibres
+    from scipy.ndimage import distance_transform_edt
+    dout = distance_transform_edt(~inside)
+    rimw = float(p.get("rim", 1.0)) * 0.006 * s
+    rimv = (1 + 0.8 * _noise1d(n, rng, [(0.006 * s, 1.0)])[ui]) * rimw
+    fib = gaussian_filter(rng.random((H, W)).astype(np.float32), (0.0008 * s, 0.002 * s))
+    rim = np.clip((rimv - dout) / max(1.0, 0.25 * rimw), 0, 1) * (dout > 0)
+    rim *= np.clip(0.55 + (fib - fib.mean()) / (fib.std() + 1e-6) * 0.6, 0, 1) ** 0.5
+    # ---- shadow the top print casts into the tear
+    din = distance_transform_edt(inside)
+    sh = np.exp(-din / (0.008 * s)) * 0.45
+    img = outside_img * (1 - ins[..., None]) + inside_img * (1 - sh[..., None]) * ins[..., None]
+    img = img * (1 - rim[..., None]) + hex_rgb(p.get("rim_color", "#f4f1ea"))[None, None] * rim[..., None]
+    return Layer(np.clip(img, 0, 1).astype(np.float32), np.ones((H, W), np.float32))
+
+
 GENERATORS = {
+    "torn_strip": gen_torn_strip,
     "wash": gen_wash,
     "drop_shadow": gen_drop_shadow,
     "subject_fill": gen_subject_fill,

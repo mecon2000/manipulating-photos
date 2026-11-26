@@ -310,7 +310,7 @@ def _person_mask(im):
     return cv2.GaussianBlur(person, (0, 0), max(1.0, W * 0.002))
 
 
-HAIR_KINDS = ("pen_outline", "shutter_drag", "hair_tone", "line_screen")
+HAIR_KINDS = ("pen_outline", "shutter_drag", "hair_tone", "line_screen", "torn_strip")
 
 
 def hair_mask(d, im, size):
@@ -390,7 +390,12 @@ def face_mesh(d, src_full):
     fp = d / "face_mesh.json"
     if not fp.exists():
         from face_align import mesh
-        m = mesh(np.asarray(src_full.convert("RGB")))
+        im = src_full.convert("RGB")
+        m = mesh(np.asarray(im))
+        if m is None and max(im.size) < 1200:          # small crop: the detector wants pixels
+            k = 1200 / max(im.size)
+            m = mesh(np.asarray(im.resize((int(im.width * k), int(im.height * k)), Image.LANCZOS)))
+            m = None if m is None else m / k
         fp.write_text(json.dumps([] if m is None else m.round(1).tolist()))
     return json.loads(fp.read_text())
 
@@ -754,10 +759,10 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     for L in [x for x in gen_set if x["z"] == "over"]:
         lay = run(L)
         if lay is not None:
-            fade = 1.0 if L["kind"] in ("dot_rows", "micro_text", "print") else \
+            fade = 1.0 if L["kind"] in ("dot_rows", "micro_text", "print", "torn_strip") else \
                 (1 - quiet * 0.5 + quiet * 0.5 * focus)
             # a pen drawing of her eyes doesn't cover them — it's exempt from the guard
-            lay.alpha = lay.alpha * (1 if L["kind"] in ("pen_outline", "subject_fill") else (1 - protect)) * fade
+            lay.alpha = lay.alpha * (1 if L["kind"] in ("pen_outline", "subject_fill", "torn_strip") else (1 - protect)) * fade
             emit(L, lay)
     if only:
         return None, stack

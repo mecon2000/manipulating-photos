@@ -664,7 +664,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     for L in [x for x in gen_set if x["z"] == "under"]:
         lay = run(L)
         if lay is not None:
-            if L["kind"] not in ("backdrop", "spike_burst"):     # a full background must not fade at the margins
+            if L["kind"] not in ("backdrop", "spike_burst", "drop_shadow"):     # a full background must not fade at the margins
                 lay.alpha = lay.alpha * (1 - quiet + quiet * focus)
             emit(L, lay)
 
@@ -687,7 +687,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
             fade = 1.0 if L["kind"] in ("dot_rows", "micro_text", "print") else \
                 (1 - quiet * 0.5 + quiet * 0.5 * focus)
             # a pen drawing of her eyes doesn't cover them — it's exempt from the guard
-            lay.alpha = lay.alpha * (1 if L["kind"] == "pen_outline" else (1 - protect)) * fade
+            lay.alpha = lay.alpha * (1 if L["kind"] in ("pen_outline", "subject_fill") else (1 - protect)) * fade
             emit(L, lay)
     if only:
         return None, stack

@@ -2117,7 +2117,40 @@ def gen_hair_tone(L, ctx):
     return Layer(rgb, a * float(p.get("opacity", 1.0)))
 
 
+def gen_drop_shadow(L, ctx):
+    """Her cast shadow on the wall behind her (z=under): the silhouette shifted, blurred and
+    filled flat. params: color, opacity, angle (deg, where the shadow falls; 135 = down-right),
+    distance (fraction of short edge), blur (fraction), spread (grow the silhouette, fraction)."""
+    p, s = L.get("params", {}), ctx.s
+    m = ctx.mask.astype(np.float32)
+    grow = float(p.get("spread", 0.0))
+    if grow > 0:
+        m = np.clip(gaussian_filter(m, grow * s) * 2.2, 0, 1)
+    ang = np.deg2rad(float(p.get("angle", 135)))
+    dist = float(p.get("distance", 0.03)) * s
+    dx, dy = dist * np.cos(ang - np.pi / 2), dist * np.sin(ang - np.pi / 2)
+    from scipy.ndimage import shift as _shift
+    m = _shift(m, (-dy if False else dy, dx), order=1, mode="constant")
+    m = gaussian_filter(m, float(p.get("blur", 0.012)) * s)
+    rgb = np.broadcast_to(hex_rgb(p.get("color", "#1a1530"))[None, None], (ctx.H, ctx.W, 3)).astype(np.float32)
+    return Layer(rgb.copy(), np.clip(m, 0, 1) * float(p.get("opacity", 0.55)), blend=p.get("blend", "multiply"))
+
+
+def gen_subject_fill(L, ctx):
+    """Her silhouette filled with one flat colour (z=over) — dial opacity to whiten / tint her.
+    params: color (default white), opacity, soft (edge feather, fraction of short edge)."""
+    p, s = L.get("params", {}), ctx.s
+    m = ctx.mask.astype(np.float32)
+    soft = float(p.get("soft", 0.0015))
+    if soft > 0:
+        m = gaussian_filter(m, soft * s)
+    rgb = np.broadcast_to(hex_rgb(p.get("color", "#ffffff"))[None, None], (ctx.H, ctx.W, 3)).astype(np.float32)
+    return Layer(rgb.copy(), np.clip(m, 0, 1) * float(p.get("opacity", 0.3)), blend=p.get("blend", "normal"))
+
+
 GENERATORS = {
+    "drop_shadow": gen_drop_shadow,
+    "subject_fill": gen_subject_fill,
     "hair_tone": gen_hair_tone,
     "depth_trail": gen_depth_trail,
     "studio_arcs": gen_studio_arcs,

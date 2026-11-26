@@ -759,18 +759,51 @@ function drawShape() {
   overlayLayer.batchDraw();
 }
 
+function iconHandle(glyph) {         // round white button with a symbol: clearer than a coloured dot
+  const g = new Konva.Group();
+  g.add(new Konva.Circle({ radius: 15, fill: "#fff", stroke: "#000", strokeWidth: 1.5,
+                           shadowColor: "#000", shadowBlur: 4, shadowOpacity: 0.6 }));
+  g.add(new Konva.Text({ text: glyph, fontSize: 20, fontStyle: "bold", fill: "#111", width: 30, height: 30,
+                         offsetX: 15, offsetY: 14, align: "center", verticalAlign: "middle", listening: false }));
+  return g;
+}
+
+// drag anywhere inside the strip = move it (like Photoshop's free transform)
+let bodyDrag = null;
+function wireShapeBody() {
+  shapeLine.on("mousedown touchstart", (e) => {
+    if (e.evt.touches && e.evt.touches.length > 1) return;
+    e.cancelBubble = true;
+    bodyDrag = toImageCoords(stage.getRelativePointerPosition());
+    container.style.cursor = "move";
+  });
+  stage.on("mousemove.shape touchmove.shape", () => {
+    if (!bodyDrag || !shapePts) return;
+    const p = toImageCoords(stage.getRelativePointerPosition());
+    const dx = p.x - bodyDrag.x, dy = p.y - bodyDrag.y;
+    shapePts.forEach((q) => { q.x += dx; q.y += dy; });
+    bodyDrag = p;
+    drawShape();
+  });
+  stage.on("mouseup.shape touchend.shape mouseleave.shape", () => {
+    if (bodyDrag) { bodyDrag = null; container.style.cursor = ""; }
+  });
+  shapeLine.on("mouseenter", () => { if (!bodyDrag) container.style.cursor = "move"; });
+  shapeLine.on("mouseleave", () => { if (!bodyDrag) container.style.cursor = ""; });
+}
+
 export function startShapeEdit(norm) {
   endShapeEdit();
   shapePts = norm.map(([x, y]) => ({ x: x * natW, y: y * natH }));
-  shapeLine = new Konva.Line({ points: [], closed: true, stroke: "#fff", dash: [6, 4], listening: false,
+  shapeLine = new Konva.Line({ points: [], closed: true, stroke: "#fff", dash: [6, 4], listening: true,
                                shadowColor: "#000", shadowBlur: 3, shadowOpacity: 0.9, fill: "rgba(255,255,255,0.08)" });
   overlayLayer.add(shapeLine);
+  wireShapeBody();
   const mk = (i) => {
     const kind = i < 6 ? ([1, 4].includes(i) ? "bend" : "corner") : (i === 6 ? "move" : "rotate");
     const n = kind === "corner" ? new Konva.Circle({ radius: 9, fill: "#fff", stroke: "#000", strokeWidth: 1.5 })
       : kind === "bend" ? new Konva.Rect({ width: 14, height: 14, offsetX: 7, offsetY: 7, rotation: 45, fill: "#ffd60a", stroke: "#000", strokeWidth: 1.5 })
-      : kind === "move" ? new Konva.Circle({ radius: 13, fill: "rgba(10,132,255,0.85)", stroke: "#fff", strokeWidth: 2 })
-      : new Konva.Circle({ radius: 10, fill: "rgba(52,199,89,0.9)", stroke: "#fff", strokeWidth: 2 });
+      : iconHandle(kind === "move" ? "✥" : "↻");
     n.draggable(true);
     let last = null, c0 = null, a0 = 0, d0 = 1, start = null;
     n.on("dragstart", () => {
@@ -814,6 +847,7 @@ export function getShape() {
 export function endShapeEdit() {
   shapeNodes.forEach((n) => n.destroy());
   if (shapeLine) shapeLine.destroy();
-  shapeNodes = []; shapeLine = null; shapePts = null;
+  shapeNodes = []; shapeLine = null; shapePts = null; bodyDrag = null;
+  if (stage) stage.off(".shape");
   if (overlayLayer) overlayLayer.batchDraw();
 }

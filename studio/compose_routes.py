@@ -191,6 +191,48 @@ def api_paint_mask(piece: str, body: dict = Body(...)):
                  f"painted where {layer} shows")
 
 
+@router.get("/api/compose/piece/{piece}/original")
+def api_original(piece: str, w: int = 1600):
+    """The piece's original (uncropped) photo, downsized, in the same pixel space smart-crop
+    crops in (no EXIF rotation), for the crop screen."""
+    from PIL import Image
+    P = compose.load_piece(piece)
+    src = Path(P["photo"])
+    out = compose.piece_dir(piece) / f".original_{int(w)}.jpg"
+    if not out.exists() or out.stat().st_mtime < src.stat().st_mtime:
+        im = Image.open(src)
+        im.draft("RGB", (w, w))
+        im = im.convert("RGB")
+        im.thumbnail((w, w))
+        im.save(out, quality=85)
+    return FileResponse(out)
+
+
+@router.get("/api/compose/piece/{piece}/crop-info")
+def api_crop_info(piece: str):
+    from PIL import Image
+    P = compose.load_piece(piece)
+    with Image.open(P["photo"]) as im:
+        W, H = im.size
+    c = (P.get("crop") or {}).get("custom")
+    try:
+        box = [int(float(v)) for v in str(c).split(",")]
+        assert len(box) == 4
+    except Exception:
+        box = None
+    return {"W": W, "H": H, "box": box}
+
+
+@router.post("/api/compose/piece/{piece}/recrop")
+def api_recrop(piece: str, body: dict = Body(...)):
+    """New crop rectangle (original-photo px 'x1,y1,x2,y2')."""
+    import re as _re
+    box = str(body.get("box", ""))
+    if not _re.fullmatch(r"\d+,\d+,\d+,\d+", box):
+        raise HTTPException(400, "box must be x1,y1,x2,y2")
+    return _call(compose_sync.recrop, piece, box)
+
+
 @router.post("/api/compose/piece/{piece}/zoom")
 def api_zoom(piece: str, body: dict = Body(...)):
     """Zoom the crop out (factor > 1) or in, re-cropping the original photo."""

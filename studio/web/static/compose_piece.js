@@ -871,9 +871,10 @@ function boot() {
   $("paint-feather").oninput = (e) => { canvas.setMaskFeather(Number(e.target.value)); localStorage.setItem("maskFeather", e.target.value); };
   $("shape-distort").onclick = () => setShapeMode("distort");
   $("shape-scale").onclick = () => setShapeMode("scale");
-  // re-crop from the original photo (new source + face data; layers keep their settings)
-  $("zoom-out").onclick = () => mutate("/zoom", { factor: 1.3 }, "zooming out…");
-  $("zoom-in").onclick = () => mutate("/zoom", { factor: 1 / 1.3 }, "zooming in…");
+  // crop screen: the whole original photo, draw / move / resize a rectangle, Apply re-renders
+  $("crop-open").onclick = openCrop;
+  $("crop-cancel").onclick = () => $("crop-modal").classList.add("hidden");
+  $("crop-apply").onclick = applyCrop;
   $("shape-cancel").onclick = endShape;
   $("blacks").onchange = (e) => mutate("/set", { kv: [`base.blacks=${e.target.value}`], note: `blacks ${e.target.value}` }, "darkening…");
   $("move-cancel").onclick = endMove;
@@ -962,3 +963,127 @@ function boot() {
 }
 
 boot();
+
+
+// ---- Crop screen ----
+// Box lives in ORIGINAL-photo pixels; nothing renders until "Apply crop".
+const CROP_RATIOS = [["free", 0], ["original", -1], null,
+  ["4:5", 4 / 5], ["2:3", 2 / 3], ["3:4", 3 / 4], ["9:16", 9 / 16], ["1:1", 1], null,
+  ["5:4", 5 / 4], ["3:2", 3 / 2], ["4:3", 4 / 3], ["16:9", 16 / 9]];
+const crop = { W: 0, H: 0, box: null, ratio: 0, ratioName: "free", wired: false };
+function cropScale() { const im = $("crop-img"); return im.clientWidth / crop.W; }
+function cropDraw() {
+  const im = $("crop-img"), r = $("crop-rect"), k = cropScale(), b = crop.box;
+  const ox = im.offsetLeft, oy = im.offsetTop;
+  Object.assign(r.style, { left: `${ox + b[0] * k}px`, top: `${oy + b[1] * k}px`,
+    width: `${(b[2] - b[0]) * k}px`, height: `${(b[3] - b[1]) * k}px` });
+  const w = Math.round(b[2] - b[0]), h = Math.round(b[3] - b[1]);
+  $("crop-info").textContent = `${w} × ${h} px · ${(w / h).toFixed(3)} · drag inside to move, handles to resize, drag outside to draw a new one`;
+}
+function cropRatio() { return crop.ratio === -1 ? (crop.cur ? crop.cur : crop.W / crop.H) : crop.ratio; }
+function fitRatio(b, R, anchor) {
+  // reshape b to ratio R keeping its area-ish and centre (or anchor corner), inside the photo
+  if (!R) return b;
+  let w = b[2] - b[0], h = b[3] - b[1];
+  const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+  const a = Math.sqrt(w * h); w = a * Math.sqrt(R); h = a / Math.sqrt(R);
+  const k = Math.min(1, crop.W / w, crop.H / h); w *= k; h *= k;
+  let x0 = Math.min(Math.max(0, cx - w / 2), crop.W - w), y0 = Math.min(Math.max(0, cy - h / 2), crop.H - h);
+  return [x0, y0, x0 + w, y0 + h];
+}
+function renderRatios() {
+  const row = $("crop-ratios"); row.innerHTML = "";
+  for (const it of CROP_RATIOS) {
+    if (!it) { row.appendChild(Object.assign(document.createElement("span"), { className: "sep" })); continue; }
+    const [n, R] = it, b = document.createElement("button");
+    b.textContent = n; b.className = n === crop.ratioName ? "active" : "";
+    b.title = R > 1 ? "landscape" : R > 0 && R < 1 ? "portrait" : n === "original" ? "the piece's current shape" : "any shape";
+    b.onclick = () => { crop.ratioName = n; crop.ratio = R; crop.box = fitRatio(crop.box, cropRatio()); renderRatios(); cropDraw(); };
+    row.appendChild(b);
+  }
+}
+async function openCrop() {
+  let info;
+  try { info = await (await fetch(`${P_API}/crop-info`)).json(); } catch (e) { toast(`crop: ${e.message}`); return; }
+  crop.W = info.W; crop.H = info.H;
+  crop.box = info.box ? info.box.slice() : [0, 0, info.W, info.H];
+  crop.cur = (crop.box[2] - crop.box[0]) / (crop.box[3] - crop.box[1]);
+  crop.ratioName = "free"; crop.ratio = 0;
+  $("crop-modal").classList.remove("hidden");
+  const im = $("crop-img");
+  im.onload = () => { renderRatios(); cropDraw(); };
+  im.src = `${P_API}/original?w=1600`;
+  if (im.complete && im.naturalWidth) { renderRatios(); cropDraw(); }
+  if (!crop.wired) { wireCrop(); crop.wired = true; }
+}
+function wireCrop() {
+  const stage = $("crop-stage"), rect = $("crop-rect"), im = $("crop-img");
+  window.addEventListener("resize", () => { if (!$("crop-modal").classList.contains("hidden")) cropDraw(); });
+  let drag = null;
+  const toImg = (e) => {
+    const r = im.getBoundingClientRect(), k = cropScale();
+    return [Math.min(crop.W, Math.max(0, (e.clientX - r.left) / k)), Math.min(crop.H, Math.max(0, (e.clientY - r.top) / k))];
+  };
+  stage.addEventListener("pointerdown", (e) => {
+    const h = e.target.dataset && e.target.dataset.h;
+    const p = toImg(e);
+    if (h) drag = { kind: "handle", h, b0: crop.box.slice(), p0: p };
+    else if (e.target === rect || rect.contains(e.target)) drag = { kind: "move", b0: crop.box.slice(), p0: p };
+    else { drag = { kind: "draw", p0: p }; crop.box = [p[0], p[1], p[0] + 1, p[1] + 1]; }
+    stage.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const p = toImg(e), R = cropRatio(), MIN = Math.min(crop.W, crop.H) * 0.04;
+    if (drag.kind === "move") {
+      const b = drag.b0, w = b[2] - b[0], h = b[3] - b[1];
+      const x0 = Math.min(Math.max(0, b[0] + p[0] - drag.p0[0]), crop.W - w);
+      const y0 = Math.min(Math.max(0, b[1] + p[1] - drag.p0[1]), crop.H - h);
+      crop.box = [x0, y0, x0 + w, y0 + h];
+    } else {
+      // the fixed point: opposite corner (draw / corner handles) or opposite edge (edge handles)
+      let b = drag.kind === "draw" ? [drag.p0[0], drag.p0[1], drag.p0[0], drag.p0[1]] : drag.b0.slice();
+      const h = drag.kind === "draw" ? "se" : drag.h;
+      if (drag.kind === "draw") { b = [drag.p0[0], drag.p0[1], p[0], p[1]]; }
+      else {
+        if (h.includes("w")) b[0] = p[0]; if (h.includes("e")) b[2] = p[0];
+        if (h.includes("n")) b[1] = p[1]; if (h.includes("s")) b[3] = p[1];
+      }
+      // normalise (dragging past the opposite side flips)
+      let [x0, y0, x1, y1] = [Math.min(b[0], b[2]), Math.min(b[1], b[3]), Math.max(b[0], b[2]), Math.max(b[1], b[3])];
+      if (R) {
+        const ax = drag.kind === "draw" ? drag.p0[0] : (h.includes("w") ? drag.b0[2] : h.includes("e") ? drag.b0[0] : (drag.b0[0] + drag.b0[2]) / 2);
+        const ay = drag.kind === "draw" ? drag.p0[1] : (h.includes("n") ? drag.b0[3] : h.includes("s") ? drag.b0[1] : (drag.b0[1] + drag.b0[3]) / 2);
+        let w = x1 - x0, hh = y1 - y0;
+        if (h === "n" || h === "s") w = hh * R; else if (h === "e" || h === "w") hh = w / R;
+        else if (w / hh > R) hh = w / R; else w = hh * R;
+        // keep inside the photo
+        const left = p[0] < ax || h === "w", up = p[1] < ay || h === "n";
+        const horizCentred = h === "n" || h === "s", vertCentred = h === "e" || h === "w";
+        const maxW = horizCentred ? 2 * Math.min(ax, crop.W - ax) : left ? ax : crop.W - ax;
+        const maxH = vertCentred ? 2 * Math.min(ay, crop.H - ay) : up ? ay : crop.H - ay;
+        const k = Math.min(1, maxW / w, maxH / hh); w *= k; hh *= k;
+        x0 = horizCentred ? ax - w / 2 : left ? ax - w : ax; x1 = x0 + w;
+        y0 = vertCentred ? ay - hh / 2 : up ? ay - hh : ay; y1 = y0 + hh;
+      }
+      crop.box = [Math.max(0, x0), Math.max(0, y0), Math.min(crop.W, x1), Math.min(crop.H, y1)];
+      if (drag.kind !== "draw" && (crop.box[2] - crop.box[0] < MIN || crop.box[3] - crop.box[1] < MIN)) crop.box = drag.last || drag.b0;
+      drag.last = crop.box.slice();
+    }
+    cropDraw();
+  });
+  const up = () => {
+    if (drag && drag.kind === "draw") {
+      const b = crop.box;
+      if (b[2] - b[0] < 20 || b[3] - b[1] < 20) crop.box = drag.prev || [0, 0, crop.W, crop.H];
+    }
+    drag = null; cropDraw();
+  };
+  stage.addEventListener("pointerup", up); stage.addEventListener("pointercancel", up);
+}
+function applyCrop() {
+  const b = crop.box.map(Math.round);
+  $("crop-modal").classList.add("hidden");
+  mutate("/recrop", { box: b.join(",") }, "re-cropping…");
+}

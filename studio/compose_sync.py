@@ -185,3 +185,12 @@ def zoom(piece: str, factor: float) -> dict:
     compose.run_cli(piece, ["recrop", str(compose.PIECES / piece), "--zoom", str(f),
                             "--note", f"zoom {'out' if f > 1 else 'in'} x{f:g}"], timeout=900)
     return compose.summary(piece)
+
+
+def recrop(piece: str, box: str) -> dict:
+    """Re-crop the piece from its original photo to `box` (x1,y1,x2,y2 px). Layers keep
+    their settings; a hand-placed tear follows the face."""
+    compose.piece_dir(piece)
+    compose.run_cli(piece, ["recrop", str(compose.PIECES / piece), "--custom", box,
+                            "--note", f"crop {box}"], timeout=900)
+    return compose.summary(piece)

@@ -86,8 +86,7 @@
     <div id="palette-row" class="palette-row hidden"></div>
     <div id="frame-row" class="palette-row">
       <span class="pal-label">Frame</span>
-      <button id="zoom-out" class="btn btn-small" title="re-crop wider from the original photo">⊖ zoom out</button>
-      <button id="zoom-in" class="btn btn-small" title="re-crop tighter">⊕ zoom in</button>
+      <button id="crop-open" class="btn btn-small" title="re-crop from the whole original photo">✂ crop</button>
       <label class="paint-tint" title="deeper blacks on the model (highlights stay)">blacks
         <input id="blacks" type="range" min="0" max="1" step="0.05" value="0"></label>
     </div>
@@ -142,5 +141,22 @@
 <script>window.COMPOSE = { base: "{{ base }}", piece: {{ piece|tojson }} };</script>
 <script src="{{ base }}/static/vendor/konva.min.js"></script>
 <script type="module" src="{{ base }}/static/compose_piece.js"></script>
+<div id="crop-modal" class="crop-modal hidden">
+  <div class="crop-top">
+    <span class="crop-ratios" id="crop-ratios"></span>
+    <span class="crop-btns">
+      <button id="crop-cancel" class="btn btn-small">Cancel</button>
+      <button id="crop-apply" class="btn btn-small btn-primary">Apply crop</button>
+    </span>
+  </div>
+  <div class="crop-stage" id="crop-stage">
+    <img id="crop-img" alt="">
+    <div id="crop-rect" class="crop-rect">
+      <i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i>
+      <i data-h="n"></i><i data-h="s"></i><i data-h="w"></i><i data-h="e"></i>
+    </div>
+  </div>
+  <div class="crop-info" id="crop-info"></div>
+</div>
 </body>
 </html>

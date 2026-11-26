@@ -984,7 +984,7 @@ def zoom_box(photo, custom, factor):
     """The crop scaled about its centre by `factor` (>1 = zoom out), same aspect, kept inside
     the photo (shrunk to fit if it would not). No custom crop = start from the full frame."""
     with Image.open(photo) as im:
-        W, H = ImageOps.exif_transpose(im).size
+        W, H = im.size                   # smart-crop crops the un-rotated pixels
     b = _box(custom) or (0, 0, W, H)
     cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
     w, h = (b[2] - b[0]) * factor, (b[3] - b[1]) * factor
@@ -1001,11 +1001,12 @@ def cmd_recrop(a):
     if a.boost:
         P["base"]["mask_boost"] = True
     old_box = _box(P.get("crop", {}).get("custom"))
+    if old_box is None and not P.get("crop", {}).get("n"):    # uncropped: the full photo was the frame
+        with Image.open(P["photo"]) as im:
+            old_box = (0, 0, *im.size)
     if getattr(a, "zoom", None):              # zoom out (>1) / in (<1) around the current crop
         a.custom, a.crop = zoom_box(P["photo"], P.get("crop", {}).get("custom"), float(a.zoom)), None
-        if old_box is None:                    # no custom crop before: the full frame was the frame
-            with Image.open(P["photo"]) as im:
-                old_box = (0, 0, *ImageOps.exif_transpose(im).size)
+
     src = smart_crop(Path(P["photo"]), d, a.crop, a.custom)
     ImageOps.exif_transpose(Image.open(src)).convert("RGB").save(d / "source.jpg", quality=95)
     for f in ("mask.png", "mask_affect.png", "face.json", "face_mesh.json", "hair.png", "hands.png"):

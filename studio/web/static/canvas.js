@@ -797,6 +797,19 @@ function wireShapeBody() {
 export function startShapeEdit(norm) {
   endShapeEdit();
   shapePts = norm.map(([x, y]) => ({ x: x * natW, y: y * natH }));
+  // the automatic strip often runs past the frame: slide off-picture corners back along their
+  // edge (toward that edge's middle handle) until they sit just inside, so every corner is grabbable
+  const inside = (p) => p.x >= natW * 0.004 && p.x <= natW * 0.996 && p.y >= natH * 0.004 && p.y <= natH * 0.996;
+  [[0, 1], [2, 1], [3, 4], [5, 4]].forEach(([ci, mi]) => {
+    const c = shapePts[ci], m = shapePts[mi];
+    if (inside(c) || !inside(m)) return;
+    let lo = 0, hi = 1;                                 // t: 0 = corner, 1 = middle handle
+    for (let k = 0; k < 30; k++) {
+      const t = (lo + hi) / 2, p = { x: c.x + (m.x - c.x) * t, y: c.y + (m.y - c.y) * t };
+      if (inside(p)) hi = t; else lo = t;
+    }
+    shapePts[ci] = { x: c.x + (m.x - c.x) * hi, y: c.y + (m.y - c.y) * hi };
+  });
   shapeLine = new Konva.Line({ points: [], closed: true, stroke: "#fff", dash: [6, 4], listening: true,
                                shadowColor: "#000", shadowBlur: 3, shadowOpacity: 0.9, fill: "rgba(255,255,255,0.08)" });
   overlayLayer.add(shapeLine);

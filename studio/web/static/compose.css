@@ -213,3 +213,7 @@
 .seed-line { display: flex; align-items: center; gap: 8px; padding: 2px 0 8px 34px; flex-wrap: wrap; }
 .seed-line-label { font-size: 11px; color: var(--fg-dim); }
 .layer-row > .seedbtn, .layer-row > .rmbtn { flex: none; }
+
+.paint-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.paint-label { font-size: 12px; color: var(--accent); margin-right: 4px; }
+.paint-bar input[type=range] { width: 90px; }

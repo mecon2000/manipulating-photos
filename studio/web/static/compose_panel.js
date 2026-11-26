@@ -78,8 +78,10 @@ const SLIDERS = {
   depth_trail: [["opacity", "visibility", 0, 1, 0.02, 1], ["depth", "how far behind", 0, 0.9, 0.01, 0.5],
                 ["defocus", "defocus", 0, 1, 0.02, 0.6], ["haze", "fade into backdrop", 0, 1, 0.02, 0.6],
                 ["darks", "darks dominate", 0, 1, 0.02, 0.85], ["steps", "smoothness", 8, 64, 1, 40]],
-  shutter_drag: [["strength", "strength", 0, 1, 0.02, 0.8], ["hair", "hair", 0, 1, 0.02, 1],
-                 ["body", "body", 0, 1, 0.02, 1], ["edges", "edges", 0, 1, 0.02, 0],
+  shutter_drag: [["strength", "strength", 0, 1, 0.02, 0.8], ["hair", "hair", 0, 1, 0.02, 0],
+                 ["body", "body", 0, 1, 0.02, 0], ["edges", "edges", 0, 1, 0.02, 0],
+                 ["hands", "hands", 0, 1, 0.02, 0],
+                 ["keep_side", "sharp zone ← mid →", -1, 1, 0.05, 0], ["keep_width", "sharp zone width", 0, 1.2, 0.02, 0],
                  ["face_keep", "face sharp", 0, 1, 0.02, 0.8], ["length", "length", 0, 0.4, 0.01, 0.12],
                  ["angle", "rotation", 0, 40, 0.5, 8], ["spread", "spread", 0, 2, 0.05, 0.6]],
   pen_outline: [["opacity", "visibility", 0, 1, 0.02, 0.9], ["weight", "line weight", 0.5, 3, 0.1, 1],
@@ -203,6 +205,10 @@ function layerRows(wrap, L, ctx, list) {
     };
     row.appendChild(tune);
   }
+  const paint = el("button", "seedbtn" + ((L.params || {}).paint_mask ? " active" : ""), "🖌");
+  paint.title = (L.params || {}).paint_mask ? "painted mask (tap to repaint)" : "paint where this layer shows";
+  paint.onclick = () => ctx.onPaint && ctx.onPaint(L);
+  row.appendChild(paint);
   row.appendChild(roll);
   row.appendChild(rm);
   if (chipLine) wrap.appendChild(chipLine);

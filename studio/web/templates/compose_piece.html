@@ -29,6 +29,14 @@
         <button class="mode-btn active" data-mode="pan">Pan</button>
         <button class="mode-btn" data-mode="markers">Pin a note</button>
       </div>
+      <div id="paint-bar" class="paint-bar hidden">
+        <span id="paint-label" class="paint-label"></span>
+        <input id="paint-size" type="range" min="0.5" max="12" step="0.5" value="4" title="brush size">
+        <button id="paint-clear" class="btn btn-small" title="wipe what you painted now">Clear</button>
+        <button id="paint-remove" class="btn btn-small" title="remove this layer's mask (show it everywhere again)">No mask</button>
+        <button id="paint-cancel" class="btn btn-small">Cancel</button>
+        <button id="paint-apply" class="btn btn-small btn-accent">Apply</button>
+      </div>
       <div class="sp-bar">
         <select id="sp-select" class="sp-select" title="Savepoints — pick one to compare"></select>
         <button id="vs-start-btn" class="btn btn-small" title="Compare with the start">vs start</button>

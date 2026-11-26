@@ -273,6 +273,18 @@ def hair_mask(d, im, size):
     return np.asarray(Image.open(hp).convert("L").resize(size), np.float32) / 255
 
 
+def hands_mask(d, im, size):
+    """MediaPipe hand landmarker → soft hands mask, cached per piece as hands.png."""
+    hp = d / "hands.png"
+    if not hp.exists():
+        from masking import _import_body_segment
+        small = im.convert("RGB").copy()
+        small.thumbnail((1600, 1600))
+        m = _import_body_segment().detect_hands_mask(np.ascontiguousarray(np.asarray(small)))
+        Image.fromarray((m * 255).astype(np.uint8)).save(hp)
+    return np.asarray(Image.open(hp).convert("L").resize(size), np.float32) / 255
+
+
 def subject_mask(d, im, boost=False):
     """BiRefNet subject mask, cached. boost (base.mask_boost): union with BiRefNet on a
     brightened copy and a MediaPipe person mask — recovers hair/skin lost in a dark room."""
@@ -492,6 +504,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     if sc >= 0.999 and any(L.get("kind") in HAIR_KINDS and L.get("enabled", True)
                            for L in P["layers"]):
         ctx_args["hair"] = hair_mask(d, src, (W, H))
+        if any(L.get("kind") == "shutter_drag" and "hands" in (L.get("params") or {}) for L in P["layers"]):
+            ctx_args["hands"] = hands_mask(d, src, (W, H))
         fm = face_mesh(d, Image.open(d / "source.jpg"))
         if fm:
             k = W / src_full_size[0]
@@ -560,7 +574,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
                 pr[k] = mid
         return {**L, "params": pr}
 
-    def run(L):
+    def _run_raw(L):
         L = _numify(_res(L))
         g = wl.GENERATORS.get(L["kind"])
         if g is None:
@@ -613,6 +627,17 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
 
     # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
     ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
+    def run(L):
+        """Generate a layer, then clip it to a hand-painted mask if it has one
+        (params.paint_mask = masks/<id>.png, painted in the piece screen)."""
+        lay = _run_raw(L)
+        pm = (L.get("params") or {}).get("paint_mask")
+        if lay is not None and pm and (d / pm).exists():
+            from scipy.ndimage import gaussian_filter as _gf
+            m = np.asarray(Image.open(d / pm).convert("L").resize((W, H), Image.BILINEAR), np.float32) / 255
+            lay.alpha = lay.alpha * _gf(m, 0.006 * s)            # soft edge, like a feathered brush
+        return lay
+
     for L in [x for x in gen_set if x["z"] == "under"]:
         lay = run(L)
         if lay is not None:

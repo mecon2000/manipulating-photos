@@ -169,6 +169,28 @@ def api_quick_set(piece: str, body: dict = Body(...)):
     return _call(compose_sync.quick_set, piece, body.get("kv") or [], body.get("note") or "")
 
 
+@router.post("/api/compose/piece/{piece}/paint-mask")
+def api_paint_mask(piece: str, body: dict = Body(...)):
+    """Save a hand-painted mask for one layer (white = show the layer) and point the
+    layer at it; empty png = remove the mask."""
+    import base64, re as _re, time as _t
+    d = _dir(piece)
+    layer = str(body.get("layer", ""))
+    if not _re.match(r"^[\w\-]+$", layer):
+        raise HTTPException(400, "bad layer id")
+    png = str(body.get("png") or "")
+    if not png:
+        return _call(compose_sync.quick_set, piece, [f"{layer}.paint_mask=", f"{layer}.paint_mask_v="],
+                     f"paint mask removed: {layer}")
+    if not png.startswith("data:image/png;base64,"):
+        raise HTTPException(400, "png must be a data URL")
+    (d / "masks").mkdir(exist_ok=True)
+    (d / "masks" / f"{layer}.png").write_bytes(base64.b64decode(png.split(",", 1)[1]))
+    return _call(compose_sync.quick_set, piece,
+                 [f"{layer}.paint_mask=masks/{layer}.png", f"{layer}.paint_mask_v={int(_t.time())}"],
+                 f"painted where {layer} shows")
+
+
 @router.post("/api/compose/piece/{piece}/order")
 def api_order(piece: str, body: dict = Body(...)):
     return _call(compose_sync.order, piece, body.get("ids") or [])

@@ -56,6 +56,7 @@ class Ctx:
     photo: np.ndarray | None = None   # toned photo HxWx3 (base.look=photo): ghosts/smears are made of it
     hair: np.ndarray | None = None    # MediaPipe hair mask HxW 0-1 (only built when a layer needs it)
     mesh: np.ndarray | None = None    # 468-pt face mesh (N,2) canvas px (pen sketches)
+    hands: np.ndarray | None = None   # MediaPipe hands mask HxW 0-1 (selective drags)
 
     @property
     def s(self):
@@ -1517,10 +1518,10 @@ def gen_shutter_drag(L, ctx):
     'dragged shutter + flash' look. params: mode (linear|rotate|zoom), direction (deg,
     linear), length (fraction of short edge), angle (deg, rotate), strength (0-1),
     face_keep (0-1: how sharp the face stays), spread (0-1: how far the smear leaves her)."""
-    p, s = L.get("params", {}), ctx.s
+    p, s, rng = L.get("params", {}), ctx.s, ctx.rng
     src = ctx.photo if ctx.photo is not None else np.repeat(ctx.lum[..., None], 3, 2)
     mode = p.get("mode", "linear")
-    n = 28                          # enough steps that the smear never shows copies
+    n = 40                          # enough steps (jittered below) that the smear never shows copies
     m3 = ctx.mask[..., None].astype(np.float32)
     src = np.concatenate([src * m3, m3], 2)          # premultiplied: smear her, not her old BG
     acc = np.zeros_like(src)
@@ -1530,7 +1531,7 @@ def gen_shutter_drag(L, ctx):
         cx, cy = (hx, hy + 0.25 * (ctx.sbox[3] - ctx.sbox[1]))
         ang = float(p.get("angle", 8))
         for k in range(n):
-            M = cv2.getRotationMatrix2D((cx, cy), ang * (k / (n - 1) - 0.5), 1.0)
+            M = cv2.getRotationMatrix2D((cx, cy), ang * ((k + rng.uniform(-.5, .5)) / (n - 1) - 0.5), 1.0)
             acc += cv2.warpAffine(src, M, (W, H), borderMode=cv2.BORDER_REFLECT)
     elif mode == "zoom":
         hx, hy = ctx.head
@@ -1543,21 +1544,34 @@ def gen_shutter_drag(L, ctx):
         a = math.radians(float(re.sub(r"[^\d.-]", "", str(p.get("direction", "0"))) or 0))
         ln = float(p.get("length", 0.12)) * s
         for k in range(n):
-            t = (k / (n - 1) - 0.5) * ln
+            t = ((k + rng.uniform(-.5, .5)) / (n - 1) - 0.5) * ln
             M = np.float32([[1, 0, math.cos(a) * t], [0, 1, -math.sin(a) * t]])
             acc += cv2.warpAffine(src, M, (W, H), borderMode=cv2.BORDER_REFLECT)
     acc /= n
     a_sm = acc[..., 3]
     blur = acc[..., :3] / np.maximum(a_sm, 1e-3)[..., None]
     alpha = np.clip(a_sm * (1 + float(p.get("spread", 0.6))), 0, 1) * float(p.get("strength", 0.8))
-    # selective: where the drag lands — hair / body / outer edges, each 0-1 (default: everywhere)
-    if any(k in p for k in ("hair", "body", "edges")):
+    # selective: where the drag lands — hair / body / outer edges / hands, each 0-1. Name
+    # any of them and the rest default to 0 (so hands=1 alone drags only her hands).
+    # Without any, the whole of her is dragged.
+    if any(k in p for k in ("hair", "body", "edges", "hands")):
         hair = ctx.hair if ctx.hair is not None else np.zeros_like(ctx.mask)
         hair = gaussian_filter(hair, 0.01 * s)
+        hands = gaussian_filter(ctx.hands, 0.01 * s) if ctx.hands is not None else np.zeros_like(ctx.mask)
         edge = np.clip(1 - distance_transform_edt(ctx.mask > 0.5) / (0.06 * s), 0, 1)
-        sel = np.maximum.reduce([float(p.get("hair", 1)) * hair,
-                                 float(p.get("body", 1)) * ctx.mask * (1 - hair),
-                                 float(p.get("edges", 0)) * edge])
+        sel = np.maximum.reduce([float(p.get("hair", 0)) * hair,
+                                 float(p.get("body", 0)) * ctx.mask * (1 - hair),
+                                 float(p.get("edges", 0)) * edge,
+                                 float(p.get("hands", 0)) * np.clip(hands * 1.5, 0, 1)])
+        # sharp zone: a vertical band across her that stays crisp (keep_side -1 left …
+        # 0 middle … +1 right of her bbox; keep_width 0 = none, 1 = her full width)
+        kw = float(p.get("keep_width", 0))
+        if kw > 0:
+            x0, y0, x1, y1 = ctx.sbox
+            u = (np.arange(ctx.W, dtype=np.float32) - (x0 + x1) / 2) / max(1, (x1 - x0) / 2)
+            d = np.abs(u - float(p.get("keep_side", 0))) / max(kw, 1e-3)
+            band = np.clip(1.5 - d, 0, 1) ** 1.5                      # soft-edged
+            sel = sel * (1 - band[None, :])
         out_reach = gaussian_filter(sel, 0.03 * s) * (1 - ctx.mask)     # trails leave her too
         alpha *= np.clip(np.maximum(sel, out_reach * 1.5), 0, 1)
     alpha *= 1 - float(p.get("face_keep", 0.8)) * _face_soft(ctx)
@@ -2021,14 +2035,14 @@ def gen_depth_trail(L, ctx):
     P2 = pt(p.get("end", "0.35,-0.12"), (0.35, -0.12))
     P1 = pt(p.get("bend", "0.25,0.1"), (0.25, 0.1))
     depth = float(p.get("depth", 0.6))
-    n = int(p.get("steps", 36))
+    n = max(int(p.get("steps", 36)), 56)
     defocus = float(p.get("defocus", 0.6))
     haze = float(p.get("haze", 0.6))
     bd = hex_rgb(p.get("backdrop", "#ECEBE8"))
     out = np.zeros((H, W, 3), np.float32)
     al = np.zeros((H, W), np.float32)
     for k in range(n, 0, -1):                                # far -> near
-        t = k / n
+        t = (k - rng.uniform(0, 1)) / n                      # jittered: no stair-stepped copies
         off = 2 * (1 - t) * t * P1 + t * t * P2             # quadratic bezier from her (t=0)
         sc = 1 / (1 + (1 / max(1e-3, 1 - min(depth, 0.95)) - 1) * t)
         M = np.float32([[sc, 0, (1 - sc) * cx + off[0]], [0, sc, (1 - sc) * cy + off[1]]])

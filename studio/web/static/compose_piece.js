@@ -282,7 +282,39 @@ function onCleanClick() {
   if (kv.length) persist("/quick-set", { kv, note: cleanSaved ? "only model + paper" : "back to previous layers" });
 }
 
+// ---- paint a layer's mask on the canvas ----
+let painting = null;            // layer id being painted
+function startPaint(L) {
+  painting = L.id;
+  canvas.clearBrush();
+  canvas.setBrushSizePct(Number($("paint-size").value));
+  $("paint-label").textContent = `Paint where “${L.id.replace(/_/g, " ")}” shows`;
+  $("paint-bar").classList.remove("hidden");
+  $("mode-toggle").classList.add("hidden");
+  canvas.setMode("brush");
+  toast("Paint over the photo, then Apply. Two fingers / wheel still zoom.", 3000);
+}
+function endPaint() {
+  painting = null;
+  canvas.clearBrush();
+  $("paint-bar").classList.add("hidden");
+  $("mode-toggle").classList.remove("hidden");
+  setMode("pan");
+}
+async function applyPaint(remove = false) {
+  const id = painting;
+  if (!id) return;
+  const png = remove ? "" : canvas.getBrushMaskDataURL();
+  endPaint();
+  try {
+    const r = await post("/paint-mask", { layer: id, png });
+    if (r && "pending" in r) serverPending = r.pending;
+    pollSoon(500);
+  } catch (e) { toast(`Mask failed: ${e.message}`, 6000); }
+}
+
 const panelCtx = () => ({
+  onPaint(L) { startPaint(L); },
   layers: man ? man.layers : [], overrides, rolling, openNotes,
   onRemove(L) {
     L.removed = true;
@@ -662,6 +694,11 @@ function wireSplit() {
 
 function boot() {
   canvas.init($("stage-container"));
+  $("paint-size").oninput = (e) => canvas.setBrushSizePct(Number(e.target.value));
+  $("paint-clear").onclick = () => canvas.clearBrush();
+  $("paint-cancel").onclick = endPaint;
+  $("paint-apply").onclick = () => applyPaint(false);
+  $("paint-remove").onclick = () => applyPaint(true);
   wireSplit();
   canvas.on("markerAdded", onMarkerAdded);
   canvas.on("markersChanged", () => setTimeout(() => { if (!pendingPin && state && !compare) renderPins(); }, 0));

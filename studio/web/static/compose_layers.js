@@ -27,6 +27,9 @@ export function loadImg(url) {
 export const isLoaded = (url) => loadedUrls.has(url);
 const loadedUrls = new Set();
 
+const tmp = document.createElement("canvas");
+const tctx = tmp.getContext("2d");
+
 export async function composite(W, H, layers, compare, onProgress) {
   if (compare && compare.mode === "hold" && compare.showing && compare.img) {
     if (out.width !== W || out.height !== H) { out.width = W; out.height = H; }
@@ -60,8 +63,21 @@ export async function composite(W, H, layers, compare, onProgress) {
   layers.forEach((L, i) => {
     const im = imgs[i];
     if (!im) return;
+    let src = im;
+    if (L.liveMask) {               // mask being painted: clip the unmasked layer in the browser
+      if (tmp.width !== W || tmp.height !== H) { tmp.width = W; tmp.height = H; }
+      tctx.globalCompositeOperation = "source-over";
+      tctx.filter = "none";
+      tctx.clearRect(0, 0, W, H);
+      tctx.drawImage(im, 0, 0, W, H);
+      tctx.globalCompositeOperation = "destination-in";
+      tctx.filter = `blur(${Math.max(0.5, 0.006 * Math.min(W, H))}px)`;   // = the server's feather
+      tctx.drawImage(L.liveMask, 0, 0, W, H);
+      tctx.filter = "none";
+      src = tmp;
+    }
     ctx.globalCompositeOperation = BLEND[L.blend] || "source-over";
-    ctx.drawImage(im, x0, 0, W, H);
+    ctx.drawImage(src, x0, 0, W, H);
   });
   ctx.restore();
   ctx.globalCompositeOperation = "source-over";

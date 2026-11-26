@@ -41,6 +41,7 @@ export function init(el) {
 
   wireZoomPan();
   wireBrush();
+  wireMaskEdit();
   wireSelect();
   wireMarkers();
   wireSwipe();
@@ -145,6 +146,7 @@ function refit() {
   // stage scale/pos is used only for user pan/zoom on top of that.
   applyBaseTransform();
   rescaleMarkers();
+  if (maskNode) { maskNode.position({ x: fitX, y: fitY }); maskNode.scale({ x: fitScale, y: fitScale }); }
 }
 
 // Base transform bakes fit into layer positions; stage scale/pos handle user zoom/pan.
@@ -546,4 +548,136 @@ export function setMarkerLabel(n, label) {
   labelNode.text(label || "");
   labelNode.visible(!!label);
   markerLayer.batchDraw();
+}
+
+
+// ---- Mask edit (Compose: paint where a layer shows) ----
+// The mask lives in its own canvas (alpha = mask) at the picture's pixel size. It is shown
+// as a red overlay, edited with a round brush (paint / erase), and a circle the size of the
+// brush follows the pointer. "maskChanged" fires (throttled) so the page can preview live.
+let maskCanvas = null, maskTint = null, maskNode = null, cursorNode = null;
+let maskTool = "paint", maskShowTint = true, maskLast = null, maskTimer = null;
+
+function retint() {
+  if (!maskCanvas) return;
+  const t = maskTint.getContext("2d");
+  t.globalCompositeOperation = "source-over";
+  t.clearRect(0, 0, maskTint.width, maskTint.height);
+  if (maskShowTint) {
+    t.drawImage(maskCanvas, 0, 0);
+    t.globalCompositeOperation = "source-in";
+    t.fillStyle = "rgba(255, 59, 48, 0.42)";
+    t.fillRect(0, 0, maskTint.width, maskTint.height);
+  }
+  maskNode.getLayer() && maskNode.getLayer().batchDraw();
+}
+
+function maskChangedSoon() {
+  if (maskTimer) return;
+  maskTimer = setTimeout(() => { maskTimer = null; emit("maskChanged"); }, 90);
+}
+
+function maskDot(a, b) {
+  const c = maskCanvas.getContext("2d");
+  c.globalCompositeOperation = maskTool === "erase" ? "destination-out" : "source-over";
+  c.strokeStyle = c.fillStyle = "#fff";
+  c.lineCap = c.lineJoin = "round";
+  c.lineWidth = brushPxRadius() * 2;
+  c.beginPath();
+  c.moveTo(a.x, a.y);
+  c.lineTo(b.x, b.y);
+  c.stroke();
+}
+
+function moveCursor() {
+  if (!cursorNode) return;
+  const pos = stage.getRelativePointerPosition();
+  if (!pos) return;
+  cursorNode.position(pos);
+  cursorNode.radius(brushPxRadius() * fitScale);
+  cursorNode.strokeWidth(1.5 / stage.scaleX());
+  cursorNode.visible(true);
+  overlayLayer.batchDraw();
+}
+
+function wireMaskEdit() {
+  stage.on("mousedown touchstart", (e) => {
+    if (mode !== "mask" || !maskCanvas) return;
+    if (e.evt.touches && e.evt.touches.length > 1) return;     // two fingers = zoom, not paint
+    maskLast = toImageCoords(stage.getRelativePointerPosition());
+    maskDot(maskLast, maskLast);
+    retint(); maskChangedSoon(); moveCursor();
+  });
+  stage.on("mousemove touchmove", (e) => {
+    if (mode !== "mask" || !maskCanvas) return;
+    moveCursor();
+    if (!maskLast || (e.evt.touches && e.evt.touches.length > 1)) return;
+    const p = toImageCoords(stage.getRelativePointerPosition());
+    maskDot(maskLast, p);
+    maskLast = p;
+    retint(); maskChangedSoon();
+  });
+  stage.on("mouseup touchend mouseleave", () => {
+    if (mode !== "mask") return;
+    if (maskLast) { maskLast = null; emit("maskChanged"); }
+  });
+  stage.on("mouseleave", () => { if (cursorNode) { cursorNode.visible(false); overlayLayer.batchDraw(); } });
+}
+
+export function startMaskEdit(initial) {
+  maskCanvas = document.createElement("canvas");
+  maskCanvas.width = natW; maskCanvas.height = natH;
+  if (initial) {                       // grey PNG (white = show) -> alpha
+    const c = maskCanvas.getContext("2d");
+    c.drawImage(initial, 0, 0, natW, natH);
+    const d = c.getImageData(0, 0, natW, natH);
+    for (let i = 0; i < d.data.length; i += 4) {
+      const v = d.data[i];
+      d.data[i] = d.data[i + 1] = d.data[i + 2] = 255;
+      d.data[i + 3] = v;
+    }
+    c.putImageData(d, 0, 0);
+  }
+  maskTint = document.createElement("canvas");
+  maskTint.width = natW; maskTint.height = natH;
+  maskNode = new Konva.Image({ image: maskTint, x: fitX, y: fitY, scaleX: fitScale, scaleY: fitScale, listening: false });
+  overlayLayer.add(maskNode);
+  cursorNode = new Konva.Circle({ radius: 10, stroke: "#fff", strokeWidth: 1.5, dash: [4, 3],
+                                  shadowColor: "#000", shadowBlur: 2, shadowOpacity: 0.9,
+                                  listening: false, visible: false });
+  overlayLayer.add(cursorNode);
+  container.style.cursor = "none";
+  maskTool = "paint"; maskShowTint = true;
+  setMode("mask");
+  retint();
+}
+export function setMaskTool(t) { maskTool = t; }
+export function setMaskTint(on) { maskShowTint = on; retint(); }
+export function clearMask() {
+  if (!maskCanvas) return;
+  maskCanvas.getContext("2d").clearRect(0, 0, natW, natH);
+  retint(); emit("maskChanged");
+}
+export function fillMask() {
+  if (!maskCanvas) return;
+  const c = maskCanvas.getContext("2d");
+  c.globalCompositeOperation = "source-over"; c.fillStyle = "#fff"; c.fillRect(0, 0, natW, natH);
+  retint(); emit("maskChanged");
+}
+export const getMaskCanvas = () => maskCanvas;
+// Grey PNG for the server: white where the layer shows.
+export function maskPNG() {
+  const o = document.createElement("canvas");
+  o.width = natW; o.height = natH;
+  const c = o.getContext("2d");
+  c.fillStyle = "#000"; c.fillRect(0, 0, natW, natH);
+  c.drawImage(maskCanvas, 0, 0);
+  return o.toDataURL("image/png");
+}
+export function endMaskEdit() {
+  if (maskNode) maskNode.destroy();
+  if (cursorNode) cursorNode.destroy();
+  maskNode = cursorNode = maskCanvas = maskTint = null;
+  container.style.cursor = "";
+  overlayLayer.batchDraw();
 }

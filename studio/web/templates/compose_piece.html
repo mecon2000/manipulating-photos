@@ -30,10 +30,14 @@
         <button class="mode-btn" data-mode="markers">Pin a note</button>
       </div>
       <div id="paint-bar" class="paint-bar hidden">
-        <span id="paint-label" class="paint-label"></span>
-        <input id="paint-size" type="range" min="0.5" max="12" step="0.5" value="4" title="brush size">
-        <button id="paint-clear" class="btn btn-small" title="wipe what you painted now">Clear</button>
-        <button id="paint-remove" class="btn btn-small" title="remove this layer's mask (show it everywhere again)">No mask</button>
+        <span class="paint-label">Mask <b id="paint-label"></b></span>
+        <button id="paint-tool-paint" class="btn btn-small" title="paint: the layer shows here">Paint</button>
+        <button id="paint-tool-erase" class="btn btn-small" title="erase: the layer hides here">Erase</button>
+        <input id="paint-size" type="range" min="0.5" max="15" step="0.5" value="5" title="brush size">
+        <label class="paint-tint" title="show the mask in red"><input id="paint-tint" type="checkbox" checked> red</label>
+        <button id="paint-all" class="btn btn-small" title="show the layer everywhere, then erase">All</button>
+        <button id="paint-clear" class="btn btn-small" title="hide the layer everywhere, then paint">None</button>
+        <button id="paint-remove" class="btn btn-small" title="drop the mask (layer shows everywhere)">No mask</button>
         <button id="paint-cancel" class="btn btn-small">Cancel</button>
         <button id="paint-apply" class="btn btn-small btn-accent">Apply</button>
       </div>

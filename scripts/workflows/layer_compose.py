@@ -589,6 +589,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         use_cache = not full and not only
         if use_cache:
             L_ = {k: v for k, v in L.items() if k not in ("enabled", "note", "variants", "riff", "theme")}
+            L_["params"] = {k: v for k, v in (L_.get("params") or {}).items()
+                            if k not in ("paint_mask", "paint_mask_v")}   # repaint ≠ regenerate
             key = layer_key(L_)
             fp = cdir / f"{key}.npz"
             if fp.exists():
@@ -625,12 +627,18 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     def emit(L, lay):
         nonlocal out
         key = getattr(lay, "_key", None)
+        raw_a = getattr(lay, "_raw_alpha", None)
         lay = apply_boxes(L, lay, W, H, s)
+        raw = apply_boxes(L, wl.Layer(lay.rgb, raw_a, blend=lay.blend, clip=lay.clip), W, H, s) \
+            if raw_a is not None else None
+        pmv = (L.get("params") or {}).get("paint_mask_v")
+        if key and raw_a is not None and pmv:
+            key = f"{key}-m{pmv}"                     # new mask → the browser fetches the new PNG
         on = L.get("enabled", True) and not L.get("removed")
         if on and not only:
             out = composite(out, lay)
         stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay, "seed": L.get("seed"),
-                      "key": key})
+                      "key": key, "raw": raw})
 
     # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
     ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
@@ -638,11 +646,15 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         """Generate a layer, then clip it to a hand-painted mask if it has one
         (params.paint_mask = masks/<id>.png, painted in the piece screen)."""
         lay = _run_raw(L)
+        _run_raw._k = getattr(lay, "_key", None)
         pm = (L.get("params") or {}).get("paint_mask")
         if lay is not None and pm and (d / pm).exists():
             from scipy.ndimage import gaussian_filter as _gf
             m = np.asarray(Image.open(d / pm).convert("L").resize((W, H), Image.BILINEAR), np.float32) / 255
-            lay.alpha = lay.alpha * _gf(m, 0.006 * s)            # soft edge, like a feathered brush
+            raw = lay.alpha
+            lay = wl.Layer(lay.rgb, raw * _gf(m, 0.006 * s), blend=lay.blend, clip=lay.clip)
+            lay._key = getattr(_run_raw, "_k", None)
+            lay._raw_alpha = raw            # the unmasked layer: the browser previews repaints live
         return lay
 
     for L in [x for x in gen_set if x["z"] == "under"]:
@@ -758,6 +770,14 @@ def render(d, P, full=False, event="render", **meta):
                 save_rgba(tmp, e["layer"])
                 os.replace(tmp, ld / fn)                  # atomic: readers never see a gap
             written.add(fn)
+            rawrel = None
+            if e.get("raw") is not None:
+                (ld / "raw").mkdir(exist_ok=True)
+                rawrel = f"raw/{fn}"
+                if not (v and prev.get(fn) == v and (ld / rawrel).exists()):
+                    tmp = ld / f".raw_{fn}.{os.getpid()}.tmp.png"
+                    save_rgba(tmp, e["raw"])
+                    os.replace(tmp, ld / rawrel)
             L = byid.get(e["id"], {})
             entries.append({"id": e["id"], "file": fn, "kind": L.get("kind", e["id"]),
                             "z": e["z"], "enabled": bool(L.get("enabled", True)) if L else bool(e["enabled"]),
@@ -765,7 +785,7 @@ def render(d, P, full=False, event="render", **meta):
                             "riff": bool(L.get("riff")), "note": L.get("note", ""),
                             "seed": L.get("seed"), "variants": L.get("variants", []),
                             "params": (L or {}).get("params", {}), "v": e.get("key"),
-                            "ink": _ink(e["layer"].alpha)})
+                            "ink": _ink(e["layer"].alpha), "raw": rawrel})
     if full:
         from psd_layers import write_psd
         W, H = img.size

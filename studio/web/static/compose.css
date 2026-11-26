@@ -218,3 +218,5 @@
 .paint-label { font-size: 12px; color: var(--accent); margin-right: 4px; }
 .paint-bar input[type=range] { width: 90px; }
 .faint-badge { background: transparent; border: 1px dashed var(--fg-dim); color: var(--fg-dim); }
+.paint-bar .btn.active { border-color: var(--accent); color: var(--accent); }
+.paint-tint { font-size: 12px; display: inline-flex; align-items: center; gap: 3px; }

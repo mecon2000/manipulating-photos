@@ -122,7 +122,14 @@ async function redraw() {
   if (drawing) { redrawAgain = true; return; }
   drawing = true;
   try {
-    const layers = man.layers.map((L) => ({ ...L, url: layerSrc(L) }));
+    const live = painting ? { id: painting, mask: canvas.getMaskCanvas() } : liveHold;
+    const layers = man.layers.map((L) => {
+      if (live && L.id === live.id && live.mask) {
+        const raw = L.raw ? fileUrl(`layers/${L.raw}`, L.v || man.rev) : layerSrc(L);
+        return { ...L, enabled: true, removed: false, url: raw, liveMask: live.mask };
+      }
+      return { ...L, url: layerSrc(L) };
+    });
     // first paint: the finished render (one JPEG) while the ~20 layer PNGs download
     if (!firstPainted) {
       firstPainted = true;
@@ -189,7 +196,12 @@ const layerVersions = (m) => Object.fromEntries((m ? m.layers : []).map((L) => [
 function wasRendered(oldMan, newMan) {
   if (!oldMan || !newMan) return false;
   const a = layerVersions(oldMan);
-  return newMan.layers.some((L) => L.v && L.v !== a[L.id]);
+  const changed = newMan.layers.filter((L) => L.v && L.v !== a[L.id]).map((L) => L.id);
+  const loud = changed.filter((id) => !quietLayers.has(id));
+  changed.forEach((id) => {          // the saved mask arrived: stop holding the live preview
+    if (quietLayers.has(id)) { quietLayers.delete(id); if (liveHold && liveHold.id === id) liveHold = null; }
+  });
+  return loud.length > 0;
 }
 
 // ---- state ----
@@ -289,34 +301,66 @@ function onCleanClick() {
 }
 
 // ---- paint a layer's mask on the canvas ----
+// Painting is all in the browser: the mask shows red, the layer previews live through it
+// (unmasked layer PNG × the mask), and only Apply goes to the server — silently, since
+// the picture on screen is already the result.
 let painting = null;            // layer id being painted
-function startPaint(L) {
+const quietLayers = new Set();  // layers whose next server version must not beep
+async function startPaint(L) {
+  if (painting) endPaint();
+  const m = man && man.layers.find((x) => x.id === L.id);
+  let init = null;
+  const P = (m && m.params) || L.params || {};
+  if (P.paint_mask) {
+    try { init = await loadImgEl(fileUrl(P.paint_mask, P.paint_mask_v || 0)); } catch (e) { init = null; }
+  }
   painting = L.id;
-  canvas.clearBrush();
   canvas.setBrushSizePct(Number($("paint-size").value));
-  $("paint-label").textContent = `Paint where “${L.id.replace(/_/g, " ")}” shows`;
+  canvas.startMaskEdit(init);          // first time: empty — paint where the layer should show
+  $("paint-label").textContent = `“${L.id.replace(/_/g, " ")}”`;
   $("paint-bar").classList.remove("hidden");
   $("mode-toggle").classList.add("hidden");
-  canvas.setMode("brush");
-  toast("Paint over the photo, then Apply. Two fingers / wheel still zoom.", 3000);
+  setTool("paint");
+  if (!init) toast("Paint where this layer should show. Erase to take it back. Apply when done.", 3500);
+  redraw();
+}
+function setTool(t) {
+  canvas.setMaskTool(t);
+  $("paint-tool-paint").classList.toggle("active", t === "paint");
+  $("paint-tool-erase").classList.toggle("active", t === "erase");
 }
 function endPaint() {
   painting = null;
-  canvas.clearBrush();
+  canvas.endMaskEdit();
   $("paint-bar").classList.add("hidden");
   $("mode-toggle").classList.remove("hidden");
   setMode("pan");
+  redraw();
 }
 async function applyPaint(remove = false) {
   const id = painting;
   if (!id) return;
-  const png = remove ? "" : canvas.getBrushMaskDataURL();
-  endPaint();
+  const png = remove ? "" : canvas.maskPNG();
+  quietLayers.add(id);
+  // keep the live result on screen until the saved version arrives
+  liveHold = remove ? null : { id, mask: canvas.getMaskCanvas() };
+  painting = null;
+  canvas.endMaskEdit();
+  $("paint-bar").classList.add("hidden");
+  $("mode-toggle").classList.remove("hidden");
+  setMode("pan");
+  syncLabel = "saving…";
+  inflight++; updateDots();
   try {
     const r = await post("/paint-mask", { layer: id, png });
     if (r && "pending" in r) serverPending = r.pending;
-    pollSoon(500);
-  } catch (e) { toast(`Mask failed: ${e.message}`, 6000); }
+  } catch (e) { toast(`Mask failed: ${e.message}`, 6000); quietLayers.delete(id); liveHold = null; }
+  finally { inflight--; updateDots(); pollSoon(500); redraw(); }
+}
+let liveHold = null;            // {id, mask}: applied mask shown live until the server's PNG lands
+function loadImgEl(url) {
+  return new Promise((res, rej) => { const i = new Image(); i.crossOrigin = "anonymous";
+    i.onload = () => res(i); i.onerror = rej; i.src = url; });
 }
 
 const panelCtx = () => ({
@@ -701,10 +745,15 @@ function wireSplit() {
 function boot() {
   canvas.init($("stage-container"));
   $("paint-size").oninput = (e) => canvas.setBrushSizePct(Number(e.target.value));
-  $("paint-clear").onclick = () => canvas.clearBrush();
+  $("paint-tool-paint").onclick = () => setTool("paint");
+  $("paint-tool-erase").onclick = () => setTool("erase");
+  $("paint-clear").onclick = () => canvas.clearMask();
+  $("paint-all").onclick = () => canvas.fillMask();
+  $("paint-tint").onchange = (e) => canvas.setMaskTint(e.target.checked);
   $("paint-cancel").onclick = endPaint;
   $("paint-apply").onclick = () => applyPaint(false);
   $("paint-remove").onclick = () => applyPaint(true);
+  canvas.on("maskChanged", () => { if (painting) redraw(); });
   wireSplit();
   canvas.on("markerAdded", onMarkerAdded);
   canvas.on("markersChanged", () => setTimeout(() => { if (!pendingPin && state && !compare) renderPins(); }, 0));

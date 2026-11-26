@@ -57,6 +57,7 @@ class Ctx:
     hair: np.ndarray | None = None    # MediaPipe hair mask HxW 0-1 (only built when a layer needs it)
     mesh: np.ndarray | None = None    # 468-pt face mesh (N,2) canvas px (pen sketches)
     hands: np.ndarray | None = None   # MediaPipe hands mask HxW 0-1 (selective drags)
+    piece_dir: str | None = None      # the piece folder (layers that leave a helper file there)
 
     @property
     def s(self):
@@ -2247,6 +2248,7 @@ def gen_torn_strip(L, ctx):
     # ---- the two prints
     top_l = np.clip(ctx.lum.astype(np.float32), 0, 1)
     under_l = top_l
+    under_file = None
     if p.get("under"):
         try:
             from face_align import mesh as _mesh
@@ -2260,6 +2262,18 @@ def gen_torn_strip(L, ctx):
                 M = cv2.getRotationMatrix2D(tuple(map(float, (a2 + b2) / 2)), -np.rad2deg(rot), k)
                 M[:, 2] += c - (a2 + b2) / 2
                 g = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
+                if ctx.piece_dir:      # the eye-aligned photo, for the piece screen's "photo below" handles
+                    Image.fromarray(cv2.warpAffine(g, M, (W, H), flags=cv2.INTER_AREA,
+                                                   borderMode=cv2.BORDER_CONSTANT)).save(
+                        os.path.join(ctx.piece_dir, f"under_{L['id']}.jpg"), quality=85)
+                    under_file = f"under_{L['id']}.jpg"
+                # params.under_tf "dx,dy,rot,scale": the user's nudge on top of the eye alignment
+                # (dx/dy fractions of the canvas, rot deg clockwise, scale about the canvas centre)
+                tf = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(p.get("under_tf") or ""))]
+                if len(tf) == 4 and tf != [0, 0, 0, 1]:
+                    M2 = cv2.getRotationMatrix2D((W / 2, H / 2), -tf[2], tf[3])
+                    M2[:, 2] += (tf[0] * W, tf[1] * H)
+                    M = np.hstack([M2[:, :2] @ M[:, :2], (M2[:, :2] @ M[:, 2] + M2[:, 2])[:, None]])
                 g = cv2.warpAffine(g, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
                 g = g.astype(np.float32) / 255
                 # match its tones to the top print (same contrast, same exposure)
@@ -2372,7 +2386,7 @@ def gen_torn_strip(L, ctx):
     img = outside_img * (1 - ins[..., None]) + inside_img * (1 - sh[..., None]) * ins[..., None]
     img = img * (1 - rim[..., None]) + hex_rgb(p.get("rim_color", "#f4f1ea"))[None, None] * rim[..., None]
     lay = Layer(np.clip(img, 0, 1).astype(np.float32), np.ones((H, W), np.float32))
-    lay.geom = {"shape": geom}          # the strip's 6 handles, for the piece screen's transform tool
+    lay.geom = {"shape": geom, "under": under_file}   # handles for the piece screen's transform tool
     return lay
 
 

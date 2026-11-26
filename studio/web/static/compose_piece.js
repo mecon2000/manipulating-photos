@@ -369,11 +369,39 @@ function startShape(L) {
   const g = m && m.geom && m.geom.shape;
   if (!g) { toast("Render the piece once first — the tear's handles come from the last render.", 4000); return; }
   shaping = L.id;
+  shapeLayer = { L, g, m };
   canvas.startShapeEdit(g);
   setShapeMode("distort");
+  setShapeTab("strip");
+  $("shape-tab-under").classList.toggle("hidden", !(m.geom && m.geom.under));
   $("shape-label").textContent = `“${L.id.replace(/_/g, " ")}”`;
   $("shape-bar").classList.remove("hidden");
   $("mode-toggle").classList.add("hidden");
+}
+let shapeLayer = null, shapeTab = "strip", stripEdits = null, underEdits = null;
+async function setShapeTab(tab) {
+  if (!shapeLayer) return;
+  // remember what was changed on the tab we leave
+  if (shapeTab === "strip" && tab !== "strip") stripEdits = canvas.getShape();
+  if (shapeTab === "under" && tab !== "under") underEdits = canvas.getUnderTf();
+  shapeTab = tab;
+  $("shape-tab-strip").classList.toggle("active", tab === "strip");
+  $("shape-tab-under").classList.toggle("active", tab === "under");
+  $("strip-tools").classList.toggle("hidden", tab !== "strip");
+  $("under-op-wrap").classList.toggle("hidden", tab !== "under");
+  if (tab === "strip") {
+    canvas.endUnderEdit();
+    canvas.startShapeEdit(stripEdits || shapeLayer.g);
+  } else {
+    canvas.endShapeEdit();
+    const P = shapeLayer.m.params || {};
+    const tf = underEdits || ((String(P.under_tf || "").match(/-?\d+(\.\d+)?/g) || []).map(Number));
+    try {
+      const img = await loadImgEl(fileUrl(shapeLayer.m.geom.under, shapeLayer.m.v || Date.now()));
+      canvas.startUnderEdit(img, tf.length === 4 ? tf : null);
+      canvas.setUnderOpacity(Number($("under-op").value));
+    } catch (e) { toast("Couldn't load the photo below — render once and try again.", 4000); }
+  }
 }
 function setShapeMode(m) {
   canvas.setShapeMode(m);
@@ -383,6 +411,8 @@ function setShapeMode(m) {
 function endShape() {
   shaping = null;
   canvas.endShapeEdit();
+  canvas.endUnderEdit();
+  shapeLayer = null; shapeTab = "strip"; stripEdits = null; underEdits = null;
   $("shape-bar").classList.add("hidden");
   $("mode-toggle").classList.remove("hidden");
   setMode("pan");
@@ -390,10 +420,17 @@ function endShape() {
 function applyShape(reset = false) {
   const id = shaping;
   if (!id) return;
-  const pts = reset ? null : canvas.getShape();
+  if (shapeTab === "strip") stripEdits = canvas.getShape(); else underEdits = canvas.getUnderTf();
+  const kv = [];
+  if (reset) {
+    kv.push(shapeTab === "under" ? `${id}.under_tf=` : `${id}.shape=`);
+  } else {
+    if (stripEdits) kv.push(`${id}.shape=${stripEdits.map((p) => p.join(",")).join(";")}`);
+    if (underEdits) kv.push(`${id}.under_tf=${underEdits.join(",")}`);
+  }
   endShape();
-  const v = pts ? pts.map((p) => p.join(",")).join(";") : "";
-  persist("/quick-set", { kv: [`${id}.shape=${v}`], note: reset ? `tear ${id}: automatic placement` : `tear ${id}: reshaped` });
+  if (!kv.length) return;
+  persist("/quick-set", { kv, note: reset ? `tear ${id}: back to automatic` : `tear ${id}: reshaped` });
 }
 
 let liveHold = null;            // {id, mask}: applied mask shown live until the server's PNG lands
@@ -796,6 +833,9 @@ function boot() {
   $("shape-distort").onclick = () => setShapeMode("distort");
   $("shape-scale").onclick = () => setShapeMode("scale");
   $("shape-cancel").onclick = endShape;
+  $("shape-tab-strip").onclick = () => setShapeTab("strip");
+  $("shape-tab-under").onclick = () => setShapeTab("under");
+  $("under-op").oninput = (e) => canvas.setUnderOpacity(Number(e.target.value));
   $("shape-apply").onclick = () => applyShape(false);
   $("shape-reset").onclick = () => applyShape(true);
   $("paint-cancel").onclick = endPaint;

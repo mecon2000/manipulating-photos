@@ -31,9 +31,13 @@
       </div>
       <div id="shape-bar" class="paint-bar hidden">
         <span class="paint-label">Tear <b id="shape-label"></b></span>
-        <button id="shape-distort" class="btn btn-small active" title="corners move freely: skew / distort">Distort</button>
+        <button id="shape-tab-strip" class="btn btn-small active" title="move / bend the torn strip">Strip</button>
+        <button id="shape-tab-under" class="btn btn-small" title="move / rotate / scale the photo seen through the tear">Photo below</button>
+        <label id="under-op-wrap" class="paint-tint hidden" title="see-through while you line up the eyes">see-through
+          <input id="under-op" type="range" min="0.15" max="0.9" step="0.05" value="0.55"></label>
+        <span id="strip-tools"><button id="shape-distort" class="btn btn-small active" title="corners move freely: skew / distort">Distort</button>
         <button id="shape-scale" class="btn btn-small" title="corners scale the whole strip evenly">Scale</button>
-        <span class="paint-label" style="opacity:.7">● corners · ◆ bend · drag inside or ✥ to move · ↻ rotate</span>
+        <span class="paint-label" style="opacity:.7">● corners · ◆ bend · drag inside or ✥ to move · ↻ rotate</span></span>
         <button id="shape-reset" class="btn btn-small" title="back to the automatic placement on her eyes">Auto</button>
         <button id="shape-cancel" class="btn btn-small">Cancel</button>
         <button id="shape-apply" class="btn btn-small btn-accent">Apply</button>

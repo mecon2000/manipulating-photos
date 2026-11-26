@@ -761,6 +761,8 @@ function drawShape() {
 
 function iconHandle(glyph) {         // round white button with a symbol: clearer than a coloured dot
   const g = new Konva.Group();
+  // a generous invisible hit disc so the whole button (and a margin) grabs, glyph included
+  g.add(new Konva.Circle({ radius: 26, fill: "rgba(0,0,0,0.002)" }));
   g.add(new Konva.Circle({ radius: 15, fill: "#fff", stroke: "#000", strokeWidth: 1.5,
                            shadowColor: "#000", shadowBlur: 4, shadowOpacity: 0.6 }));
   g.add(new Konva.Text({ text: glyph, fontSize: 20, fontStyle: "bold", fill: "#111", width: 30, height: 30,
@@ -805,6 +807,7 @@ export function startShapeEdit(norm) {
       : kind === "bend" ? new Konva.Rect({ width: 14, height: 14, offsetX: 7, offsetY: 7, rotation: 45, fill: "#ffd60a", stroke: "#000", strokeWidth: 1.5 })
       : iconHandle(kind === "move" ? "✥" : "↻");
     n.draggable(true);
+    if (kind === "move" || kind === "rotate") n.moveToTop();
     let last = null, c0 = null, a0 = 0, d0 = 1, start = null;
     n.on("dragstart", () => {
       last = toImageCoords(n.position());
@@ -849,5 +852,44 @@ export function endShapeEdit() {
   if (shapeLine) shapeLine.destroy();
   shapeNodes = []; shapeLine = null; shapePts = null; bodyDrag = null;
   if (stage) stage.off(".shape");
+  if (overlayLayer) overlayLayer.batchDraw();
+}
+
+
+// ---- Photo-below edit (Compose: nudge the sibling photo under the tear) ----
+// The eye-aligned photo shows half-transparent over the picture; Konva's transformer moves,
+// rotates and scales it. tf = [dx, dy (fractions of the canvas), rot (deg, clockwise), scale].
+let underNode = null, underTr = null;
+export function startUnderEdit(img, tf) {
+  endUnderEdit();
+  const [dx, dy, rot, sc] = tf || [0, 0, 0, 1];
+  underNode = new Konva.Image({ image: img, width: natW, height: natH, offsetX: natW / 2, offsetY: natH / 2,
+                                opacity: 0.55, draggable: true });
+  const c = toStageCoords({ x: natW / 2 + dx * natW, y: natH / 2 + dy * natH });
+  underNode.position(c);
+  underNode.rotation(rot);
+  underNode.scale({ x: sc * fitScale, y: sc * fitScale });
+  overlayLayer.add(underNode);
+  underTr = new Konva.Transformer({ nodes: [underNode], keepRatio: true, rotateEnabled: true,
+                                    enabledAnchors: ["top-left", "top-right", "bottom-left", "bottom-right"],
+                                    rotateAnchorOffset: 30, anchorSize: 14, borderStroke: "#fff",
+                                    anchorStroke: "#000", anchorFill: "#fff" });
+  overlayLayer.add(underTr);
+  underNode.on("mouseenter", () => { container.style.cursor = "move"; });
+  underNode.on("mouseleave", () => { container.style.cursor = ""; });
+  setMode("under");
+  overlayLayer.batchDraw();
+}
+export function setUnderOpacity(o) { if (underNode) { underNode.opacity(o); overlayLayer.batchDraw(); } }
+export function getUnderTf() {
+  if (!underNode) return null;
+  const p = toImageCoords(underNode.position());
+  return [+((p.x - natW / 2) / natW).toFixed(4), +((p.y - natH / 2) / natH).toFixed(4),
+          +underNode.rotation().toFixed(2), +(underNode.scaleX() / fitScale).toFixed(4)];
+}
+export function endUnderEdit() {
+  if (underTr) underTr.destroy();
+  if (underNode) underNode.destroy();
+  underTr = underNode = null;
   if (overlayLayer) overlayLayer.batchDraw();
 }

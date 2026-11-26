@@ -392,10 +392,19 @@ def face_mesh(d, src_full):
         from face_align import mesh
         im = src_full.convert("RGB")
         m = mesh(np.asarray(im))
-        if m is None and max(im.size) < 1200:          # small crop: the detector wants pixels
-            k = 1200 / max(im.size)
+        for edge in (1200, 1000, 700, 1400):   # the detector is scale-sensitive: try a few sizes
+            if m is not None:
+                break
+            k = edge / max(im.size)
             m = mesh(np.asarray(im.resize((int(im.width * k), int(im.height * k)), Image.LANCZOS)))
             m = None if m is None else m / k
+        if m is None:                            # face fills the frame: give it room (pad)
+            pw, ph = im.width // 2, im.height // 2
+            pad = Image.new("RGB", (im.width + 2 * pw, im.height + 2 * ph), (128, 128, 128))
+            pad.paste(im, (pw, ph))
+            k = 1200 / max(pad.size)
+            m = mesh(np.asarray(pad.resize((int(pad.width * k), int(pad.height * k)), Image.LANCZOS)))
+            m = None if m is None else m / k - [pw, ph]
         fp.write_text(json.dumps([] if m is None else m.round(1).tolist()))
     return json.loads(fp.read_text())
 
@@ -575,7 +584,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     ys, xs = np.nonzero(mask > 0.5)
     sbox = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else (0, 0, W, H)
     focus = focus_map(mask, s)
-    ctx_args = dict(W=W, H=H, sbox=sbox, head=head_point(mask, sbox), mask=mask,
+    ctx_args = dict(W=W, H=H, sbox=sbox, piece_dir=str(d), head=head_point(mask, sbox), mask=mask,
                     lum=lum if lum is not None else rgb.mean(2), palette=P.get("palette", []),
                     focus=focus, photo=photo_t,
                     face={k: (ox + v[0] * W / src_full_size[0] * min(sc, 1.0),

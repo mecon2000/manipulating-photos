@@ -191,6 +191,12 @@ def api_paint_mask(piece: str, body: dict = Body(...)):
                  f"painted where {layer} shows")
 
 
+@router.post("/api/compose/piece/{piece}/zoom")
+def api_zoom(piece: str, body: dict = Body(...)):
+    """Zoom the crop out (factor > 1) or in, re-cropping the original photo."""
+    return _call(compose_sync.zoom, piece, float(body.get("factor", 1.3)))
+
+
 @router.post("/api/compose/piece/{piece}/order")
 def api_order(piece: str, body: dict = Body(...)):
     return _call(compose_sync.order, piece, body.get("ids") or [])

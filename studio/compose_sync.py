@@ -175,3 +175,13 @@ def restore(piece: str, n) -> dict:
     compose.run_cli(piece, ["restore", str(compose.PIECES / piece),
                             "--savepoint", str(int(n))], timeout=600)
     return compose.summary(piece)
+
+
+def zoom(piece: str, factor: float) -> dict:
+    """Re-crop the piece from its original photo, wider (factor > 1) or tighter, around the
+    same centre. New source / mask / face data; the layers keep their settings."""
+    compose.piece_dir(piece)
+    f = max(0.5, min(2.0, float(factor)))
+    compose.run_cli(piece, ["recrop", str(compose.PIECES / piece), "--zoom", str(f),
+                            "--note", f"zoom {'out' if f > 1 else 'in'} x{f:g}"], timeout=900)
+    return compose.summary(piece)

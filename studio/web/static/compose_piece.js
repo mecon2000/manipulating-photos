@@ -832,6 +832,9 @@ function boot() {
   $("paint-feather").oninput = (e) => { canvas.setMaskFeather(Number(e.target.value)); localStorage.setItem("maskFeather", e.target.value); };
   $("shape-distort").onclick = () => setShapeMode("distort");
   $("shape-scale").onclick = () => setShapeMode("scale");
+  // re-crop from the original photo (new source + face data; layers keep their settings)
+  $("zoom-out").onclick = () => mutate("/zoom", { factor: 1.3 }, "zooming out…");
+  $("zoom-in").onclick = () => mutate("/zoom", { factor: 1 / 1.3 }, "zooming in…");
   $("shape-cancel").onclick = endShape;
   $("shape-tab-strip").onclick = () => setShapeTab("strip");
   $("shape-tab-under").onclick = () => setShapeTab("under");

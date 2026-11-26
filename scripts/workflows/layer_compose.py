@@ -935,16 +935,67 @@ def cmd_set(a):
     render(d, P, event="set", changes=changes, note=a.note)
 
 
+def _box(custom):
+    """'x1,y1,x2,y2' (original-photo px) -> tuple of floats, or None."""
+    try:
+        b = [float(v) for v in str(custom).split(",")]
+        return tuple(b) if len(b) == 4 and b[2] > b[0] and b[3] > b[1] else None
+    except (TypeError, ValueError):
+        return None
+
+
+def zoom_box(photo, custom, factor):
+    """The crop scaled about its centre by `factor` (>1 = zoom out), same aspect, kept inside
+    the photo (shrunk to fit if it would not). No custom crop = start from the full frame."""
+    with Image.open(photo) as im:
+        W, H = ImageOps.exif_transpose(im).size
+    b = _box(custom) or (0, 0, W, H)
+    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    w, h = (b[2] - b[0]) * factor, (b[3] - b[1]) * factor
+    k = min(1.0, W / w, H / h)
+    w, h = w * k, h * k
+    x0, y0 = min(max(0, cx - w / 2), W - w), min(max(0, cy - h / 2), H - h)
+    return f"{int(x0)},{int(y0)},{int(x0 + w)},{int(y0 + h)}"
+
+
 def cmd_recrop(a):
     """New crop for an existing piece (zoom out / reframe): new source, mask and face
     landmarks; every layer keeps its settings (positions are relative to the frame)."""
     d, P = load(a.piece)
     if a.boost:
         P["base"]["mask_boost"] = True
+    old_box = _box(P.get("crop", {}).get("custom"))
+    if getattr(a, "zoom", None):              # zoom out (>1) / in (<1) around the current crop
+        a.custom, a.crop = zoom_box(P["photo"], P.get("crop", {}).get("custom"), float(a.zoom)), None
+        if old_box is None:                    # no custom crop before: the full frame was the frame
+            with Image.open(P["photo"]) as im:
+                old_box = (0, 0, *ImageOps.exif_transpose(im).size)
     src = smart_crop(Path(P["photo"]), d, a.crop, a.custom)
     ImageOps.exif_transpose(Image.open(src)).convert("RGB").save(d / "source.jpg", quality=95)
-    for f in ("mask.png", "mask_affect.png", "face.json"):
+    for f in ("mask.png", "mask_affect.png", "face.json", "face_mesh.json", "hair.png", "hands.png"):
         (d / f).unlink(missing_ok=True)
+    for f in d.glob("under_*.jpg"):
+        f.unlink(missing_ok=True)
+    # a hand-placed tear is in the OLD frame's 0-1 coordinates: carry it into the new frame
+    new_box = _box(a.custom)
+    for L in P["layers"]:
+        prm = L.get("params") or {}
+        if L.get("kind") != "torn_strip":
+            continue
+        if prm.get("shape") and old_box and new_box:
+            nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(prm["shape"]))]
+            if len(nums) == 12:
+                (ox0, oy0, ox1, oy1), (nx0, ny0, nx1, ny1) = old_box, new_box
+                pts = [((x * (ox1 - ox0) + ox0 - nx0) / (nx1 - nx0), (y * (oy1 - oy0) + oy0 - ny0) / (ny1 - ny0))
+                       for x, y in zip(nums[0::2], nums[1::2])]
+                prm["shape"] = ";".join(f"{x:.4f},{y:.4f}" for x, y in pts)
+        elif prm.get("shape"):
+            prm["shape"] = ""
+        if prm.get("under_tf") and old_box and new_box:
+            t = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(prm["under_tf"]))]
+            if len(t) == 4:
+                k = (old_box[2] - old_box[0]) / (new_box[2] - new_box[0])
+                prm["under_tf"] = f"{t[0] * k:.4f},{t[1] * k:.4f},{t[2]},{t[3]}"
     P["crop"] = {"n": a.crop, "custom": a.custom}
     P["decisions"].append({"t": time.strftime("%F %T"), "recrop": P["crop"],
                            "mask_boost": P["base"].get("mask_boost", False), "note": a.note})
@@ -1319,6 +1370,7 @@ def main():
     o = sub.add_parser("options"); o.add_argument("piece"); o.add_argument("--question", required=True); o.add_argument("--vary", required=True)
     rc = sub.add_parser("recrop"); rc.add_argument("piece"); rc.add_argument("--crop")
     rc.add_argument("--custom"); rc.add_argument("--boost", action="store_true"); rc.add_argument("--note", default="")
+    rc.add_argument("--zoom", type=float, help="scale the current crop about its centre (1.3 = zoom out)")
     ad = sub.add_parser("add"); ad.add_argument("piece"); ad.add_argument("--id", required=True)
     ad.add_argument("--kind", required=True); ad.add_argument("--z", default="over", choices=["under", "over"])
     ad.add_argument("--region", default="anywhere"); ad.add_argument("--param", nargs="*")

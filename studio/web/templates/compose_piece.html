@@ -29,6 +29,13 @@
         <button class="mode-btn active" data-mode="pan">Pan</button>
         <button class="mode-btn" data-mode="markers">Pin a note</button>
       </div>
+      <div id="move-bar" class="paint-bar hidden">
+        <span class="paint-label">Move <b id="move-label"></b></span>
+        <span class="paint-label" style="opacity:.7">drag to move · corners scale · top handle rotates</span>
+        <button id="move-reset" class="btn btn-small" title="back to where it was generated">Reset</button>
+        <button id="move-cancel" class="btn btn-small">Cancel</button>
+        <button id="move-apply" class="btn btn-small btn-primary">Apply</button>
+      </div>
       <div id="shape-bar" class="paint-bar hidden">
         <span class="paint-label">Tear <b id="shape-label"></b></span>
         <button id="shape-tab-strip" class="btn btn-small active" title="move / bend the torn strip">Strip</button>
@@ -81,6 +88,8 @@
       <span class="pal-label">Frame</span>
       <button id="zoom-out" class="btn btn-small" title="re-crop wider from the original photo">⊖ zoom out</button>
       <button id="zoom-in" class="btn btn-small" title="re-crop tighter">⊕ zoom in</button>
+      <label class="paint-tint" title="deeper blacks on the model (highlights stay)">blacks
+        <input id="blacks" type="range" min="0" max="1" step="0.05" value="0"></label>
     </div>
 
     <div class="collapsible" id="layers-sec">

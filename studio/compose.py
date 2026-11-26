@@ -161,6 +161,7 @@ def summary(piece: str) -> dict:
     return {
         "piece": piece, "photo": P.get("photo"), "recipe": P.get("recipe"),
         "palettes": {k: list(v.values()) for k, v in (P.get("palettes") or {}).items()},
+        "blacks": float((P.get("base") or {}).get("blacks") or 0),
         "palette_name": (P.get("base") or {}).get("palette_name") or next(iter(P.get("palettes") or {}), None),
         "wildness": P.get("wildness"), "seed": P.get("seed"),
         "base": P.get("base", {}), "background": P.get("background", {}),

@@ -275,6 +275,9 @@ def bw(rgb, base, mask=None):
     out = (out - lo) / (hi - lo)
     if preset in ("tri-x-punch", "newsprint"):
         out = np.clip((out - 0.05) / 0.9, 0, 1)   # crush blacks, chalk highlights
+    b = float(base.get("blacks", 0) or 0)         # 0-1: deeper blacks, highlights stay where they are
+    if b > 0:
+        out = np.clip((out - 0.25 * b) / (1 - 0.25 * b), 0, 1) ** (1 + 0.7 * b)
     return out.astype(np.float32)
 
 
@@ -674,7 +677,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         if use_cache:
             L_ = {k: v for k, v in L.items() if k not in ("enabled", "note", "variants", "riff", "theme")}
             L_["params"] = {k: v for k, v in (L_.get("params") or {}).items()
-                            if k not in ("paint_mask", "paint_mask_v")}   # repaint ≠ regenerate
+                            if k not in ("paint_mask", "paint_mask_v", "tf")}   # repaint / move ≠ regenerate
             key = layer_key(L_)
             fp = cdir / f"{key}.npz"
             if fp.exists():
@@ -720,17 +723,21 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         key = getattr(lay, "_key", None)
         geom = getattr(lay, "geom", None)
         raw_a = getattr(lay, "_raw_alpha", None)
+        pre = getattr(lay, "_pre", None)
         lay = apply_boxes(L, lay, W, H, s)
         raw = apply_boxes(L, wl.Layer(lay.rgb, raw_a, blend=lay.blend, clip=lay.clip), W, H, s) \
             if raw_a is not None else None
         pmv = (L.get("params") or {}).get("paint_mask_v")
         if key and raw_a is not None and pmv:
             key = f"{key}-m{pmv}"                     # new mask → the browser fetches the new PNG
+        tfv = _tf((L.get("params") or {}).get("tf"))
+        if key and tfv:
+            key = f"{key}-t{zlib.crc32(str(tfv).encode()):08x}"      # moved → new PNG
         on = L.get("enabled", True) and not L.get("removed")
         if on and not only:
             out = composite(out, lay)
         stack.append({"id": L["id"], "z": L["z"], "enabled": on, "layer": lay, "seed": L.get("seed"),
-                      "key": key, "raw": raw, "geom": geom})
+                      "key": key, "raw": raw, "geom": geom, "pre": pre})
 
     # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
     ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
@@ -739,6 +746,18 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
         (params.paint_mask = masks/<id>.png, painted in the piece screen)."""
         lay = _run_raw(L)
         _run_raw._k = getattr(lay, "_key", None)
+        tf = _tf((L.get("params") or {}).get("tf"))
+        if lay is not None and tf:          # moved / scaled / rotated on the piece screen
+            import cv2
+            g0, k0 = getattr(lay, "geom", None), getattr(lay, "_key", None)
+            M = cv2.getRotationMatrix2D((W / 2, H / 2), -tf[2], tf[3])
+            M[:, 2] += (tf[0] * W, tf[1] * H)
+            pre = lay
+            warp = lambda a: cv2.warpAffine(np.ascontiguousarray(a, np.float32), M, (W, H),
+                                            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+            lay = wl.Layer(warp(lay.rgb), np.clip(warp(lay.alpha), 0, 1), blend=lay.blend, clip=lay.clip)
+            lay.geom, lay._key, lay._pre = g0, k0, pre     # _pre: the untransformed layer, for the UI
+            _run_raw._k = k0
         pm = (L.get("params") or {}).get("paint_mask")
         if lay is not None and pm and (d / pm).exists():
             from scipy.ndimage import gaussian_filter as _gf
@@ -746,8 +765,10 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
             raw = lay.alpha
             g0 = getattr(lay, "geom", None)
             lay = wl.Layer(lay.rgb, raw * _gf(m, 0.0015 * s), blend=lay.blend, clip=lay.clip)
+            pre0 = getattr(lay, "_pre", None)
             lay.geom = g0
             lay._key = getattr(_run_raw, "_k", None)
+            lay._pre = pre0
             lay._raw_alpha = raw            # the unmasked layer: the browser previews repaints live
         return lay
 
@@ -872,6 +893,15 @@ def render(d, P, full=False, event="render", **meta):
                     tmp = ld / f".raw_{fn}.{os.getpid()}.tmp.png"
                     save_rgba(tmp, e["raw"])
                     os.replace(tmp, ld / rawrel)
+            prerel = None
+            if e.get("pre") is not None:            # the untransformed layer (transform handles)
+                (ld / "pre").mkdir(exist_ok=True)
+                prerel = f"pre/{fn}"
+                base_v = (v or "").split("-t")[0]
+                if not (base_v and (ld / prerel).exists() and prev.get(fn, "").split("-t")[0] == base_v):
+                    tmp = ld / f".pre_{fn}.{os.getpid()}.tmp.png"
+                    save_rgba(tmp, e["pre"])
+                    os.replace(tmp, ld / prerel)
             L = byid.get(e["id"], {})
             entries.append({"id": e["id"], "file": fn, "kind": L.get("kind", e["id"]),
                             "z": e["z"], "enabled": bool(L.get("enabled", True)) if L else bool(e["enabled"]),
@@ -879,7 +909,7 @@ def render(d, P, full=False, event="render", **meta):
                             "riff": bool(L.get("riff")), "note": L.get("note", ""),
                             "seed": L.get("seed"), "variants": L.get("variants", []),
                             "params": (L or {}).get("params", {}), "v": e.get("key"),
-                            "ink": _ink(e["layer"].alpha), "raw": rawrel, "geom": e.get("geom")})
+                            "ink": _ink(e["layer"].alpha), "raw": rawrel, "geom": e.get("geom"), "pre": prerel})
     if full:
         from psd_layers import write_psd
         W, H = img.size
@@ -933,6 +963,12 @@ def cmd_set(a):
         print("saved (no render)")
         return
     render(d, P, event="set", changes=changes, note=a.note)
+
+
+def _tf(v):
+    """params.tf 'dx,dy,rot,scale' -> list, or None when absent / identity."""
+    t = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?(?:e-?\d+)?", str(v or ""))]
+    return t if len(t) == 4 and t != [0.0, 0.0, 0.0, 1.0] else None
 
 
 def _box(custom):

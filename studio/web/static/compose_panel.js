@@ -229,6 +229,12 @@ function layerRows(wrap, L, ctx, list) {
   paint.title = (L.params || {}).paint_mask ? "painted mask (tap to repaint)" : "paint where this layer shows";
   paint.onclick = () => ctx.onPaint && ctx.onPaint(L);
   row.appendChild(paint);
+  if (L.kind !== "torn_strip" && L.kind !== "grain" && L.kind !== "wash") {   // move / scale / rotate
+    const mv = el("button", "seedbtn" + ((L.params || {}).tf ? " active" : ""), "⤧");
+    mv.title = "move / scale / rotate this layer on the picture";
+    mv.onclick = () => ctx.onMove && ctx.onMove(L);
+    row.appendChild(mv);
+  }
   if (L.kind === "torn_strip") {          // free transform of the strip (corners / bend / move / rotate)
     const sh = el("button", "seedbtn" + ((L.params || {}).shape ? " active" : ""), "✥");
     sh.title = "move / rotate / scale / skew / bend the tear on the picture";

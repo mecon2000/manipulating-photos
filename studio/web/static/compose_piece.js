@@ -128,6 +128,7 @@ async function redraw() {
         const raw = L.raw ? fileUrl(`layers/${L.raw}`, L.v || man.rev) : layerSrc(L);
         return { ...L, enabled: true, removed: false, url: raw, liveMask: live.mask };
       }
+      if (moving && L.id === moving) return { ...L, enabled: false, url: layerSrc(L) };   // shown as handles
       return { ...L, url: layerSrc(L) };
     });
     // first paint: the finished render (one JPEG) while the ~20 layer PNGs download
@@ -378,6 +379,42 @@ function startShape(L) {
   $("shape-bar").classList.remove("hidden");
   $("mode-toggle").classList.add("hidden");
 }
+// ---- move / scale / rotate a layer (params.tf = dx,dy,rot,scale; the server re-places the
+// already generated layer, no regeneration) ----
+let moving = null;
+async function startMove(L) {
+  if (painting) endPaint();
+  if (shaping) endShape();
+  const m = man && man.layers.find((x) => x.id === L.id);
+  if (!m) { toast("Render the piece once first.", 4000); return; }
+  const src = m.pre ? fileUrl(`layers/${m.pre}`, m.v || man.rev) : layerSrc(m);
+  let img;
+  try { img = await loadImgEl(src); } catch (e) { toast(`Couldn't load the layer: ${e.message}`, 4000); return; }
+  const tf = (String((m.params || {}).tf || "").match(/-?\d+(\.\d+)?(e-?\d+)?/g) || []).map(Number);
+  moving = L.id;
+  canvas.startUnderEdit(img, tf.length === 4 ? tf : null);
+  canvas.setUnderOpacity(1);
+  $("move-label").textContent = `“${L.id.replace(/_/g, " ")}”`;
+  $("move-bar").classList.remove("hidden");
+  $("mode-toggle").classList.add("hidden");
+  redraw();
+}
+function endMove() {
+  moving = null;
+  canvas.endUnderEdit();
+  $("move-bar").classList.add("hidden");
+  $("mode-toggle").classList.remove("hidden");
+  setMode("pan");
+  redraw();
+}
+function applyMove(reset = false) {
+  const id = moving;
+  if (!id) return;
+  const tf = reset ? null : canvas.getUnderTf();
+  endMove();
+  persist("/quick-set", { kv: [`${id}.tf=${tf ? tf.join(",") : ""}`],
+                           note: reset ? `${id}: back in place` : `${id}: moved` });
+}
 let shapeLayer = null, shapeTab = "strip", stripEdits = null, underEdits = null;
 async function setShapeTab(tab) {
   if (!shapeLayer) return;
@@ -442,6 +479,7 @@ function loadImgEl(url) {
 const panelCtx = () => ({
   onPaint(L) { startPaint(L); },
   onShape(L) { startShape(L); },
+  onMove(L) { startMove(L); },
   layers: man ? man.layers : [], overrides, rolling, openNotes,
   onRemove(L) {
     L.removed = true;
@@ -560,6 +598,7 @@ function renderAll() {
 // Palette picker: a recipe can ship several named colour schemes (recipe.palettes);
 // base.palette_name picks one. Hidden when the recipe has only one.
 function renderPalettes() {
+  if (document.activeElement !== $("blacks")) $("blacks").value = state.blacks || 0;
   const row = $("palette-row");
   const pals = state.palettes || {};
   const names = Object.keys(pals);
@@ -836,6 +875,10 @@ function boot() {
   $("zoom-out").onclick = () => mutate("/zoom", { factor: 1.3 }, "zooming out…");
   $("zoom-in").onclick = () => mutate("/zoom", { factor: 1 / 1.3 }, "zooming in…");
   $("shape-cancel").onclick = endShape;
+  $("blacks").onchange = (e) => mutate("/set", { kv: [`base.blacks=${e.target.value}`], note: `blacks ${e.target.value}` }, "darkening…");
+  $("move-cancel").onclick = endMove;
+  $("move-apply").onclick = () => applyMove(false);
+  $("move-reset").onclick = () => applyMove(true);
   $("shape-tab-strip").onclick = () => setShapeTab("strip");
   $("shape-tab-under").onclick = () => setShapeTab("under");
   $("under-op").oninput = (e) => canvas.setUnderOpacity(Number(e.target.value));

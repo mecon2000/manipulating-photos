@@ -527,6 +527,8 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     # so one recipe can be rendered in several colour schemes.
     pal_sets = P.get("palettes") or {}
     pal_name = P["base"].get("palette_name") or next(iter(pal_sets), None)
+    if pal_name not in pal_sets:              # unknown name: the recipe's first palette, not a crash
+        pal_name = next(iter(pal_sets), None)
     roles = pal_sets.get(pal_name, {}) if pal_name else {}
 
     def _res(v):
@@ -610,7 +612,11 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     paper = wl.hex_rgb(bgc.get("color", "#f1eee8"))
     out = np.empty((H, W, 3), np.float32)
     out[:] = paper
-    tone = 1 + 0.025 * wl.fbm((H, W), rng0, s * 0.15, 3)       # paper unevenness
+    # paper unevenness: very soft noise, so made at 1/16 size and scaled up (full-size blur
+    # of a ~300 px sigma was 1.5 s of every render)
+    import cv2
+    lo = wl.fbm((max(8, H // 16), max(8, W // 16)), rng0, s * 0.15 / 16, 3)
+    tone = 1 + 0.025 * cv2.resize(lo, (W, H), interpolation=cv2.INTER_CUBIC)
     yy, xx = np.mgrid[0:H, 0:W]
     vig = 1 - 0.12 * (((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2) / 2
     out *= (tone * vig)[..., None]

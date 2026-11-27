@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import activity, compose
 
-DEBOUNCE_SEC = 0.8
+DEBOUNCE_SEC = 0.3
 _G = threading.Lock()
 _S: dict[str, dict] = {}   # piece -> {timer, rendering, gen, rendered_gen, error}
 

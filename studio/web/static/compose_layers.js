@@ -77,7 +77,25 @@ export async function composite(W, H, layers, compare, onProgress) {
       src = tmp;
     }
     ctx.globalCompositeOperation = BLEND[L.blend] || "source-over";
-    ctx.drawImage(src, x0, 0, W, H);
+    const draw = () => {
+      if (L.tf) {                   // moved layer preview: same transform as the server (about the centre)
+        const [dx, dy, rot, sc] = L.tf;
+        ctx.save();
+        ctx.translate(x0 + W / 2 + dx * W, H / 2 + dy * H);
+        ctx.rotate((rot * Math.PI) / 180);
+        ctx.scale(sc, sc);
+        ctx.drawImage(src, -W / 2, -H / 2, W, H);
+        ctx.restore();
+      } else ctx.drawImage(src, x0, 0, W, H);
+    };
+    // visibility preview: the PNG scaled by new/old (exact below 1; above 1, re-stacked)
+    let k = L.opScale == null || !isFinite(L.opScale) ? 1 : Math.max(0, L.opScale);
+    while (k > 1e-3) {
+      ctx.globalAlpha = Math.min(1, k);
+      draw();
+      k -= 1;
+    }
+    ctx.globalAlpha = 1;
   });
   ctx.restore();
   ctx.globalCompositeOperation = "source-over";

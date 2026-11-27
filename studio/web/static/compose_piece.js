@@ -117,6 +117,8 @@ function layerSrc(L) {
 }
 
 let drawing = false, redrawAgain = false, firstPainted = false, layersShown = false;
+let redrawRaf = 0;
+function redrawSoon() { if (!redrawRaf) redrawRaf = requestAnimationFrame(() => { redrawRaf = 0; redraw(); }); }
 let lastComposite = null, blacksRaf = 0, blacksWant = null, blacksBuf = null;   // blacks preview
 async function redraw() {
   if (!man) return;
@@ -130,7 +132,11 @@ async function redraw() {
         return { ...L, enabled: true, removed: false, url: raw, liveMask: live.mask };
       }
       if (moving && L.id === moving) return { ...L, enabled: false, url: layerSrc(L) };   // shown as handles
-      return { ...L, url: layerSrc(L) };
+      const row = { ...L, url: layerSrc(L), opScale: L._opScale };
+      if (L._tfDraw && overrides[L.id] == null) {          // moved: draw the unmoved PNG, transformed
+        row.url = L._tfDraw.url; row.tf = L._tfDraw.tf;
+      }
+      return row;
     });
     // first paint: the finished render (one JPEG) while the ~20 layer PNGs download
     if (!firstPainted) {
@@ -218,8 +224,15 @@ async function apply(s, force = false) {
   if (key === lastKey && !force) return;
   lastKey = key;
   if (s.manifest) {
+    // instant previews (visibility / move) survive until that layer's new render lands
+    const keep = {};
+    for (const L of (man ? man.layers : [])) {
+      if (L._opScale != null || L._tfDraw) keep[L.id] = { v: L.v, _opScale: L._opScale, _tfDraw: L._tfDraw, _baked: L._baked };
+    }
     man = JSON.parse(JSON.stringify(s.manifest));
     for (const L of man.layers) {
+      const k = keep[L.id];
+      if (k && k.v === L.v) Object.assign(L, { _opScale: k._opScale, _tfDraw: k._tfDraw, _baked: k._baked });
       if (overrides[L.id] === L.seed) delete overrides[L.id];
       const extra = (localVariants[L.id] || []).filter((x) => !(L.variants || []).includes(x));
       if (extra.length) L.variants = [...(L.variants || []), ...extra];
@@ -383,13 +396,14 @@ function startShape(L) {
 }
 // ---- move / scale / rotate a layer (params.tf = dx,dy,rot,scale; the server re-places the
 // already generated layer, no regeneration) ----
-let moving = null;
+let moving = null, moveSrc = null;
 async function startMove(L) {
   if (painting) endPaint();
   if (shaping) endShape();
   const m = man && man.layers.find((x) => x.id === L.id);
   if (!m) { toast("Render the piece once first.", 4000); return; }
-  const src = m.pre ? fileUrl(`layers/${m.pre}`, m.v || man.rev) : layerSrc(m);
+  const src = m._tfDraw ? m._tfDraw.url : m.pre ? fileUrl(`layers/${m.pre}`, m.v || man.rev) : layerSrc(m);
+  moveSrc = src;
   let img;
   try { img = await loadImgEl(src); } catch (e) { toast(`Couldn't load the layer: ${e.message}`, 4000); return; }
   const tf = (String((m.params || {}).tf || "").match(/-?\d+(\.\d+)?(e-?\d+)?/g) || []).map(Number);
@@ -413,6 +427,9 @@ function applyMove(reset = false) {
   const id = moving;
   if (!id) return;
   const tf = reset ? null : canvas.getUnderTf();
+  // show it moved right away: the untransformed PNG drawn with the new transform
+  const L = man.layers.find((x) => x.id === id);
+  if (L && moveSrc) L._tfDraw = { url: moveSrc, tf: tf || [0, 0, 0, 1] };
   endMove();
   persist("/quick-set", { kv: [`${id}.tf=${tf ? tf.join(",") : ""}`],
                            note: reset ? `${id}: back in place` : `${id}: moved` });
@@ -560,7 +577,14 @@ const panelCtx = () => ({
     renderAll();
   },
   onRefresh() { renderAll(); },
+  onPreview(L, key, value) {               // visibility: scale the shown PNG, no server
+    if (key !== "opacity") return;
+    const b = (L._baked && L._baked.opacity) || 1;
+    L._opScale = value / b;
+    redrawSoon();
+  },
   onParam(L, key, value) {
+    if (key === "opacity") this.onPreview(L, key, value);
     persist("/quick-set", { kv: [`${L.id}.${key}=${value}`], note: `${L.id}: ${key} ${value}` });
   },
 });

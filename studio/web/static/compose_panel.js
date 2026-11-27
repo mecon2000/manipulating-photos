@@ -130,8 +130,14 @@ function sliderBox(L, ctx) {
     const r = el("input");
     r.type = "range"; r.min = lo; r.max = hi; r.step = step;
     r.value = P[k] ?? def;
+    // the value the current layer PNG was made with (kept until the next manifest replaces L)
+    L._baked = L._baked || {};
+    if (!(k in L._baked)) L._baked[k] = Number(P[k] ?? def);
     val.textContent = r.value;
-    r.oninput = () => { val.textContent = r.value; };
+    r.oninput = () => {
+      val.textContent = r.value;
+      if (k === "opacity" && ctx.onPreview) ctx.onPreview(L, k, Number(r.value));   // instant
+    };
     // while a finger is on the slider the page must not rebuild the panel (a rebuild
     // replaces the input and the drag dies — the 6s poll / render updates did that)
     r.addEventListener("pointerdown", () => { _sliding = true; });

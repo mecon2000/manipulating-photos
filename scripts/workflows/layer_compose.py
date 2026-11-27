@@ -747,10 +747,32 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
 
     # under-layers aim for the ring just OUTSIDE her silhouette (inside, she hides them)
     ctx_args["focus"] = focus * (1 - 0.85 * (mask > 0.5))
+    # params.opacity is (in nearly every generator) a plain final alpha multiplier: generate at
+    # full strength once (cached), scale here — a visibility change costs no regeneration, and
+    # the browser previews it exactly by the same ratio.
+    OPACITY_INSIDE = {"ghost", "grain", "scratches"}
+
+    def _run_raw_op(L):
+        op = (L.get("params") or {}).get("opacity")
+        try:
+            op = float(op)
+        except (TypeError, ValueError):
+            op = None
+        if op is None or L.get("kind") in OPACITY_INSIDE:
+            return _run_raw(L)
+        lay = _run_raw({**L, "params": {**L["params"], "opacity": 1.0}})
+        if lay is None:
+            return None
+        k, g0 = getattr(lay, "_key", None), getattr(lay, "geom", None)
+        out = wl.Layer(lay.rgb, np.clip(lay.alpha * op, 0, 1), blend=lay.blend, clip=lay.clip)
+        out.geom = g0
+        out._key = f"{k}-o{op:g}" if k else None
+        return out
+
     def run(L):
         """Generate a layer, then clip it to a hand-painted mask if it has one
         (params.paint_mask = masks/<id>.png, painted in the piece screen)."""
-        lay = _run_raw(L)
+        lay = _run_raw_op(L)
         _run_raw._k = getattr(lay, "_key", None)
         tf = _tf((L.get("params") or {}).get("tf"))
         if lay is not None and tf:          # moved / scaled / rotated on the piece screen

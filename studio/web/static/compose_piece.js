@@ -117,6 +117,7 @@ function layerSrc(L) {
 }
 
 let drawing = false, redrawAgain = false, firstPainted = false, layersShown = false;
+let lastComposite = null, blacksRaf = 0, blacksWant = null, blacksBuf = null;   // blacks preview
 async function redraw() {
   if (!man) return;
   if (drawing) { redrawAgain = true; return; }
@@ -151,6 +152,7 @@ async function redraw() {
       if (revealGate === g) revealGate = null;
       cueReveal();
     }
+    lastComposite = c;
     canvas.setImageSource(c);
   } catch (e) {
     toast(`draw: ${e.message}`);
@@ -876,6 +878,7 @@ function boot() {
   $("crop-cancel").onclick = () => $("crop-modal").classList.add("hidden");
   $("crop-apply").onclick = applyCrop;
   $("shape-cancel").onclick = endShape;
+  $("blacks").oninput = (e) => previewBlacks(Number(e.target.value));
   $("blacks").onchange = (e) => mutate("/set", { kv: [`base.blacks=${e.target.value}`], note: `blacks ${e.target.value}` }, "darkening…");
   $("move-cancel").onclick = endMove;
   $("move-apply").onclick = () => applyMove(false);
@@ -1086,4 +1089,29 @@ function applyCrop() {
   const b = crop.box.map(Math.round);
   $("crop-modal").classList.add("hidden");
   mutate("/recrop", { box: b.join(",") }, "re-cropping…");
+}
+
+
+// ---- instant "blacks" preview: undo the rendered curve, apply the new one, on the shown
+// picture (the whole frame, so dark layers shift a little too); the real render follows on release
+function blacksCurve(x, b) { const t = Math.min(1, Math.max(0, (x - 0.25 * b) / (1 - 0.25 * b))); return t ** (1 + 0.7 * b); }
+function blacksInverse(y, b) { return y <= 0 ? 0 : y ** (1 / (1 + 0.7 * b)) * (1 - 0.25 * b) + 0.25 * b; }
+function previewBlacks(b) {
+  blacksWant = b;
+  if (blacksRaf || !lastComposite) return;
+  blacksRaf = requestAnimationFrame(() => {
+    blacksRaf = 0;
+    const b0 = state.blacks || 0, lut = new Uint8ClampedArray(256);
+    for (let i = 0; i < 256; i++) lut[i] = Math.round(255 * blacksCurve(Math.min(1, blacksInverse(i / 255, b0)), blacksWant));
+    const src = lastComposite, w = src.width, h = src.height;
+    if (!blacksBuf || blacksBuf.src !== src) {
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const g = c.getContext("2d"); g.drawImage(src, 0, 0);
+      blacksBuf = { src, c, g, orig: g.getImageData(0, 0, w, h) };
+    }
+    const o = blacksBuf.orig.data, out = new ImageData(w, h), d = out.data;
+    for (let i = 0; i < o.length; i += 4) { d[i] = lut[o[i]]; d[i + 1] = lut[o[i + 1]]; d[i + 2] = lut[o[i + 2]]; d[i + 3] = o[i + 3]; }
+    blacksBuf.g.putImageData(out, 0, 0);
+    canvas.setImageSource(blacksBuf.c);
+  });
 }

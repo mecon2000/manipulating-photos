@@ -200,13 +200,28 @@ def list_pieces() -> list[dict]:
         mt = max(pj.stat().st_mtime, final.stat().st_mtime if final.exists() else 0)
         dec = (P.get("decisions") or [{}])[-1]
         last = dec.get("note") or dec.get("question") or ("init" if "init" in dec else "")
-        out.append({"piece": d.name, "photo": Path(P.get("photo", "")).name,
+        faved = False
+        try:   # a fav (★ on the piece screen) leaves a savepoint of kind "fav"
+            faved = any(e.get("kind") == "fav" for e in json.loads((d / "savepoints" / "index.json").read_text()))
+        except (OSError, ValueError):
+            pass
+        out.append({"piece": d.name, "photo": Path(P.get("photo", "")).name, "faved": faved,
                     "recipe": P.get("recipe"), "mtime": mt,
                     "changed": time.strftime("%d %b %H:%M", time.localtime(mt)),
                     "last": last, "final_v": int(mt) if final.exists() else 0,
                     "open_q": sum(1 for q in _safe_questions(d.name)
                                   if q.get("status") == "open")})
     return sorted(out, key=lambda p: -p["mtime"])
+
+
+def trash_piece(piece: str) -> str:
+    """Move a piece out of the gallery into deconstruct/_trash/ (recoverable: move it back)."""
+    d = piece_dir(piece)
+    tr = ROOT / "_trash"
+    tr.mkdir(exist_ok=True)
+    dst = tr / f"{d.name}__{time.strftime('%Y%m%d-%H%M%S')}"
+    os.rename(d, dst)              # same 9p mount: a rename, nothing copied
+    return str(dst)
 
 
 def _safe_questions(piece):

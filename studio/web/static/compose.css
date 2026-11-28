@@ -255,3 +255,12 @@
 .crop-rect i[data-h="w"], .crop-rect i[data-h="e"] { top: 50%; width: 12px; height: 26px; border-radius: 6px; cursor: ew-resize; }
 .crop-rect i[data-h="w"] { left: 0; } .crop-rect i[data-h="e"] { left: 100%; }
 .crop-info { color: #aaa; font-size: 12px; text-align: center; }
+
+.piece-card { position: relative; }
+.piece-card .pc-done { position: absolute; top: 8px; left: 8px; width: 30px; height: 30px; border-radius: 50%;
+  background: #1fa34a; color: #fff; font: 700 19px/30px system-ui, sans-serif; text-align: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5); pointer-events: none; }
+.piece-card.faved { border-color: #1fa34a; }
+.piece-card .pc-del { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border-radius: 50%;
+  border: none; background: rgba(0,0,0,.6); color: #fff; font-size: 15px; cursor: pointer; opacity: .75; }
+.piece-card .pc-del:hover { opacity: 1; background: #b3261e; }

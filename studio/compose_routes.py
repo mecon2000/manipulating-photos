@@ -63,6 +63,13 @@ def api_pieces():
     return {"pieces": compose.list_pieces(), "jobs": list(compose.JOBS.values())[-10:]}
 
 
+@router.delete("/api/compose/piece/{piece}")
+def api_trash_piece(piece: str):
+    """Delete from the gallery = move to deconstruct/_trash/ (recoverable)."""
+    _dir(piece)
+    return {"trashed": compose.trash_piece(piece)}
+
+
 @router.get("/api/compose/recipes")
 def api_recipes():
     return {"recipes": compose.list_recipes()}

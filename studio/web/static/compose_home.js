@@ -50,6 +50,24 @@ async function refresh() {
     a.querySelector(".pc-photo").textContent = p.photo;
     a.querySelector(".pc-recipe").textContent = p.recipe;
     a.querySelector(".pc-last").textContent = `${p.changed} · ${p.last || ""}`;
+    if (p.faved) {                          // ★ fav taken: done
+      const v = document.createElement("span");
+      v.className = "pc-done"; v.textContent = "✓"; v.title = "faved — done";
+      a.appendChild(v);
+      a.classList.add("faved");
+    }
+    const del = document.createElement("button");
+    del.className = "pc-del"; del.textContent = "✕"; del.title = "delete this piece (moves to the trash folder)";
+    del.onclick = async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (!confirm(`Delete ${p.piece}?\n(It moves to shared/deconstruct/_trash — recoverable.)`)) return;
+      try {
+        const r = await fetch(`${API}/piece/${encodeURIComponent(p.piece)}`, { method: "DELETE" });
+        if (!r.ok) throw new Error(await r.text());
+        a.remove();
+      } catch (err) { toast(`Delete failed: ${err.message}`); }
+    };
+    a.appendChild(del);
     if (p.open_q) {
       const b = document.createElement("span");
       b.className = "badge-q";

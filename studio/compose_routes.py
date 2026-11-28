@@ -191,6 +191,24 @@ def api_paint_mask(piece: str, body: dict = Body(...)):
                  f"painted where {layer} shows")
 
 
+@router.post("/api/compose/piece/{piece}/peek")
+def api_peek(piece: str, body: dict = Body(...)):
+    """Live slider preview: one layer re-made at low res with unsaved param changes."""
+    from fastapi.responses import Response
+    import re as _re
+    layer = str(body.get("layer", ""))
+    if not _re.match(r"^[\w\-]+$", layer):
+        raise HTTPException(400, "bad layer id")
+    kv = [str(x) for x in (body.get("kv") or [])][:8]
+    try:
+        png = compose_sync.peek(piece, layer, kv, int(body.get("size", 560)))
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    if png is None:
+        return Response(status_code=204)             # superseded by a newer drag position
+    return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
 @router.get("/api/compose/piece/{piece}/original")
 def api_original(piece: str, w: int = 1600):
     """The piece's original (uncropped) photo, downsized, in the same pixel space smart-crop
@@ -358,3 +376,5 @@ async def api_chat(piece: str, body: dict = Body(...)):
             yield json.dumps(ev) + "\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+compose_sync.warm_peek()      # import the renderer in the background so the first slider preview is quick

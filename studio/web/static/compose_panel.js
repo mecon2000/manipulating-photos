@@ -137,6 +137,7 @@ function sliderBox(L, ctx) {
     r.oninput = () => {
       val.textContent = r.value;
       if (k === "opacity" && ctx.onPreview) ctx.onPreview(L, k, Number(r.value));   // instant
+      else if (ctx.onPeek) ctx.onPeek(L, k, r.value);       // low-res redraw of this layer
     };
     // while a finger is on the slider the page must not rebuild the panel (a rebuild
     // replaces the input and the drag dies — the 6s poll / render updates did that)

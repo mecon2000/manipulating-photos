@@ -194,3 +194,51 @@ def recrop(piece: str, box: str) -> dict:
     compose.run_cli(piece, ["recrop", str(compose.PIECES / piece), "--custom", box,
                             "--note", f"crop {box}"], timeout=900)
     return compose.summary(piece)
+
+
+# ---- live slider preview: one layer at low res, computed IN this process ---------------
+# A subprocess per slider move paid ~1-8 s just importing numpy/scipy (cold cache); here
+# layer_compose is imported once and kept warm. One worker; only the newest request per
+# piece is computed (stale drags are skipped).
+_peek_lock = threading.Lock()
+_peek_gen: dict = {}
+_lc = None
+
+
+def _lc_mod():
+    global _lc
+    if _lc is None:
+        import importlib, sys as _sys
+        wf = str(compose.LC.parent)
+        if wf not in _sys.path:
+            _sys.path.insert(0, wf)
+        _lc = importlib.import_module("layer_compose")
+    return _lc
+
+
+def warm_peek() -> None:
+    threading.Thread(target=_lc_mod, daemon=True).start()
+
+
+def peek(piece: str, layer: str, kv: list, size: int = 560) -> bytes | None:
+    """PNG bytes of `layer` re-generated with the kv changes (not saved), or None when a
+    newer request for this piece arrived while waiting."""
+    import io
+    compose.piece_dir(piece)
+    with _G:
+        g = _peek_gen.get(piece, 0) + 1
+        _peek_gen[piece] = g
+    with _peek_lock:
+        if _peek_gen.get(piece) != g:
+            return None
+        lc = _lc_mod()
+        d, P = lc.load(compose.PIECES / piece)
+        lay = lc.peek_layer(d, P, layer, kv, max(240, min(int(size), 900)))
+        if lay is None:
+            return None
+        from PIL import Image
+        import numpy as np
+        rgba = np.dstack([lay.rgb, lay.alpha])
+        buf = io.BytesIO()
+        Image.fromarray((np.clip(rgba, 0, 1) * 255).astype(np.uint8), "RGBA").save(buf, "PNG", compress_level=1)
+        return buf.getvalue()

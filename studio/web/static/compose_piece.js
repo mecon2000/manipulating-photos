@@ -132,7 +132,7 @@ async function redraw() {
         return { ...L, enabled: true, removed: false, url: raw, liveMask: live.mask };
       }
       if (moving && L.id === moving) return { ...L, enabled: false, url: layerSrc(L) };   // shown as handles
-      const row = { ...L, url: layerSrc(L), opScale: L._opScale };
+      const row = { ...L, url: L._peek ? L._peek.url : layerSrc(L), opScale: L._opScale };
       if (L._tfDraw && overrides[L.id] == null) {          // moved: draw the unmoved PNG, transformed
         row.url = L._tfDraw.url; row.tf = L._tfDraw.tf;
       }
@@ -227,12 +227,13 @@ async function apply(s, force = false) {
     // instant previews (visibility / move) survive until that layer's new render lands
     const keep = {};
     for (const L of (man ? man.layers : [])) {
-      if (L._opScale != null || L._tfDraw) keep[L.id] = { v: L.v, _opScale: L._opScale, _tfDraw: L._tfDraw, _baked: L._baked };
+      if (L._opScale != null || L._tfDraw || L._peek) keep[L.id] = { v: L.v, _opScale: L._opScale, _tfDraw: L._tfDraw, _baked: L._baked, _peek: L._peek };
     }
     man = JSON.parse(JSON.stringify(s.manifest));
     for (const L of man.layers) {
       const k = keep[L.id];
-      if (k && k.v === L.v) Object.assign(L, { _opScale: k._opScale, _tfDraw: k._tfDraw, _baked: k._baked });
+      if (k && k.v === L.v) Object.assign(L, { _opScale: k._opScale, _tfDraw: k._tfDraw, _baked: k._baked, _peek: k._peek });
+      else if (k && k._peek) URL.revokeObjectURL(k._peek.url);      // the real render landed
       if (overrides[L.id] === L.seed) delete overrides[L.id];
       const extra = (localVariants[L.id] || []).filter((x) => !(L.variants || []).includes(x));
       if (extra.length) L.variants = [...(L.variants || []), ...extra];
@@ -577,6 +578,7 @@ const panelCtx = () => ({
     renderAll();
   },
   onRefresh() { renderAll(); },
+  onPeek(L, key, value) { peekLayer(L, key, value); },
   onPreview(L, key, value) {               // visibility: scale the shown PNG, no server
     if (key !== "opacity") return;
     const b = (L._baked && L._baked.opacity) || 1;
@@ -1138,4 +1140,35 @@ function previewBlacks(b) {
     blacksBuf.g.putImageData(out, 0, 0);
     canvas.setImageSource(blacksBuf.c);
   });
+}
+
+
+// ---- live preview for the other sliders: the server re-makes just that layer at low res
+// (in-process, warm) with the unsaved value; newest position wins, older ones are skipped ----
+const peekState = {};     // layer id -> {busy, want: {key, value}, edits: {key: value}}
+function peekLayer(L, key, value) {
+  const st = peekState[L.id] || (peekState[L.id] = { busy: false, want: null, edits: {} });
+  st.edits[key] = value;
+  st.want = { ...st.edits };
+  if (!st.busy) peekRun(L.id);
+}
+async function peekRun(id) {
+  const st = peekState[id];
+  if (!st || !st.want) { if (st) st.busy = false; return; }
+  st.busy = true;
+  const edits = st.want; st.want = null;
+  try {
+    const r = await fetch(`${P_API}/peek`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ layer: id, kv: Object.entries(edits).map(([k, v]) => `${id}.${k}=${v}`), size: 560 }) });
+    if (r.status === 200 && !st.want) {           // a newer position is queued: skip drawing this one
+      const url = URL.createObjectURL(await r.blob());
+      const L = man && man.layers.find((x) => x.id === id);
+      if (L) {
+        if (L._peek) URL.revokeObjectURL(L._peek.url);
+        L._peek = { url };
+        redrawSoon();
+      } else URL.revokeObjectURL(url);
+    }
+  } catch (e) { /* preview only — the real render still follows on release */ }
+  peekRun(id);
 }

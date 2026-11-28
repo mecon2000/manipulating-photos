@@ -495,7 +495,7 @@ def composite(dst, L):
     return dst * (1 - a) + L.rgb * a
 
 
-def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
+def build(d, P, full=False, all_layers=False, only=None, only_seeds=None, preview_size=None):
     """Returns (final HxWx3 float, stack) at preview or full res.
     stack: bottom→top list of dicts {id, z, enabled, layer} — paper, under…, subject, over…, finish.
     all_layers: also generate disabled layers (not composited) so a client can toggle them.
@@ -505,7 +505,7 @@ def build(d, P, full=False, all_layers=False, only=None, only_seeds=None):
     src_full_size = src.size
     face = face_points(d, src) if P["base"].get("protect_eyes", True) else {}
     if not full:
-        src.thumbnail((PREVIEW, PREVIEW))
+        src.thumbnail((preview_size or PREVIEW,) * 2)
     W, H = src.size
     mask = np.asarray(mask_im.resize((W, H)), np.float32) / 255
     rgb = np.asarray(src, np.float32) / 255
@@ -1115,6 +1115,36 @@ def hist_event(d, event, **kw):
                            ensure_ascii=False) + "\n")
 
 
+def peek_layer(d, P, lid, sets=(), size=640):
+    """One layer at low resolution with some params changed in memory only (piece.json
+    untouched) — the piece screen's live slider preview. Returns a wl.Layer or None."""
+    P = copy.deepcopy(P)
+    for kv in sets:
+        k, _, v = kv.partition("=")
+        tgt, _, key = k.partition(".")
+        try:
+            v = json.loads(v)
+        except ValueError:
+            pass
+        if tgt == "base":
+            P["base"][key] = v
+        else:
+            for L in P["layers"]:
+                if L["id"] == tgt:
+                    L.setdefault("params", {})[key] = v
+    _, stack = build(d, P, only=lid, preview_size=int(size))
+    return stack[0]["layer"] if stack else None
+
+
+def cmd_peek(a):
+    d, P = load(a.piece)
+    lay = peek_layer(d, P, a.layer, a.set or [], a.size)
+    if lay is None:
+        raise SystemExit("nothing to show")
+    save_rgba(Path(a.out), lay)
+    print(f"Peek: {a.out}")
+
+
 def cmd_variant(a):
     """Render one layer with other seeds (default: 3 random) for side-by-side choosing;
     the active seed is unchanged. Prints a Variant:/Seed: pair per variant."""
@@ -1433,6 +1463,9 @@ def main():
     fv = sub.add_parser("fav"); fv.add_argument("piece"); fv.add_argument("--name", default="")
     rs = sub.add_parser("restore"); rs.add_argument("piece"); rs.add_argument("--savepoint", required=True)
     o = sub.add_parser("options"); o.add_argument("piece"); o.add_argument("--question", required=True); o.add_argument("--vary", required=True)
+    pk = sub.add_parser("peek"); pk.add_argument("piece"); pk.add_argument("--layer", required=True)
+    pk.add_argument("--set", action="append"); pk.add_argument("--size", type=int, default=640)
+    pk.add_argument("--out", required=True)
     rc = sub.add_parser("recrop"); rc.add_argument("piece"); rc.add_argument("--crop")
     rc.add_argument("--custom"); rc.add_argument("--boost", action="store_true"); rc.add_argument("--note", default="")
     rc.add_argument("--zoom", type=float, help="scale the current crop about its centre (1.3 = zoom out)")
@@ -1448,7 +1481,7 @@ def main():
     a = ap.parse_args()
     {"init": cmd_init, "render": cmd_render, "set": cmd_set, "options": cmd_options,
      "pick": cmd_pick, "to-recipe": cmd_to_recipe, "variant": cmd_variant, "order": cmd_order, "save": cmd_save,
-     "restore": cmd_restore, "fav": cmd_fav, "add": cmd_add, "recrop": cmd_recrop}[a.cmd](a)
+     "restore": cmd_restore, "fav": cmd_fav, "add": cmd_add, "recrop": cmd_recrop, "peek": cmd_peek}[a.cmd](a)
 
 
 if __name__ == "__main__":

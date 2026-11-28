@@ -1476,6 +1476,10 @@ def gen_backdrop(L, ctx):
     x0, y0 = (im.width - ctx.W) // 2, (im.height - ctx.H) // 2
     rgb = np.asarray(im.crop((x0, y0, x0 + ctx.W, y0 + ctx.H)), np.float32) / 255
     rgb = _recolor(np.clip(rgb * float(p.get("brightness", 1.0)), 0, 1), p)
+    g = float(p.get("gray", 0) or 0)            # 0-1: drain the colour (B&W pieces)
+    if g > 0:
+        lu = (rgb @ np.array([0.3, 0.59, 0.11], np.float32))[..., None]
+        rgb = rgb * (1 - g) + lu * g
     return Layer(rgb, np.full((ctx.H, ctx.W), float(p.get("opacity", 1.0)), np.float32))
 
 
